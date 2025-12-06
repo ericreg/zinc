@@ -1,0 +1,68 @@
+diff -Naur '--exclude=.git' spim-keepstats/CPU/run.c spim-keepstats-my/CPU/run.c
+--- spim-keepstats/CPU/run.c	2021-04-07 12:08:56.431240589 -0400
++++ spim-keepstats-my/CPU/run.c	2021-04-07 12:08:20.719673012 -0400
+@@ -1248,6 +1248,7 @@
+ 	    case Y_BC1FL_OP:
+ 	    case Y_BC1T_OP:
+ 	    case Y_BC1TL_OP:
++			statistics_inc_branches(&global_stats);   /* keepstats */
+ 	      {
+ 		int cc = CC (inst);
+ 		int nd = ND (inst);	/* 1 => nullify */
+@@ -1451,6 +1452,7 @@
+ 	      }
+ 
+ 	    case Y_LDC1_OP:
++			statistics_inc_reads(&global_stats);   /* keepstats */
+ 	      {
+ 		mem_addr addr = R[BASE (inst)] + IOFFSET (inst);
+ 		if ((addr & 0x3) != 0)
+@@ -1466,6 +1468,7 @@
+ 	      }
+ 
+ 	    case Y_LWC1_OP:
++			statistics_inc_reads(&global_stats);   /* keepstats */
+ 	      LOAD_INST ((reg_word *) &FPR_S(FT (inst)),
+ 			 read_mem_word (R[BASE (inst)] + IOFFSET (inst)),
+ 			 0xffffffff);
+@@ -1609,6 +1612,7 @@
+ 	      }
+ 
+ 	    case Y_SDC1_OP:
++			statistics_inc_writes(&global_stats);   /* keepstats */
+ 	      {
+ 		double val = FPR_D (RT (inst));
+ 		reg_word *vp = (reg_word*)&val;
+@@ -1638,6 +1642,7 @@
+ 	      break;
+ 
+ 	    case Y_SWC1_OP:
++			statistics_inc_writes(&global_stats);   /* keepstats */
+ 	      {
+ 		float val = FPR_S(RT (inst));
+ 		reg_word *vp = (reg_word *) &val;
+diff -Naur '--exclude=.git' spim-keepstats/CPU/spim-utils.c spim-keepstats-my/CPU/spim-utils.c
+--- spim-keepstats/CPU/spim-utils.c	2021-04-07 12:08:56.431240589 -0400
++++ spim-keepstats-my/CPU/spim-utils.c	2021-04-07 12:08:20.719673012 -0400
+@@ -121,7 +121,7 @@
+             if (!read_assembly_file (filename))
+                fatal_error ("Cannot read exception handler: %s\n", filename);
+ 
+-            write_output (message_out, "Loaded: %s\n", filename);
++            //write_output (message_out, "Loaded: %s\n", filename);
+          }
+ 
+       free (files);
+diff -Naur '--exclude=.git' spim-keepstats/spim/statistics.c spim-keepstats-my/spim/statistics.c
+--- spim-keepstats/spim/statistics.c	2021-04-07 12:08:56.495239816 -0400
++++ spim-keepstats-my/spim/statistics.c	2021-04-07 12:08:20.783672236 -0400
+@@ -15,8 +15,7 @@
+   int other_instructions =  
+     s->instruction_count - (s->num_reads + s->num_writes + s->num_branches);
+   fprintf(f,
+-	  "Stats -- #instructions : %d\n"
+-	  "         #reads : %d  #writes %d  #branches %d  #other %d\n",
++	  "Stats -- #instructions:%d  #reads:%d  #writes:%d  #branches:%d  #other:%d\n",
+ 	  s->instruction_count,
+ 	  s->num_reads,s->num_writes,s->num_branches, other_instructions
+ 	  );

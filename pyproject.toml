@@ -1,0 +1,94 @@
+# https://peps.python.org/pep-0621/-
+[project]
+
+# Package version
+dynamic =  ["version"]
+
+# The name of the python package. This should be the same as the modules code directory
+name = "zinc"
+description = "Zinc"
+readme = "README.md"
+requires-python = ">=3.13"
+
+classifiers = [
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.13",
+]
+
+# Declare any runtime pip dependencies (such as numpy)
+# Do NOT put test dependencies (such as pytest) here.
+# Test dependencies go in the [project.optional-dependencies] section.
+# ! NOTE: To change a dependency to a local version, use the following syntax:
+# "my-package @ git+file:///path/to/your/package"
+dependencies = [
+  "antlr4-python3-runtime==4.13.2",
+]
+
+# Installs all testing dependencies needed when pytest runs. Do NOT put
+# runtime dependencies here. These libraries will not be included when
+# the package "deploys".
+[project.optional-dependencies]
+dev = [
+  "ruff==0.14.8",
+  "isort==5.13.2",
+  "mock==5.1.0",
+  "pylint==3.1.0",
+  "pytest==8.1.1",
+  "pytest-cov==4.1.0",
+  "pytest-isort==4.0.0",
+  "pytest-mock==3.14.0",
+  "pytest-pylint==0.21.0",
+  "pytest-xdist==3.5.0",
+  "plotly==5.23.0",
+]
+
+# This allows you to defines "scripts" so that your package can install executables into the current
+# python environment which will include the system PATH so they may be invoked from the command line.
+# For example, "my-app-cli" = "my_app.main:main" below will allow a user to type my-app-cli" in the terminal
+# after this package is pip installed, to invoke the main function in the my_app package.
+[project.scripts]
+# "trajectory-cli" = "trajectory_core.main:main"
+
+[build-system]
+# https://peps.python.org/pep-0518/
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+
+[tool.setuptools]
+py-modules = ["__init__"]
+
+[tool.setuptools.packages.find]
+# https://setuptools.pypa.io/en/latest/userguide/package_discovery.html#finding-simple-packages
+include = ["zinc*"]
+
+
+[tool.black]
+line-length = 120
+target-version = ['py313']
+
+[tool.isort]
+combine_as_imports = true
+line_length = 60
+profile = "black"
+
+# Pytest configuration
+# https://docs.pytest.org/en/stable/customize.html#pyproject-toml
+[tool.pytest.ini_options]
+addopts = [
+  # "--black",
+  "--cache-clear",
+  "--cov-report=term",
+  "--cov=trajectory_core",
+  "--durations=0",
+  #"--isort",
+  "--verbose",
+  # "--numprocesses=auto", # multiprocessing
+  "--cov-report=xml",
+  # "--disable-warnings", # disable warnings
+  # "--pylint-rcfile=.pylintrc", # uncomment to enable pylint during unit tests
+  # "--pylint",
+  "-x", # stop tests after first failure
+]
+

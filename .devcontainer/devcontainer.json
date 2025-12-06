@@ -1,0 +1,34 @@
+// For format details, see https://aka.ms/devcontainer.json. For config options, see the
+// README at: https://github.com/devcontainers/templates/tree/main/src/cpp
+{
+	"name": "Antlr4",
+	"build": {
+		"dockerfile": "Dockerfile"
+	},
+	// Bind mount your host source into the container
+	"workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/${localWorkspaceFolderBasename},type=bind",
+	// Mount the zsh_history file to persist history between container restarts
+	"mounts": [
+		"source=${localWorkspaceFolder}/.devcontainer/zsh_history,target=/root/.zsh_history,type=bind"
+	],
+	"runArgs": [
+		"--network=host",
+		"--memory=6g"
+	],
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"mike-lischke.vscode-antlr4",
+				"ms-vscode.cpptools-extension-pack",
+				"ms-vscode.cpptools",
+				"ms-vscode.makefile-tools",
+				"Stephanvs.dot",
+				"streetsidesoftware.code-spell-checker",
+				"TrisTOON.language-tiger",
+				"xaver.clang-format",
+				"AngaBlue.asm-formatter",
+				"kdarkhan.mips"
+			]
+		}
+	}
+}

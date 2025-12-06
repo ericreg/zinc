@@ -1,0 +1,95 @@
+use some_library;
+
+// class example
+struct person {
+
+    _private, // accessible only within this module
+    name,
+    age,
+    preference,
+
+    fn _private_method(self) {
+        // private method
+        return 3
+    }
+
+    // public method
+    fn to_string(self) {
+        return "Name: " + self.name + ", Age: " + self.age.to_string() + ", Preference: " + self.preference
+    }
+}
+
+
+fn main() {
+
+    // dynamic typing
+    x = ""
+    x = 1
+    x = 1.34
+
+    no_parens = true
+    yes_parens = true
+    if no_parens {
+        print("No parens")
+    }
+    else {
+        print("You should not use parens")
+    }
+    
+    if (yes_parens) {
+        print("Yes parens")
+    }
+    else {
+        print("You should use parens")
+    }
+
+
+    // for loop
+    for x in range(0, 10) {
+
+    }
+
+    // struct instance
+    y = person {
+        name = "Alice",
+        age = 30,
+        preference = "Reading",
+    }
+
+    // vec of int
+    arr = [1, 2, 3, 4, 5]
+
+    // vec of float
+    arr = [1, 2, 3, 4, 5]
+
+    // array of mixed types (each element is of type 'any') or a type union
+    arr_2 = [ 1, 2, 3.0 ]
+
+    // rust match statement
+    match y.age {
+        0..17 => {
+            // minor
+        },
+        18..64 => {
+            // adult
+        },
+        _ => {
+            // senior
+        }
+    }
+
+    loop {
+        select {
+            case await async_event_1() {
+                // handle event 1
+            }
+            case await async_event_2() {
+                // handle event 2
+            }
+        }
+    }
+
+}
+
+
+struct 

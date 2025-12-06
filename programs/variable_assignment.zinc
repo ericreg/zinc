@@ -1,0 +1,7 @@
+fn main() {
+
+    // variable assignment
+    // x_str = ""
+    x = 1
+    // x = 3.14
+}
