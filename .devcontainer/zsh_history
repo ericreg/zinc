@@ -823,3 +823,10 @@ antlr -Dlanguage=Python3 -visitor zinc.g4
 : 1765113270:0;gs
 : 1765113282:0;git commit -am "basic variable assignment render"
 : 1765113712:0;git commit -am "starting on print method"
+: 1765114095:0;cd zinc/parser
+: 1765114097:0;rm -rf .antlr *.py *.tokens *.interp
+: 1765114099:0;antlr -Dlanguage=Python3 -visitor zinc.g4 
+: 1765114356:0;rm -rf .antlr *.py *.tokens *.interp
+: 1765114357:0;antlr -Dlanguage=Python3 -visitor zinc.g4 
+: 1765115317:0;gs
+: 1765115337:0;git commit -am "print method working"

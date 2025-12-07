@@ -9,54 +9,54 @@ program
     ;
 
 statement
-    // : useStatement
-    // | structDeclaration
-    : functionDeclaration
-    // | asyncFunctionDeclaration
+    : useStatement
+    | structDeclaration
+    | functionDeclaration
+    | asyncFunctionDeclaration
     | variableAssignment
-    // | expressionStatement
-    // | ifStatement
-    // | forStatement
-    // | whileStatement
-    // | loopStatement
-    // | matchStatement
-    // | returnStatement
-    // | breakStatement
-    // | continueStatement
-    // | block
+    | expressionStatement
+    | ifStatement
+    | forStatement
+    | whileStatement
+    | loopStatement
+    | matchStatement
+    | returnStatement
+    | breakStatement
+    | continueStatement
+    | block
     ;
 
 // --- Use/Import Statement ---
-// useStatement
-//     : 'use' modulePath ';'
-//     ;
+useStatement
+    : 'use' modulePath ';'
+    ;
 
-// modulePath
-//     : IDENTIFIER ('::' IDENTIFIER)*
-//     ;
+modulePath
+    : IDENTIFIER ('::' IDENTIFIER)*
+    ;
 
 // --- Struct Declaration ---
-// structDeclaration
-//     : 'struct' IDENTIFIER '{' structBody '}'
-//     ;
+structDeclaration
+    : 'struct' IDENTIFIER '{' structBody '}'
+    ;
 
-// structBody
-//     : structMember (',' structMember)* ','?
-//     ;
+structBody
+    : structMember (',' structMember)* ','?
+    ;
 
-// structMember
-//     : IDENTIFIER                    // field
-//     | functionDeclaration           // method
-//     ;
+structMember
+    : IDENTIFIER                    // field
+    | functionDeclaration           // method
+    ;
 
 // --- Function Declaration ---
 functionDeclaration
     : 'fn' IDENTIFIER '(' parameterList? ')' block
     ;
 
-// asyncFunctionDeclaration
-//     : 'async' IDENTIFIER '(' parameterList? ')' block
-//     ;
+asyncFunctionDeclaration
+    : 'async' IDENTIFIER '(' parameterList? ')' block
+    ;
 
 parameterList
     : parameter (',' parameter)*
@@ -83,27 +83,29 @@ variableAssignment
 
 assignmentTarget
     : IDENTIFIER
+    | memberAccess
+    | indexAccess
     ;
 
 expressionStatement
     : expression
     ;
 
-// ifStatement
-//     : 'if' expression block ('else' 'if' expression block)* ('else' block)?
-//     ;
+ifStatement
+    : 'if' expression block ('else' 'if' expression block)* ('else' block)?
+    ;
 
-// forStatement
-//     : 'for' IDENTIFIER 'in' expression block
-//     ;
+forStatement
+    : 'for' IDENTIFIER 'in' expression block
+    ;
 
-// whileStatement
-//     : 'while' expression block
-//     ;
+whileStatement
+    : 'while' expression block
+    ;
 
-// loopStatement
-//     : 'loop' block
-//     ;
+loopStatement
+    : 'loop' block
+    ;
 
 matchStatement
     : 'match' expression '{' matchArm (',' matchArm)* ','? '}'
@@ -150,25 +152,37 @@ block
 // --- Expressions ---
 expression
     : primaryExpression                                         # primaryExpr
-    // | expression '.' IDENTIFIER                                 # memberAccessExpr
-    // | expression '[' expression ']'                             # indexAccessExpr
-    // | 'await' expression                                        # awaitExpr
-    // | ('!' | '-' | 'not') expression                            # unaryExpr
+    | expression '.' IDENTIFIER                                 # memberAccessExpr
+    | expression '[' expression ']'                             # indexAccessExpr
+    | expression '(' argumentList? ')'                          # functionCallExpr
+    | 'await' expression                                        # awaitExpr
+    | ('!' | '-' | 'not') expression                            # unaryExpr
     | expression ('*' | '/' | '%') expression                   # multiplicativeExpr
     | expression ('+' | '-') expression                         # additiveExpr
-    // | expression ('..' | '..=') expression                      # rangeExpr
-    // | expression ('<' | '<=' | '>' | '>=') expression           # relationalExpr
-    // | expression ('==' | '!=') expression                       # equalityExpr
-    // | expression ('and' | '&&') expression                      # logicalAndExpr
-    // | expression ('or' | '||') expression                       # logicalOrExpr
+    | expression ('..' | '..=') expression                      # rangeExpr
+    | expression ('<' | '<=' | '>' | '>=') expression           # relationalExpr
+    | expression ('==' | '!=') expression                       # equalityExpr
+    | expression ('and' | '&&') expression                      # logicalAndExpr
+    | expression ('or' | '||') expression                       # logicalOrExpr
+    | selectExpression                                          # selectExpr
+    | lambdaExpression                                          # lambdaExpr
     | '(' expression ')'                                        # parenExpr
     ;
 
 primaryExpression
     : literal
     | IDENTIFIER
+    | arrayLiteral
+    | structInstantiation
     ;
 
+memberAccess
+    : expression '.' IDENTIFIER
+    ;
+
+indexAccess
+    : expression '[' expression ']'
+    ;
 
 literal
     : INTEGER
@@ -183,6 +197,34 @@ booleanLiteral
     | 'false'
     ;
 
+arrayLiteral
+    : '[' (expression (',' expression)* ','?)? ']'
+    ;
+
+structInstantiation
+    : IDENTIFIER '{' (fieldInit (',' fieldInit)* ','?)? '}'
+    ;
+
+fieldInit
+    : IDENTIFIER '=' expression
+    ;
+
+argumentList
+    : expression (',' expression)*
+    ;
+
+selectExpression
+    : 'select' '{' selectCase+ '}'
+    ;
+
+selectCase
+    : 'case' 'await' expression block
+    | 'case' expression block
+    ;
+
+lambdaExpression
+    : '|' parameterList? '|' (expression | block)
+    ;
 
 // ============================================================================
 // Lexer Rules

@@ -20,6 +20,42 @@ class VariableAssignment(Statement):
         return f"let {self.variable_name} = {self.value};"
 
 
+class PrintStatement(Statement):
+    def __init__(self, arguments: list[str]):
+        self.arguments = arguments
+
+    def render(self) -> str:
+        if not self.arguments:
+            return "println!();"
+
+        # Handle f-string style formatting
+        # Assume the first argument is a string literal with {} placeholders
+        format_string = self.arguments[0]
+
+        # Remove surrounding quotes if present
+        if format_string.startswith('"') and format_string.endswith('"'):
+            format_string = format_string[1:-1]
+        elif format_string.startswith("'") and format_string.endswith("'"):
+            format_string = format_string[1:-1]
+
+        # Extract variable names from {var} patterns
+        import re
+        variables = re.findall(r'\{(\w+)\}', format_string)
+
+        # If there are variables, render as println! with format args
+        if variables:
+            # Replace {var} with {} for Rust's println! macro
+            rust_format_string = re.sub(r'\{\w+\}', '{}', format_string)
+            args_str = f'"{rust_format_string}"'
+            # Add the variables as additional arguments
+            for var in variables:
+                args_str += f", {var}"
+            return f"println!({args_str});"
+        else:
+            # No variables, just a plain string
+            return f'println!("{format_string}");'
+
+
 class BaseType(Enum):
     INTEGER = auto()
     STRING = auto()
@@ -143,6 +179,23 @@ class Visitor(ZincVisitor):
         # Create a VariableAssignment statement
         stmt = VariableAssignment(variable_name=var_name, value=value)
         self.statements.append(stmt)
+
+        return self.visitChildren(ctx)
+
+    def visitFunctionCallExpr(self, ctx: ZincParser.FunctionCallExprContext):
+        # Get the function name
+        func_name = ctx.expression().getText()
+
+        # Get the arguments
+        arguments = []
+        if ctx.argumentList():
+            for arg_expr in ctx.argumentList().expression():
+                arguments.append(arg_expr.getText())
+
+        # If this is a print() call, create a PrintStatement
+        if func_name == "print":
+            stmt = PrintStatement(arguments=arguments)
+            self.statements.append(stmt)
 
         return self.visitChildren(ctx)
 
