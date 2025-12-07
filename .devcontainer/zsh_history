@@ -820,3 +820,5 @@ antlr -Dlanguage=Python3 -visitor zinc.g4
 : 1765109916:0;rm -rf .antlr *.py *.tokens *.interp
 : 1765109920:0;antlr -Dlanguage=Python3 -visitor zinc.g4 
 : 1765112989:0;git commit -am "antlr example"
+: 1765113270:0;gs
+: 1765113282:0;git commit -am "basic variable assignment render"

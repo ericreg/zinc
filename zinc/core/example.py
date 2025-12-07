@@ -8,12 +8,16 @@ from enum import Enum, auto
 
 
 class Statement:
-    pass
+    def render(self) -> str:
+        raise NotImplementedError("Subclasses must implement render()")
 
 class VariableAssignment(Statement):
     def __init__(self, variable_name: str, value: object):
         self.variable_name = variable_name
         self.value = value
+
+    def render(self) -> str:
+        return f"let {self.variable_name} = {self.value};"
 
 
 
@@ -86,8 +90,15 @@ class Program:
         self.statements = statements
 
     def render(self) -> str:
+        """Render the program as valid Rust code."""
+        rust_code = "fn main() {\n"
 
-        return "\n".join(str(stmt) for stmt in self.statements)
+        # Render each statement with proper indentation
+        for stmt in self.statements:
+            rust_code += "    " + stmt.render() + "\n"
+
+        rust_code += "}\n"
+        return rust_code
 
 
 class Visitor(ZincVisitor):
@@ -97,6 +108,7 @@ class Visitor(ZincVisitor):
         # self._type_map = set()
         self._expr_map: dict[str, Symbol] = dict()
         self._scope = Scope()
+        self.statements: list[Statement] = []
 
     def visitLiteral(self, ctx: ZincParser.LiteralContext):
         text = ctx.getText()
@@ -129,6 +141,11 @@ class Visitor(ZincVisitor):
     def visitVariableAssignment(self, ctx):
         var_name = ctx.assignmentTarget().getText()
         value = ctx.expression().getText()
+
+        # Create a VariableAssignment statement
+        stmt = VariableAssignment(variable_name=var_name, value=value)
+        self.statements.append(stmt)
+
         return self.visitChildren(ctx)
 
 
@@ -148,17 +165,11 @@ visitor.visit(tree)
 
 print(tree.toStringTree(recog=parser))
 
+# Create the Program object with the collected statements
+program = Program(scope=visitor._scope, statements=visitor.statements)
 
-
-# from ..core.parser.zincLexer import zincLexer
-# from ..core.parser.zincParser import zincParser
-
-
-# input_text = input("> ")
-# lexer = HelloLexer(InputStream(input_text))
-# stream = CommonTokenStream(lexer)
-# parser = HelloParser(stream)
-
-# tree = parser.r()
-
-# print(tree.toStringTree(recog=parser))
+# Render and print the Rust code
+print("\n" + "="*50)
+print("Rendered Rust Code:")
+print("="*50)
+print(program.render())
