@@ -4,4 +4,7 @@ fn main() {
     // x_str = ""
     x = 1
     y = 3.14
+
+    // print it out
+    print("x: {}, y: {}")
 }

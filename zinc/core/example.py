@@ -20,8 +20,6 @@ class VariableAssignment(Statement):
         return f"let {self.variable_name} = {self.value};"
 
 
-
-
 class BaseType(Enum):
     INTEGER = auto()
     STRING = auto()

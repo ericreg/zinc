@@ -822,3 +822,4 @@ antlr -Dlanguage=Python3 -visitor zinc.g4
 : 1765112989:0;git commit -am "antlr example"
 : 1765113270:0;gs
 : 1765113282:0;git commit -am "basic variable assignment render"
+: 1765113712:0;git commit -am "starting on print method"
