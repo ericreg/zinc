@@ -150,17 +150,17 @@ block
 // --- Expressions ---
 expression
     : primaryExpression                                         # primaryExpr
-    | expression '.' IDENTIFIER                                 # memberAccessExpr
-    | expression '[' expression ']'                             # indexAccessExpr
-    | 'await' expression                                        # awaitExpr
-    | ('!' | '-' | 'not') expression                            # unaryExpr
+    // | expression '.' IDENTIFIER                                 # memberAccessExpr
+    // | expression '[' expression ']'                             # indexAccessExpr
+    // | 'await' expression                                        # awaitExpr
+    // | ('!' | '-' | 'not') expression                            # unaryExpr
     | expression ('*' | '/' | '%') expression                   # multiplicativeExpr
     | expression ('+' | '-') expression                         # additiveExpr
-    | expression ('..' | '..=') expression                      # rangeExpr
-    | expression ('<' | '<=' | '>' | '>=') expression           # relationalExpr
-    | expression ('==' | '!=') expression                       # equalityExpr
-    | expression ('and' | '&&') expression                      # logicalAndExpr
-    | expression ('or' | '||') expression                       # logicalOrExpr
+    // | expression ('..' | '..=') expression                      # rangeExpr
+    // | expression ('<' | '<=' | '>' | '>=') expression           # relationalExpr
+    // | expression ('==' | '!=') expression                       # equalityExpr
+    // | expression ('and' | '&&') expression                      # logicalAndExpr
+    // | expression ('or' | '||') expression                       # logicalOrExpr
     | '(' expression ')'                                        # parenExpr
     ;
 

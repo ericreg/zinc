@@ -794,3 +794,29 @@ spim -keepstats -f tmp/benchmark4.briggs.s
 : 1765030140:0;git add .gitignore
 : 1765030141:0;gs
 : 1765030155:0;git commit -am "antlr example"
+: 1765030586:0;l
+: 1765030623:0;cd zinc/parser
+: 1765030624:0;rm -rf .antlr *.py *.tokens *.interp\
+antlr -Dlanguage=Python3 -visitor zinc.g4 
+: 1765030626:0;l
+: 1765030636:0;rm -rf .antlr *.py *.tokens *.interp\
+antlr -Dlanguage=Python3 -visitor zinc.g4 
+: 1765030657:0;rm -rf .antlr *.py *.tokens *.interp
+: 1765030668:0;antlr -Dlanguage=Python3 -visitor zinc.g4 
+: 1765031893:0;pip install -e .
+: 1765039499:0;claude
+: 1765039523:0;wget -qO- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+: 1765040670:0;pip install -e .
+: 1765040873:0;apt install wget
+: 1765040876:0;aupt update
+: 1765040878:0;apt update
+: 1765040885:0;wget -qO- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+: 1765040887:0;apt update
+: 1765040890:0;apt install wget
+: 1765040893:0;wget -qO- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+: 1765040898:0;nvm install --latest-npm
+: 1765040953:0;npm install -g @anthropic-ai/claude-code
+: 1765109913:0;cd zinc/parser
+: 1765109916:0;rm -rf .antlr *.py *.tokens *.interp
+: 1765109920:0;antlr -Dlanguage=Python3 -visitor zinc.g4 
+: 1765112989:0;git commit -am "antlr example"

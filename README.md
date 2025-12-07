@@ -3,5 +3,6 @@
 Regenerate antlr4 Parser
 ```sh
 cd parser/
-antlr -Dlanguage=Python3 zinc.g4 
+rm -rf .antlr *.py *.tokens *.interp
+antlr -Dlanguage=Python3 -visitor zinc.g4 
 ```

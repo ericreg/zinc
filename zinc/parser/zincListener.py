@@ -179,12 +179,12 @@ class zincListener(ParseTreeListener):
         pass
 
 
-    # Enter a parse tree produced by zincParser#logicalAndExpr.
-    def enterLogicalAndExpr(self, ctx:zincParser.LogicalAndExprContext):
+    # Enter a parse tree produced by zincParser#primaryExpr.
+    def enterPrimaryExpr(self, ctx:zincParser.PrimaryExprContext):
         pass
 
-    # Exit a parse tree produced by zincParser#logicalAndExpr.
-    def exitLogicalAndExpr(self, ctx:zincParser.LogicalAndExprContext):
+    # Exit a parse tree produced by zincParser#primaryExpr.
+    def exitPrimaryExpr(self, ctx:zincParser.PrimaryExprContext):
         pass
 
 
@@ -197,78 +197,6 @@ class zincListener(ParseTreeListener):
         pass
 
 
-    # Enter a parse tree produced by zincParser#awaitExpr.
-    def enterAwaitExpr(self, ctx:zincParser.AwaitExprContext):
-        pass
-
-    # Exit a parse tree produced by zincParser#awaitExpr.
-    def exitAwaitExpr(self, ctx:zincParser.AwaitExprContext):
-        pass
-
-
-    # Enter a parse tree produced by zincParser#relationalExpr.
-    def enterRelationalExpr(self, ctx:zincParser.RelationalExprContext):
-        pass
-
-    # Exit a parse tree produced by zincParser#relationalExpr.
-    def exitRelationalExpr(self, ctx:zincParser.RelationalExprContext):
-        pass
-
-
-    # Enter a parse tree produced by zincParser#parenExpr.
-    def enterParenExpr(self, ctx:zincParser.ParenExprContext):
-        pass
-
-    # Exit a parse tree produced by zincParser#parenExpr.
-    def exitParenExpr(self, ctx:zincParser.ParenExprContext):
-        pass
-
-
-    # Enter a parse tree produced by zincParser#logicalOrExpr.
-    def enterLogicalOrExpr(self, ctx:zincParser.LogicalOrExprContext):
-        pass
-
-    # Exit a parse tree produced by zincParser#logicalOrExpr.
-    def exitLogicalOrExpr(self, ctx:zincParser.LogicalOrExprContext):
-        pass
-
-
-    # Enter a parse tree produced by zincParser#unaryExpr.
-    def enterUnaryExpr(self, ctx:zincParser.UnaryExprContext):
-        pass
-
-    # Exit a parse tree produced by zincParser#unaryExpr.
-    def exitUnaryExpr(self, ctx:zincParser.UnaryExprContext):
-        pass
-
-
-    # Enter a parse tree produced by zincParser#primaryExpr.
-    def enterPrimaryExpr(self, ctx:zincParser.PrimaryExprContext):
-        pass
-
-    # Exit a parse tree produced by zincParser#primaryExpr.
-    def exitPrimaryExpr(self, ctx:zincParser.PrimaryExprContext):
-        pass
-
-
-    # Enter a parse tree produced by zincParser#indexAccessExpr.
-    def enterIndexAccessExpr(self, ctx:zincParser.IndexAccessExprContext):
-        pass
-
-    # Exit a parse tree produced by zincParser#indexAccessExpr.
-    def exitIndexAccessExpr(self, ctx:zincParser.IndexAccessExprContext):
-        pass
-
-
-    # Enter a parse tree produced by zincParser#memberAccessExpr.
-    def enterMemberAccessExpr(self, ctx:zincParser.MemberAccessExprContext):
-        pass
-
-    # Exit a parse tree produced by zincParser#memberAccessExpr.
-    def exitMemberAccessExpr(self, ctx:zincParser.MemberAccessExprContext):
-        pass
-
-
     # Enter a parse tree produced by zincParser#multiplicativeExpr.
     def enterMultiplicativeExpr(self, ctx:zincParser.MultiplicativeExprContext):
         pass
@@ -278,21 +206,12 @@ class zincListener(ParseTreeListener):
         pass
 
 
-    # Enter a parse tree produced by zincParser#rangeExpr.
-    def enterRangeExpr(self, ctx:zincParser.RangeExprContext):
+    # Enter a parse tree produced by zincParser#parenExpr.
+    def enterParenExpr(self, ctx:zincParser.ParenExprContext):
         pass
 
-    # Exit a parse tree produced by zincParser#rangeExpr.
-    def exitRangeExpr(self, ctx:zincParser.RangeExprContext):
-        pass
-
-
-    # Enter a parse tree produced by zincParser#equalityExpr.
-    def enterEqualityExpr(self, ctx:zincParser.EqualityExprContext):
-        pass
-
-    # Exit a parse tree produced by zincParser#equalityExpr.
-    def exitEqualityExpr(self, ctx:zincParser.EqualityExprContext):
+    # Exit a parse tree produced by zincParser#parenExpr.
+    def exitParenExpr(self, ctx:zincParser.ParenExprContext):
         pass
 
 

@@ -104,8 +104,8 @@ class zincVisitor(ParseTreeVisitor):
         return self.visitChildren(ctx)
 
 
-    # Visit a parse tree produced by zincParser#logicalAndExpr.
-    def visitLogicalAndExpr(self, ctx:zincParser.LogicalAndExprContext):
+    # Visit a parse tree produced by zincParser#primaryExpr.
+    def visitPrimaryExpr(self, ctx:zincParser.PrimaryExprContext):
         return self.visitChildren(ctx)
 
 
@@ -114,58 +114,13 @@ class zincVisitor(ParseTreeVisitor):
         return self.visitChildren(ctx)
 
 
-    # Visit a parse tree produced by zincParser#awaitExpr.
-    def visitAwaitExpr(self, ctx:zincParser.AwaitExprContext):
-        return self.visitChildren(ctx)
-
-
-    # Visit a parse tree produced by zincParser#relationalExpr.
-    def visitRelationalExpr(self, ctx:zincParser.RelationalExprContext):
-        return self.visitChildren(ctx)
-
-
-    # Visit a parse tree produced by zincParser#parenExpr.
-    def visitParenExpr(self, ctx:zincParser.ParenExprContext):
-        return self.visitChildren(ctx)
-
-
-    # Visit a parse tree produced by zincParser#logicalOrExpr.
-    def visitLogicalOrExpr(self, ctx:zincParser.LogicalOrExprContext):
-        return self.visitChildren(ctx)
-
-
-    # Visit a parse tree produced by zincParser#unaryExpr.
-    def visitUnaryExpr(self, ctx:zincParser.UnaryExprContext):
-        return self.visitChildren(ctx)
-
-
-    # Visit a parse tree produced by zincParser#primaryExpr.
-    def visitPrimaryExpr(self, ctx:zincParser.PrimaryExprContext):
-        return self.visitChildren(ctx)
-
-
-    # Visit a parse tree produced by zincParser#indexAccessExpr.
-    def visitIndexAccessExpr(self, ctx:zincParser.IndexAccessExprContext):
-        return self.visitChildren(ctx)
-
-
-    # Visit a parse tree produced by zincParser#memberAccessExpr.
-    def visitMemberAccessExpr(self, ctx:zincParser.MemberAccessExprContext):
-        return self.visitChildren(ctx)
-
-
     # Visit a parse tree produced by zincParser#multiplicativeExpr.
     def visitMultiplicativeExpr(self, ctx:zincParser.MultiplicativeExprContext):
         return self.visitChildren(ctx)
 
 
-    # Visit a parse tree produced by zincParser#rangeExpr.
-    def visitRangeExpr(self, ctx:zincParser.RangeExprContext):
-        return self.visitChildren(ctx)
-
-
-    # Visit a parse tree produced by zincParser#equalityExpr.
-    def visitEqualityExpr(self, ctx:zincParser.EqualityExprContext):
+    # Visit a parse tree produced by zincParser#parenExpr.
+    def visitParenExpr(self, ctx:zincParser.ParenExprContext):
         return self.visitChildren(ctx)
 
 
