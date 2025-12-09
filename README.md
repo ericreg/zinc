@@ -10,6 +10,7 @@ antlr -Dlanguage=Python3 -visitor zinc.g4
 # TODO
 
 - dynamic variable assignments
+- Make single quotes string literals
 - arithmetic expressions
 - other functions
 - async functions

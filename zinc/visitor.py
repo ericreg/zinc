@@ -9,9 +9,11 @@ import re
 
 INDENT = "    "
 
+
 class Statement:
     def render(self) -> str:
         raise NotImplementedError("Subclasses must implement render()")
+
 
 class VariableAssignment(Statement):
     def __init__(self, variable_name: str, value: object):
@@ -41,12 +43,12 @@ class PrintStatement(Statement):
             format_string = format_string[1:-1]
 
         # Extract variable names from {var} patterns
-        variables = re.findall(r'\{(\w+)\}', format_string)
+        variables = re.findall(r"\{(\w+)\}", format_string)
 
         # If there are variables, render as println! with format args
         if variables:
             # Replace {var} with {} for Rust's println! macro
-            rust_format_string = re.sub(r'\{\w+\}', '{}', format_string)
+            rust_format_string = re.sub(r"\{\w+\}", "{}", format_string)
             args_str = f'"{rust_format_string}"'
             # Add the variables as additional arguments
             for var in variables:
@@ -66,10 +68,11 @@ class BaseType(Enum):
     def __repr__(self):
         return self.name
 
+
 def parse_literal(literal_text: str) -> BaseType:
     if literal_text.isdigit():
         return BaseType.INTEGER
-    elif literal_text.replace('.', '', 1).isdigit() and literal_text.count('.') < 2:
+    elif literal_text.replace(".", "", 1).isdigit() and literal_text.count(".") < 2:
         return BaseType.FLOAT
     elif literal_text.startswith('"') and literal_text.endswith('"'):
         return BaseType.STRING
@@ -77,6 +80,7 @@ def parse_literal(literal_text: str) -> BaseType:
         return BaseType.BOOLEAN
     else:
         raise ValueError(f"Unknown literal type: {literal_text}")
+
 
 class Symbol(NamedTuple):
     name: str
@@ -88,7 +92,7 @@ class Symbol(NamedTuple):
 
 
 class Scope:
-    def __init__(self, parent = None):
+    def __init__(self, parent=None):
         self.parent: Scope | None = parent
         self._symbols: dict[str, Symbol] = dict()
         self.function = None
@@ -106,17 +110,15 @@ class Scope:
         else:
             return None
 
-    def enter_scope(self) -> 'Scope':
+    def enter_scope(self) -> "Scope":
         child_scope = Scope(parent=self)
         self.children.append(child_scope)
         return child_scope
 
-    def exit_scope(self) -> 'Scope':
+    def exit_scope(self) -> "Scope":
         if self.parent is None:
             raise RuntimeError("Cannot exit the global scope")
         return self.parent
-        
-
 
 
 class Program:
@@ -129,14 +131,13 @@ class Program:
         rust_code = "fn main() {\n"
 
         # Render each statement with proper indentation
-        rust_statements = [ INDENT + x.render() for x in self.statements ]
+        rust_statements = [INDENT + x.render() for x in self.statements]
         rust_code += "\n".join(rust_statements) + "\n"
         rust_code += "}\n"
         return rust_code
 
 
 class Visitor(ZincVisitor):
-
     def __init__(self) -> None:
         # key, source_location, resolved type
         # self._type_map = set()
@@ -159,7 +160,6 @@ class Visitor(ZincVisitor):
     def visitProgram(self, ctx):
         print("Visiting program")
         return self.visitChildren(ctx)
-    
 
     def visitFunctionDeclaration(self, ctx: ZincParser.FunctionDeclarationContext):
         func_name = ctx.IDENTIFIER().getText()
@@ -171,7 +171,7 @@ class Visitor(ZincVisitor):
         result = super().visitFunctionDeclaration(ctx)
         self._scope = self._scope.exit_scope()
         return result
-    
+
     def visitVariableAssignment(self, ctx):
         var_name = ctx.assignmentTarget().getText()
         value = ctx.expression().getText()
@@ -198,6 +198,3 @@ class Visitor(ZincVisitor):
             self.statements.append(stmt)
 
         return self.visitChildren(ctx)
-
-
-

@@ -4,6 +4,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # Install runtime dependencies only (no build tools needed)
 RUN apt update && apt install --assume-yes \
+    build-essential \
     curl \
     git \
     openjdk-25-jdk \
@@ -12,7 +13,6 @@ RUN apt update && apt install --assume-yes \
     && apt autoremove -y \
     && apt clean -y \
     && rm -rf /var/lib/apt/lists/* 
-
 
 # Download ANTLR artifacts
 RUN cd /usr/local/lib && \
@@ -28,6 +28,10 @@ RUN echo 'export CLASSPATH=".:/usr/local/lib/antlr-4.13.2-complete.jar:$CLASSPAT
 # Python configuration
 ENV PYTHONUNBUFFERED=TRUE
 ENV PYTHONDONTWRITEBYTECODE=TRUE
+
+# Rust configuration
+ENV PATH="/root/.cargo/bin:${PATH}"
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 
 # Shell setup
 RUN chsh -s /bin/zsh

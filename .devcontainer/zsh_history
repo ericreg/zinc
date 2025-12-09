@@ -843,3 +843,41 @@ antlr -Dlanguage=Python3 -visitor zinc.g4
 : 1765252989:0;gs
 : 1765252999:0;git add zinc
 : 1765253009:0;git commit -am "added cli"
+: 1765253227:0;pip install -e .[dev]
+: 1765253237:0;pip install -e "[dev]."
+: 1765253243:0;pip install -e ".[dev]"
+: 1765253255:0;ruff
+: 1765253268:0;ruff format
+: 1765253312:0;ls
+: 1765253338:0;mkdir test
+: 1765253348:0;touch test
+: 1765253349:0;ls
+: 1765253380:0;touch test/test_compile.py
+: 1765253624:0;curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh\
+
+: 1765253976:0;zinc compile test/source/variable_assignment.zinc -o test/output/variable_assignment.rs
+: 1765254225:0;pytest
+: 1765254920:0;/usr/local/bin/python
+: 1765254993:0;cargo
+: 1765255022:0;export PATH="/root/.cargo/bin:${PATH}"
+: 1765255026:0;curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+: 1765255032:0;rustup
+: 1765255038:0;cargo
+: 1765255062:0;cargo build zinc/\ 
+: 1765255095:0;cargo build test/source/variable_assignment.zinc test/output/variable_assignment.rs
+: 1765255101:0;cargo build  test/output/variable_assignment.rs
+: 1765255146:0;rustc test/source/variable_assignment.zinc 
+: 1765255158:0;rustc test/output/variable_assignment.rs
+: 1765255282:0;curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh\
+
+: 1765255292:0;rustc test/output/variable_assignment.rs
+: 1765255296:0;cargo
+: 1765255326:0;gs
+: 1765255341:0;apt install build-essential
+: 1765255363:0;rustc test/output/variable_assignment.rs
+: 1765255365:0;l
+: 1765255368:0;./variable_assignment
+: 1765256684:0;gs
+: 1765256690:0;git add test/
+: 1765256691:0;gs
+: 1765256704:0;git commit -am "using rust compilation in tests"

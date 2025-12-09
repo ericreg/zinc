@@ -1,10 +1,11 @@
 fn main() {
 
     // variable assignment
-    // x_str = ""
     x = 1
     y = 3.14
+    z = "zinc"
+
 
     // print it out
-    print("x: {x}, y: {y}}")
+    print("x: {x}, y: {y}, z: {z}")
 }

@@ -20,7 +20,9 @@ def main():
 
 @main.command()
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
-@click.option("-o", "--output", type=click.Path(path_type=Path), help="Output file path")
+@click.option(
+    "-o", "--output", type=click.Path(path_type=Path), help="Output file path"
+)
 def compile(file: Path, output: Path | None):
     """Compile a Zinc source file to Rust."""
     input_text = file.read_text()
@@ -31,7 +33,6 @@ def compile(file: Path, output: Path | None):
     parser = ZincParser(stream)
     tree = parser.program()
 
-
     visitor = Visitor()
     visitor.visit(tree)
 
@@ -40,9 +41,10 @@ def compile(file: Path, output: Path | None):
 
     if output:
         output.write_text(rust_code)
-        logger.info(f"Compiled {file} to {output}")  
+        logger.info(f"Compiled {file} to {output}")
     else:
         click.echo(rust_code)
+
 
 @main.command()
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
@@ -80,7 +82,9 @@ def check(file: Path):
     tree = parser.program()
 
     if parser.getNumberOfSyntaxErrors() > 0:
-        click.echo(f"Found {parser.getNumberOfSyntaxErrors()} syntax error(s)", err=True)
+        click.echo(
+            f"Found {parser.getNumberOfSyntaxErrors()} syntax error(s)", err=True
+        )
         raise SystemExit(1)
     else:
         click.echo(f"{file}: OK")

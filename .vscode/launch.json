@@ -10,7 +10,18 @@
             "type": "debugpy",
             "request": "launch",
             "program": "${file}",
+                "justMyCode": true,
             "console": "integratedTerminal"
+        },
+
+        {
+            "name": "pytest",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/test/test_compile.py",
+            "justMyCode": true,
+            "console": "integratedTerminal",
+            "args": ["--update-output"]
         }
     ]
 }
