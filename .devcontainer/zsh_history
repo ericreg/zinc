@@ -887,3 +887,10 @@ antlr -Dlanguage=Python3 -visitor zinc.g4
 : 1765256826:0;pytest test/test_compile.py
 : 1765257028:0;gs
 : 1765257039:0;git commit -am "using rust compilation in tests"
+: 1765257405:0;mv test/zinc_source/basic_dynamic_type.rs test/zinc_source/basic_dynamic_type.zinc
+: 1765257446:0;pytest test/test_compile.py
+: 1765257467:0;pytest test/test_compile.py --update-output
+: 1765257476:0;python test/test_compile.py --update-output
+: 1765257565:0;pytest test/test_compile.py
+: 1765257568:0;gs
+: 1765257588:0;git commit -am "basic dynamic typing for a single variable"

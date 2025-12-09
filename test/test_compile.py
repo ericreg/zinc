@@ -137,7 +137,7 @@ def main(update_output: bool) -> None:
         rust_code = compile_zinc(zinc_code)
 
         if update_output:
-            output_file = OUTPUT_DIR / f"{source_file.stem}.rs"
+            output_file = RUST_SOURCE_DIR / f"{source_file.stem}.rs"
             output_file.write_text(rust_code)
 
             # compile the rust code to the output file
