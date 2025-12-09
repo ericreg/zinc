@@ -18,10 +18,10 @@ OUTPUT_DIR = TEST_DIR / "output"
 
 
 def get_test_cases() -> list[str]:
-    """Discover test cases by finding .zinc files in source directory."""
+    """Discover test cases by finding .zn files in source directory."""
     if not ZINC_SOURCE_DIR.exists():
         return []
-    return [f.stem for f in ZINC_SOURCE_DIR.glob("*.zinc")]
+    return [f.stem for f in ZINC_SOURCE_DIR.glob("*.zn")]
 
 
 def compile_zinc(source_code: str) -> str:
@@ -42,7 +42,7 @@ def compile_zinc(source_code: str) -> str:
 @pytest.mark.parametrize("test_name", get_test_cases())
 def test_compile(test_name: str) -> None:
     """Test that compiling a source file produces the expected output."""
-    zinc_file = ZINC_SOURCE_DIR / f"{test_name}.zinc"
+    zinc_file = ZINC_SOURCE_DIR / f"{test_name}.zn"
     rust_file = RUST_SOURCE_DIR / f"{test_name}.rs"
 
     assert zinc_file.exists(), f"Source file not found: {zinc_file}"
@@ -126,7 +126,7 @@ def main(update_output: bool) -> None:
     logger = get_logger()
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    for source_file in ZINC_SOURCE_DIR.glob("*.zinc"):
+    for source_file in ZINC_SOURCE_DIR.glob("*.zn"):
 
         # read the zinc source file
         zinc_code = source_file.read_text()

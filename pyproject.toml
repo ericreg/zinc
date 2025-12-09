@@ -23,8 +23,9 @@ classifiers = [
 # "my-package @ git+file:///path/to/your/package"
 dependencies = [
   "antlr4-python3-runtime==4.13.2",
-  "click>=8.1.0",
-  "structlog>=24.0.0",
+  "click==8.1.0",
+  "structlog==24.0.0",
+  "colorama==0.4.6",
 ]
 
 # Installs all testing dependencies needed when pytest runs. Do NOT put
