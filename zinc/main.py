@@ -35,6 +35,7 @@ def compile(file: Path, output: Path | None):
 
     visitor = Visitor()
     visitor.visit(tree)
+    visitor.finalize()  # Pass 2: process assignments
 
     program = Program(scope=visitor._scope, statements=visitor.statements)
     rust_code = program.render()
@@ -62,6 +63,7 @@ def tree(file: Path):
 
     visitor = Visitor()
     visitor.visit(tree)
+    visitor.finalize()  # Pass 2: process assignments
 
     program = Program(scope=visitor._scope, statements=visitor.statements)
     click.echo(program)

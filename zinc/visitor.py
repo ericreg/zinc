@@ -15,13 +15,26 @@ class Statement:
         raise NotImplementedError("Subclasses must implement render()")
 
 
+class AssignmentKind(Enum):
+    DECLARATION = auto()      # First assignment: let mut x = ...
+    REASSIGNMENT = auto()     # Same type reassignment: x = ...
+    SHADOW = auto()           # Type change: let mut x = ...
+
+
 class VariableAssignment(Statement):
-    def __init__(self, variable_name: str, value: object):
+    def __init__(self, variable_name: str, value: object, kind: AssignmentKind, needs_mut: bool = False):
         self.variable_name = variable_name
         self.value = value
+        self.kind = kind
+        self.needs_mut = needs_mut
 
     def render(self) -> str:
-        return f"let {self.variable_name} = {self.value};"
+        if self.kind == AssignmentKind.REASSIGNMENT:
+            return f"{self.variable_name} = {self.value};"
+        else:
+            # DECLARATION or SHADOW - both need 'let', with optional 'mut'
+            mut = "mut " if self.needs_mut else ""
+            return f"let {mut}{self.variable_name} = {self.value};"
 
 
 class PrintStatement(Statement):
@@ -91,6 +104,14 @@ class Symbol(NamedTuple):
         return f"Symbol(name={self.name}, type={self.type})"
 
 
+class RawAssignment(NamedTuple):
+    """Raw assignment info collected during Pass 1."""
+    var_name: str
+    value: str
+    value_type: BaseType
+    index: int  # Position in statement list (for tracking order)
+
+
 class Scope:
     def __init__(self, parent=None):
         self.parent: Scope | None = parent
@@ -144,6 +165,11 @@ class Visitor(ZincVisitor):
         self._expr_map: dict[str, Symbol] = dict()
         self._scope = Scope()
         self.statements: list[Statement] = []
+        # Pass 1: Collect raw assignments before processing
+        self._pending_assignments: list[RawAssignment] = []
+        # Track non-assignment statements with their indices
+        self._pending_other: list[tuple[int, Statement]] = []
+        self._statement_index = 0
 
     def visitLiteral(self, ctx: ZincParser.LiteralContext):
         text = ctx.getText()
@@ -176,11 +202,28 @@ class Visitor(ZincVisitor):
         var_name = ctx.assignmentTarget().getText()
         value = ctx.expression().getText()
 
-        # Create a VariableAssignment statement
-        stmt = VariableAssignment(variable_name=var_name, value=value)
-        self.statements.append(stmt)
+        # Visit children first to populate _expr_map with type info
+        result = self.visitChildren(ctx)
 
-        return self.visitChildren(ctx)
+        # Get the type from the expression
+        expr_interval = ctx.expression().getSourceInterval()
+        if expr_interval in self._expr_map:
+            value_type = self._expr_map[expr_interval].type
+        else:
+            # Fallback: try to parse the literal directly
+            value_type = parse_literal(value)
+
+        # Pass 1: Collect raw assignment info
+        raw = RawAssignment(
+            var_name=var_name,
+            value=value,
+            value_type=value_type,
+            index=self._statement_index
+        )
+        self._pending_assignments.append(raw)
+        self._statement_index += 1
+
+        return result
 
     def visitFunctionCallExpr(self, ctx: ZincParser.FunctionCallExprContext):
         # Get the function name
@@ -195,6 +238,80 @@ class Visitor(ZincVisitor):
         # If this is a print() call, create a PrintStatement
         if func_name == "print":
             stmt = PrintStatement(arguments=arguments)
-            self.statements.append(stmt)
+            self._pending_other.append((self._statement_index, stmt))
+            self._statement_index += 1
 
         return self.visitChildren(ctx)
+
+    def finalize(self) -> None:
+        """
+        Pass 2: Process collected assignments and generate final statements.
+
+        Determines for each assignment:
+        - DECLARATION: First time seeing this variable
+        - REASSIGNMENT: Same variable, same type as current
+        - SHADOW: Same variable, different type (requires new let)
+
+        Also determines which declarations need 'mut' (if they have
+        same-type reassignments following them).
+        """
+        # Track variable state: var_name -> (current_type, declaration_index)
+        var_state: dict[str, tuple[BaseType, int]] = {}
+
+        # First pass through assignments: determine kind for each
+        assignment_info: list[tuple[RawAssignment, AssignmentKind]] = []
+
+        for raw in self._pending_assignments:
+            if raw.var_name not in var_state:
+                # First time seeing this variable - it's a declaration
+                assignment_info.append((raw, AssignmentKind.DECLARATION))
+                var_state[raw.var_name] = (raw.value_type, raw.index)
+            else:
+                current_type, _ = var_state[raw.var_name]
+                if raw.value_type == current_type:
+                    # Same type - it's a reassignment
+                    assignment_info.append((raw, AssignmentKind.REASSIGNMENT))
+                else:
+                    # Different type - it's a shadow (new declaration)
+                    assignment_info.append((raw, AssignmentKind.SHADOW))
+                    var_state[raw.var_name] = (raw.value_type, raw.index)
+
+        # Second pass: determine which declarations need 'mut'
+        # A declaration needs mut if there's a REASSIGNMENT for the same var after it
+        # (before the next SHADOW or end)
+        needs_mut: set[int] = set()  # Set of declaration indices that need mut
+
+        # Reset var_state to track declaration indices
+        var_state.clear()
+
+        for raw, kind in assignment_info:
+            if kind == AssignmentKind.DECLARATION or kind == AssignmentKind.SHADOW:
+                # This is a (new) declaration, track it
+                var_state[raw.var_name] = (raw.value_type, raw.index)
+            elif kind == AssignmentKind.REASSIGNMENT:
+                # This is a reassignment - mark the corresponding declaration as needing mut
+                if raw.var_name in var_state:
+                    _, decl_index = var_state[raw.var_name]
+                    needs_mut.add(decl_index)
+
+        # Build the final statements list
+        # Create a dict of index -> Statement for assignments
+        assignment_statements: dict[int, Statement] = {}
+
+        for raw, kind in assignment_info:
+            stmt = VariableAssignment(
+                variable_name=raw.var_name,
+                value=raw.value,
+                kind=kind,
+                needs_mut=(raw.index in needs_mut)
+            )
+            assignment_statements[raw.index] = stmt
+
+        # Merge assignments and other statements in order
+        all_statements: dict[int, Statement] = {}
+        all_statements.update(assignment_statements)
+        for idx, stmt in self._pending_other:
+            all_statements[idx] = stmt
+
+        # Sort by index and populate self.statements
+        self.statements = [all_statements[i] for i in sorted(all_statements.keys())]

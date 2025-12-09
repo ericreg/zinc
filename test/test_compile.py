@@ -34,6 +34,7 @@ def compile_zinc(source_code: str) -> str:
 
     visitor = Visitor()
     visitor.visit(tree)
+    visitor.finalize()  # Pass 2: process assignments
 
     program = Program(scope=visitor._scope, statements=visitor.statements)
     return program.render()
