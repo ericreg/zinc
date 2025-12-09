@@ -23,6 +23,8 @@ classifiers = [
 # "my-package @ git+file:///path/to/your/package"
 dependencies = [
   "antlr4-python3-runtime==4.13.2",
+  "click>=8.1.0",
+  "structlog>=24.0.0",
 ]
 
 # Installs all testing dependencies needed when pytest runs. Do NOT put
@@ -48,7 +50,7 @@ dev = [
 # For example, "my-app-cli" = "my_app.main:main" below will allow a user to type my-app-cli" in the terminal
 # after this package is pip installed, to invoke the main function in the my_app package.
 [project.scripts]
-# "trajectory-cli" = "trajectory_core.main:main"
+zinc = "zinc.main:main"
 
 [build-system]
 # https://peps.python.org/pep-0518/

@@ -5,7 +5,9 @@ from zinc.parser.zincParser import zincParser as ZincParser
 from zinc.parser.zincVisitor import zincVisitor as ZincVisitor
 from pathlib import Path
 from enum import Enum, auto
+import re
 
+INDENT = "    "
 
 class Statement:
     def render(self) -> str:
@@ -39,7 +41,6 @@ class PrintStatement(Statement):
             format_string = format_string[1:-1]
 
         # Extract variable names from {var} patterns
-        import re
         variables = re.findall(r'\{(\w+)\}', format_string)
 
         # If there are variables, render as println! with format args
@@ -128,9 +129,8 @@ class Program:
         rust_code = "fn main() {\n"
 
         # Render each statement with proper indentation
-        for stmt in self.statements:
-            rust_code += "    " + stmt.render() + "\n"
-
+        rust_statements = [ INDENT + x.render() for x in self.statements ]
+        rust_code += "\n".join(rust_statements) + "\n"
         rust_code += "}\n"
         return rust_code
 
@@ -201,26 +201,3 @@ class Visitor(ZincVisitor):
 
 
 
-file_path = Path("programs/variable_assignment.zinc")
-input_text = file_path.read_text()
-
-input_stream = InputStream(input_text)
-lexer = ZincLexer(input_stream)
-stream = CommonTokenStream(lexer)
-parser = ZincParser(stream)
-
-tree = parser.program()
-
-visitor = Visitor()
-visitor.visit(tree)
-
-print(tree.toStringTree(recog=parser))
-
-# Create the Program object with the collected statements
-program = Program(scope=visitor._scope, statements=visitor.statements)
-
-# Render and print the Rust code
-print("\n" + "="*50)
-print("Rendered Rust Code:")
-print("="*50)
-print(program.render())

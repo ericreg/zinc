@@ -830,3 +830,16 @@ antlr -Dlanguage=Python3 -visitor zinc.g4
 : 1765114357:0;antlr -Dlanguage=Python3 -visitor zinc.g4 
 : 1765115317:0;gs
 : 1765115337:0;git commit -am "print method working"
+: 1765251488:0;zinc check programs/variable_assignment.zinc
+: 1765251493:0;pip install -e .
+: 1765251498:0;zinc check programs/variable_assignment.zinc
+: 1765251562:0;pip install -e .
+: 1765251573:0;zinc tree programs/variable_assignment.zinc
+: 1765251938:0;pip install -e .
+: 1765252856:0;zinc compile programs/variable_assignment.zinc
+: 1765252866:0;pip install colorrama
+: 1765252869:0;pip install colorama
+: 1765252873:0;zinc compile programs/variable_assignment.zinc
+: 1765252989:0;gs
+: 1765252999:0;git add zinc
+: 1765253009:0;git commit -am "added cli"

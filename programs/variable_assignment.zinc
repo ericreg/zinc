@@ -6,5 +6,5 @@ fn main() {
     y = 3.14
 
     // print it out
-    print("x: {x}, y: {y}")
+    print("x: {x}, y: {y}}")
 }
