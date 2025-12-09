@@ -59,8 +59,7 @@ def test_compile(test_name: str) -> None:
     )
 
     # compile the rust code 
-    temp_rust_file = RUST_SOURCE_DIR / f"{test_name}.rs"
-    binary_path = compile_rust(temp_rust_file)
+    binary_path = compile_rust(rust_file)
 
     # execute
     output = execute_binary(binary_path)
@@ -74,7 +73,6 @@ def test_compile(test_name: str) -> None:
 
     # clean up
     binary_path.unlink()
-    temp_rust_file.unlink()
 
 
 

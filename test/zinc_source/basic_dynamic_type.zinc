@@ -1,0 +1,15 @@
+fn main() {
+
+    // variable assignment
+    x = 1
+    print("x: {x}")
+    
+    x = 3.14
+    print("x: {x}")
+
+    x = "zinc"
+    print("x: {x}")
+
+    x = true
+    print("x: {x}")
+}
