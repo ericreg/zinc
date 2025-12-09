@@ -79,10 +79,9 @@ profile = "black"
 # https://docs.pytest.org/en/stable/customize.html#pyproject-toml
 [tool.pytest.ini_options]
 addopts = [
-  # "--black",
   "--cache-clear",
   "--cov-report=term",
-  "--cov=trajectory_core",
+  "--cov=zinc",
   "--durations=0",
   #"--isort",
   "--verbose",

@@ -881,3 +881,9 @@ antlr -Dlanguage=Python3 -visitor zinc.g4
 : 1765256690:0;git add test/
 : 1765256691:0;gs
 : 1765256704:0;git commit -am "using rust compilation in tests"
+: 1765256707:0;pytest
+: 1765256742:0;pytest test/test_compile.py
+: 1765256793:0;gs
+: 1765256826:0;pytest test/test_compile.py
+: 1765257028:0;gs
+: 1765257039:0;git commit -am "using rust compilation in tests"
