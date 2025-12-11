@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Optional
 
-from .types import BaseType, TypeInfo
+from .types import BaseType, TypeInfo, ChannelTypeInfo, type_to_rust
 
 
 class Expression(ABC):
@@ -93,3 +93,37 @@ class CallExpr(Expression):
         func_name = self.mangled_name if self.mangled_name else self.callee.render_rust()
         args = ", ".join(arg.render_rust() for arg in self.arguments)
         return f"{func_name}({args})"
+
+
+@dataclass
+class ChannelCreateExpr(Expression):
+    """Channel creation expression: chan() or chan(n)."""
+
+    capacity: Optional[Expression] = None  # None = unbounded, else bounded
+    type_info: Optional[TypeInfo] = None
+    channel_info: Optional[ChannelTypeInfo] = None  # Element type info
+
+    def render_rust(self) -> str:
+        if self.channel_info is None:
+            raise ValueError("Channel element type not inferred")
+
+        elem = type_to_rust(self.channel_info.element_type)
+
+        if self.capacity is None:
+            return f"tokio::sync::mpsc::unbounded_channel::<{elem}>()"
+        else:
+            cap = self.capacity.render_rust()
+            return f"tokio::sync::mpsc::channel::<{elem}>({cap})"
+
+
+@dataclass
+class ChannelReceiveExpr(Expression):
+    """Channel receive expression: <- receiver."""
+
+    channel: Expression  # Must resolve to a receiver
+    type_info: Optional[TypeInfo] = None  # Type of received value
+
+    def render_rust(self) -> str:
+        chan = self.channel.render_rust()
+        # Use unwrap() to panic on closed channel
+        return f"{chan}.recv().await.unwrap()"

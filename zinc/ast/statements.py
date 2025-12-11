@@ -7,6 +7,7 @@ from enum import Enum, auto
 from typing import Optional, Union
 
 from .expressions import Expression
+from .types import BaseType, type_to_rust
 
 
 class AssignmentKind(Enum):
@@ -213,3 +214,38 @@ class SpawnStatement(Statement):
     def render(self) -> str:
         call = self.call_expr.render_rust()
         return f"tokio::spawn({call});"
+
+
+@dataclass
+class ChannelSendStatement(Statement):
+    """Channel send statement: sender <- value."""
+
+    channel_name: str  # Variable name of the sender
+    value: Expression
+
+    def render(self) -> str:
+        val = self.value.render_rust()
+        # UnboundedSender::send() is not async, it returns Result directly
+        return f"{self.channel_name}.send({val}).unwrap();"
+
+
+@dataclass
+class ChannelDeclaration(Statement):
+    """Channel creation with destructuring: let (tx, rx) = chan()."""
+
+    base_name: str  # Original variable name (e.g., "x_chan")
+    sender_name: str  # Derived sender name
+    receiver_name: str  # Derived receiver name
+    is_bounded: bool
+    capacity: Optional[Expression] = None
+    channel_info: Optional["ChannelTypeInfo"] = None  # Reference to shared channel info
+
+    def render(self) -> str:
+        from .types import ChannelTypeInfo
+        elem_type = self.channel_info.element_type if self.channel_info else BaseType.UNKNOWN
+        elem = type_to_rust(elem_type)
+
+        if self.is_bounded:
+            cap = self.capacity.render_rust() if self.capacity else "32"
+            return f"let ({self.sender_name}, mut {self.receiver_name}) = tokio::sync::mpsc::channel::<{elem}>({cap});"
+        return f"let ({self.sender_name}, mut {self.receiver_name}) = tokio::sync::mpsc::unbounded_channel::<{elem}>();"

@@ -4,18 +4,15 @@ fn main() {
     b = 10 - 4
     c = 3 * 5
     d = 20 / 4
-
     print("a: {a}, b: {b}, c: {c}, d: {d}")
 
     // Float arithmetic
     e = 3.14 + 2.0
     f = 10.0 / 4.0
-
     print("e: {e}, f: {f}")
 
     // Compound expressions
     g = (2 + 3) * 4
     h = 10 - 2 * 3
-
     print("g: {g}, h: {h}")
 }

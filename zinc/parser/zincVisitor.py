@@ -154,6 +154,11 @@ class zincVisitor(ParseTreeVisitor):
         return self.visitChildren(ctx)
 
 
+    # Visit a parse tree produced by zincParser#channelSendStatement.
+    def visitChannelSendStatement(self, ctx:zincParser.ChannelSendStatementContext):
+        return self.visitChildren(ctx)
+
+
     # Visit a parse tree produced by zincParser#block.
     def visitBlock(self, ctx:zincParser.BlockContext):
         return self.visitChildren(ctx)
@@ -216,6 +221,11 @@ class zincVisitor(ParseTreeVisitor):
 
     # Visit a parse tree produced by zincParser#functionCallExpr.
     def visitFunctionCallExpr(self, ctx:zincParser.FunctionCallExprContext):
+        return self.visitChildren(ctx)
+
+
+    # Visit a parse tree produced by zincParser#channelReceiveExpr.
+    def visitChannelReceiveExpr(self, ctx:zincParser.ChannelReceiveExprContext):
         return self.visitChildren(ctx)
 
 

@@ -1,5 +1,6 @@
 """Type system for the Zinc compiler."""
 
+from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Optional
 
@@ -11,6 +12,7 @@ class BaseType(Enum):
     STRING = auto()
     BOOLEAN = auto()
     FLOAT = auto()
+    CHANNEL = auto()  # Channel type (sender or receiver)
     UNKNOWN = auto()  # For unresolved types
 
     def __repr__(self):
@@ -75,6 +77,36 @@ def type_to_rust(base_type: BaseType) -> str:
         BaseType.FLOAT: "f64",
         BaseType.STRING: "String",
         BaseType.BOOLEAN: "bool",
+        BaseType.CHANNEL: "Chan",  # Placeholder for mangled names
         BaseType.UNKNOWN: "unknown",
     }
     return mapping.get(base_type, "unknown")
+
+
+@dataclass
+class ChannelTypeInfo:
+    """Type information for channel types."""
+
+    element_type: BaseType = BaseType.UNKNOWN  # Type of values sent/received
+    is_bounded: bool = False  # True if created with chan(n)
+
+    def to_rust_sender(self) -> str:
+        """Generate Rust sender type."""
+        elem = type_to_rust(self.element_type)
+        if self.is_bounded:
+            return f"tokio::sync::mpsc::Sender<{elem}>"
+        return f"tokio::sync::mpsc::UnboundedSender<{elem}>"
+
+    def to_rust_receiver(self) -> str:
+        """Generate Rust receiver type."""
+        elem = type_to_rust(self.element_type)
+        if self.is_bounded:
+            return f"tokio::sync::mpsc::Receiver<{elem}>"
+        return f"tokio::sync::mpsc::UnboundedReceiver<{elem}>"
+
+    def to_rust_type_suffix(self) -> str:
+        """Generate type suffix for mangled names (no special chars)."""
+        elem = type_to_rust(self.element_type)
+        if self.is_bounded:
+            return f"Sender{elem}"
+        return f"UnboundedSender{elem}"

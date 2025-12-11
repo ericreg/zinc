@@ -269,6 +269,15 @@ class zincListener(ParseTreeListener):
         pass
 
 
+    # Enter a parse tree produced by zincParser#channelSendStatement.
+    def enterChannelSendStatement(self, ctx:zincParser.ChannelSendStatementContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#channelSendStatement.
+    def exitChannelSendStatement(self, ctx:zincParser.ChannelSendStatementContext):
+        pass
+
+
     # Enter a parse tree produced by zincParser#block.
     def enterBlock(self, ctx:zincParser.BlockContext):
         pass
@@ -383,6 +392,15 @@ class zincListener(ParseTreeListener):
 
     # Exit a parse tree produced by zincParser#functionCallExpr.
     def exitFunctionCallExpr(self, ctx:zincParser.FunctionCallExprContext):
+        pass
+
+
+    # Enter a parse tree produced by zincParser#channelReceiveExpr.
+    def enterChannelReceiveExpr(self, ctx:zincParser.ChannelReceiveExprContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#channelReceiveExpr.
+    def exitChannelReceiveExpr(self, ctx:zincParser.ChannelReceiveExprContext):
         pass
 
 

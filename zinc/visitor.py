@@ -6,7 +6,7 @@ from typing import Union
 from zinc.parser.zincParser import zincParser as ZincParser
 from zinc.parser.zincVisitor import zincVisitor as ZincVisitor
 
-from zinc.ast.types import BaseType, TypeInfo, parse_literal, type_to_rust
+from zinc.ast.types import BaseType, TypeInfo, parse_literal, type_to_rust, ChannelTypeInfo
 from zinc.ast.expressions import (
     Expression,
     LiteralExpr,
@@ -14,6 +14,9 @@ from zinc.ast.expressions import (
     BinaryExpr,
     UnaryExpr,
     ParenExpr,
+    CallExpr,
+    ChannelCreateExpr,
+    ChannelReceiveExpr,
 )
 from zinc.ast.statements import (
     Statement,
@@ -26,8 +29,9 @@ from zinc.ast.statements import (
     FunctionDeclaration,
     ReturnStatement,
     SpawnStatement,
+    ChannelSendStatement,
+    ChannelDeclaration,
 )
-from zinc.ast.expressions import CallExpr
 from zinc.ast.symbols import Scope
 
 
@@ -51,6 +55,15 @@ class CallSite:
     func_name: str
     arg_types: tuple[BaseType, ...]  # Tuple for hashability
     call_expr: "CallExpr"  # Reference to update mangled_name later
+
+
+@dataclass
+class RawChannelDeclaration:
+    """Raw channel declaration info collected during Pass 1."""
+
+    var_name: str
+    channel_info: ChannelTypeInfo
+    stmt_index: int
 
 
 class Program:
@@ -120,6 +133,12 @@ class Visitor(ZincVisitor):
         # Spawn tracking
         self._spawned_functions: set[str] = set()  # Mangled names of functions called via spawn
         self._uses_spawn: bool = False  # True if any spawn statement is used
+
+        # Channel tracking
+        self._channel_vars: dict[str, ChannelTypeInfo] = {}  # var_name -> channel info
+        self._channel_usages: dict[str, set[str]] = {}  # var_name -> {"sender", "receiver"}
+        self._pending_channel_decls: list[RawChannelDeclaration] = []  # Channel declarations
+        self._channel_name_map: dict[str, tuple[str, str]] = {}  # var_name -> (sender_name, receiver_name)
 
     # ============================================================
     # Expression Visitors - Return Expression AST nodes
@@ -215,6 +234,24 @@ class Visitor(ZincVisitor):
             type_info=result_type,
         )
 
+    def visitChannelReceiveExpr(self, ctx: ZincParser.ChannelReceiveExprContext) -> Expression:
+        """Handle channel receive: <- expr"""
+        channel_expr = self.visit(ctx.expression())
+
+        # Track that this channel variable is used as a receiver
+        if isinstance(channel_expr, IdentifierExpr):
+            var_name = channel_expr.name
+            if var_name not in self._channel_usages:
+                self._channel_usages[var_name] = set()
+            self._channel_usages[var_name].add("receiver")
+
+            # Rewrite the identifier to use the receiver name
+            if var_name in self._channel_name_map:
+                _, receiver_name = self._channel_name_map[var_name]
+                channel_expr = IdentifierExpr(name=receiver_name, type_info=channel_expr.type_info)
+
+        return ChannelReceiveExpr(channel=channel_expr)
+
     def visitRelationalExpr(self, ctx: ZincParser.RelationalExprContext) -> Expression:
         """Handle relational comparisons: expr ('<' | '<=' | '>' | '>=') expr"""
         left = self.visit(ctx.expression(0))
@@ -304,6 +341,28 @@ class Visitor(ZincVisitor):
         # Visit expression to get Expression AST
         expr = self.visit(ctx.expression())
 
+        # Handle channel creation specially
+        if isinstance(expr, ChannelCreateExpr):
+            # Ensure channel_info exists
+            channel_info = expr.channel_info or ChannelTypeInfo()
+
+            # Track channel variable and its info
+            self._channel_vars[var_name] = channel_info
+            self._channel_usages[var_name] = set()
+
+            # Define in scope so lookups know this is a channel
+            self._scope.define(var_name, TypeInfo(BaseType.CHANNEL))
+
+            # Store as pending channel declaration (will be finalized later)
+            raw_chan = RawChannelDeclaration(
+                var_name=var_name,
+                channel_info=channel_info,
+                stmt_index=self._statement_index,
+            )
+            self._pending_channel_decls.append(raw_chan)
+            self._statement_index += 1
+            return None
+
         # Get type from expression
         if isinstance(expr, Expression) and expr.type_info:
             value_type = expr.type_info.base
@@ -315,6 +374,10 @@ class Visitor(ZincVisitor):
                 value_type = parse_literal(value)
             except ValueError:
                 value_type = BaseType.UNKNOWN
+
+        # Handle channel receive expressions
+        if isinstance(expr, ChannelReceiveExpr):
+            value_type = BaseType.UNKNOWN  # Will be inferred during finalization
 
         # Define variable in scope for future lookups
         self._scope.define(var_name, TypeInfo(value_type))
@@ -342,6 +405,13 @@ class Visitor(ZincVisitor):
         if ctx.argumentList():
             for arg_expr in ctx.argumentList().expression():
                 arguments.append(self.visit(arg_expr))
+
+        # Handle chan() builtin for channel creation
+        if func_name == "chan":
+            capacity = arguments[0] if arguments else None
+            is_bounded = capacity is not None
+            channel_info = ChannelTypeInfo(element_type=BaseType.UNKNOWN, is_bounded=is_bounded)
+            return ChannelCreateExpr(capacity=capacity, channel_info=channel_info)
 
         # If this is a print() call at statement level, create a PrintStatement
         # We check this by seeing if we're being called from top-level statement processing
@@ -429,6 +499,29 @@ class Visitor(ZincVisitor):
 
         return None
 
+    def visitChannelSendStatement(self, ctx: ZincParser.ChannelSendStatementContext):
+        """Visit channel send statement: IDENTIFIER '<-' expression"""
+        channel_name = ctx.IDENTIFIER().getText()
+        value_expr = self.visit(ctx.expression())
+
+        # Track that this channel is used as a sender
+        if channel_name not in self._channel_usages:
+            self._channel_usages[channel_name] = set()
+        self._channel_usages[channel_name].add("sender")
+
+        # Infer element type from the value being sent
+        if channel_name in self._channel_vars:
+            chan_info = self._channel_vars[channel_name]
+            if chan_info.element_type == BaseType.UNKNOWN:
+                if isinstance(value_expr, Expression) and value_expr.type_info:
+                    chan_info.element_type = value_expr.type_info.base
+
+        stmt = ChannelSendStatement(channel_name=channel_name, value=value_expr)
+        self._pending_other.append((self._statement_index, stmt))
+        self._statement_index += 1
+
+        return None
+
     def visitIfStatement(self, ctx: ZincParser.IfStatementContext):
         """Visit if/else statement."""
         branches = []
@@ -476,6 +569,33 @@ class Visitor(ZincVisitor):
             var_ctx = stmt_ctx.variableAssignment()
             var_name = var_ctx.assignmentTarget().getText()
             expr = self.visit(var_ctx.expression())
+
+            # Handle channel creation
+            if isinstance(expr, ChannelCreateExpr):
+                channel_info = expr.channel_info or ChannelTypeInfo()
+
+                # Track channel variable
+                self._channel_vars[var_name] = channel_info
+                self._channel_usages[var_name] = set()
+
+                # Define in scope so lookups know this is a channel
+                self._scope.define(var_name, TypeInfo(BaseType.CHANNEL))
+
+                # Determine sender/receiver names
+                sender_name = f"{var_name}_tx"
+                receiver_name = f"{var_name}_rx"
+
+                # Track the name mapping for later rewriting
+                self._channel_name_map[var_name] = (sender_name, receiver_name)
+
+                return ChannelDeclaration(
+                    base_name=var_name,
+                    sender_name=sender_name,
+                    receiver_name=receiver_name,
+                    is_bounded=channel_info.is_bounded,
+                    capacity=expr.capacity,
+                    channel_info=channel_info,
+                )
 
             if isinstance(expr, Expression):
                 value = expr
@@ -560,11 +680,16 @@ class Visitor(ZincVisitor):
             # Get the function name being called
             func_name = spawn_ctx.expression().getText()
 
-            # Build the arguments list
+            # Build the arguments list, rewriting channel args to use sender name
             arguments = []
             if spawn_ctx.argumentList():
                 for arg_expr in spawn_ctx.argumentList().expression():
-                    arguments.append(self.visit(arg_expr))
+                    arg = self.visit(arg_expr)
+                    # Rewrite channel arguments to use sender name
+                    if isinstance(arg, IdentifierExpr) and arg.name in self._channel_name_map:
+                        sender_name, _ = self._channel_name_map[arg.name]
+                        arg = IdentifierExpr(name=sender_name, type_info=arg.type_info)
+                    arguments.append(arg)
 
             # Get the callee expression (function name)
             callee = self.visit(spawn_ctx.expression())
@@ -594,6 +719,26 @@ class Visitor(ZincVisitor):
             self._spawned_functions.add(mangled_name)
 
             return SpawnStatement(call_expr=call_expr)
+
+        # Check for channel send statement
+        if stmt_ctx.channelSendStatement():
+            send_ctx = stmt_ctx.channelSendStatement()
+            channel_name = send_ctx.IDENTIFIER().getText()
+            value_expr = self.visit(send_ctx.expression())
+
+            # Track that this channel is used as a sender
+            if channel_name not in self._channel_usages:
+                self._channel_usages[channel_name] = set()
+            self._channel_usages[channel_name].add("sender")
+
+            # Infer element type from the value being sent
+            if channel_name in self._channel_vars:
+                chan_info = self._channel_vars[channel_name]
+                if chan_info.element_type == BaseType.UNKNOWN:
+                    if isinstance(value_expr, Expression) and value_expr.type_info:
+                        chan_info.element_type = value_expr.type_info.base
+
+            return ChannelSendStatement(channel_name=channel_name, value=value_expr)
 
         return None
 
@@ -665,9 +810,39 @@ class Visitor(ZincVisitor):
             )
             assignment_statements[raw.stmt_index] = stmt
 
-        # Merge assignments and other statements in order
+        # Process channel declarations - infer element types and generate names
+        channel_statements: dict[int, Statement] = {}
+        for raw_chan in self._pending_channel_decls:
+            var_name = raw_chan.var_name
+            chan_info = raw_chan.channel_info
+            usages = self._channel_usages.get(var_name, set())
+
+            # Determine sender/receiver names based on usage
+            if usages == {"sender"}:
+                sender_name = var_name
+                receiver_name = f"{var_name}_rx"
+            elif usages == {"receiver"}:
+                sender_name = f"{var_name}_tx"
+                receiver_name = var_name
+            else:
+                # Both or unknown - use explicit naming
+                sender_name = f"{var_name}_tx"
+                receiver_name = f"{var_name}_rx"
+
+            stmt = ChannelDeclaration(
+                base_name=var_name,
+                sender_name=sender_name,
+                receiver_name=receiver_name,
+                is_bounded=chan_info.is_bounded,
+                capacity=None,  # TODO: Store capacity expression if bounded
+                channel_info=chan_info,
+            )
+            channel_statements[raw_chan.stmt_index] = stmt
+
+        # Merge assignments, channels, and other statements in order
         all_statements: dict[int, Statement] = {}
         all_statements.update(assignment_statements)
+        all_statements.update(channel_statements)
         for idx, stmt in self._pending_other:
             all_statements[idx] = stmt
 
@@ -716,10 +891,41 @@ class Visitor(ZincVisitor):
             mono_func.mangled_name = mangled_name
             mono_func.is_template = False
 
+            # Analyze function body to determine channel parameter usage
+            channel_param_roles = self._analyze_channel_params(mono_func.body, template.parameters)
+
+            # Build param index map for type lookup
+            param_index = {p.name: i for i, p in enumerate(template.parameters)}
+
             # Set resolved types on parameters
             for i, param in enumerate(mono_func.parameters):
                 if i < len(arg_types):
-                    param.resolved_type = type_to_rust(arg_types[i])
+                    if arg_types[i] == BaseType.CHANNEL:
+                        # This is a channel parameter - determine if sender or receiver
+                        role_info = channel_param_roles.get(param.name, ("sender", None))
+                        role, source_param = role_info
+
+                        # Infer element type from the source parameter
+                        elem_type = BaseType.UNKNOWN
+                        if source_param and source_param in param_index:
+                            source_idx = param_index[source_param]
+                            if source_idx < len(arg_types):
+                                elem_type = arg_types[source_idx]
+
+                        # Fall back to channel variable lookup
+                        if elem_type == BaseType.UNKNOWN:
+                            elem_type = self._get_channel_element_type(param.name, call_sites)
+
+                        # Update the channel variable's element type
+                        self._update_channel_element_types(call_sites, i, elem_type)
+
+                        chan_info = ChannelTypeInfo(element_type=elem_type, is_bounded=False)
+                        if role == "sender":
+                            param.resolved_type = chan_info.to_rust_sender()
+                        else:
+                            param.resolved_type = chan_info.to_rust_receiver()
+                    else:
+                        param.resolved_type = type_to_rust(arg_types[i])
 
             # Infer return type from the function body
             return_type = self._infer_return_type(mono_func.body, arg_types, template.parameters)
@@ -780,3 +986,86 @@ class Visitor(ZincVisitor):
             return self._infer_expr_type(expr.inner, param_types)
 
         return BaseType.UNKNOWN
+
+    def _analyze_channel_params(
+        self, body: list[Statement], params: list[Parameter]
+    ) -> dict[str, tuple[str, str | None]]:
+        """Analyze function body to determine if channel params are senders or receivers.
+
+        Returns a dict of param_name -> (role, source_param_name).
+        - role is "sender" or "receiver"
+        - source_param_name is the param whose value is sent (for type inference)
+        """
+        param_names = {p.name for p in params}
+        roles: dict[str, tuple[str, str | None]] = {}
+
+        def visit_stmt(stmt: Statement) -> None:
+            if isinstance(stmt, ChannelSendStatement):
+                # sender <- value : channel_name is a sender
+                if stmt.channel_name in param_names:
+                    # Check if the value being sent is another parameter
+                    source_param = None
+                    if isinstance(stmt.value, IdentifierExpr):
+                        if stmt.value.name in param_names:
+                            source_param = stmt.value.name
+                    roles[stmt.channel_name] = ("sender", source_param)
+            elif isinstance(stmt, VariableAssignment):
+                # x = <- channel : check if value is a receive expression
+                if isinstance(stmt.value, ChannelReceiveExpr):
+                    if isinstance(stmt.value.channel, IdentifierExpr):
+                        if stmt.value.channel.name in param_names:
+                            roles[stmt.value.channel.name] = ("receiver", None)
+            elif isinstance(stmt, IfStatement):
+                for branch in stmt.branches:
+                    for s in branch.body:
+                        visit_stmt(s)
+                if stmt.else_body:
+                    for s in stmt.else_body:
+                        visit_stmt(s)
+
+        for stmt in body:
+            visit_stmt(stmt)
+
+        return roles
+
+    def _get_channel_element_type(
+        self, param_name: str, call_sites: list[CallSite]
+    ) -> BaseType:
+        """Get the element type of a channel passed to a function.
+
+        Looks up the channel variable passed at call sites and returns its element type.
+        """
+        for call_site in call_sites:
+            for arg in call_site.call_expr.arguments:
+                if isinstance(arg, IdentifierExpr):
+                    # Check if this arg is a channel variable we know about
+                    if arg.name in self._channel_vars:
+                        chan_info = self._channel_vars[arg.name]
+                        return chan_info.element_type
+        return BaseType.UNKNOWN
+
+    def _update_channel_element_types(
+        self, call_sites: list[CallSite], param_idx: int, elem_type: BaseType
+    ) -> None:
+        """Update channel variable element types based on inferred type.
+
+        When we determine a channel's element type during monomorphization,
+        update the channel variable so declarations render correctly.
+        """
+        if elem_type == BaseType.UNKNOWN:
+            return
+
+        # Build reverse mapping: tx/rx name -> original channel name
+        reverse_map: dict[str, str] = {}
+        for orig_name, (tx_name, rx_name) in self._channel_name_map.items():
+            reverse_map[tx_name] = orig_name
+            reverse_map[rx_name] = orig_name
+
+        for call_site in call_sites:
+            if param_idx < len(call_site.call_expr.arguments):
+                arg = call_site.call_expr.arguments[param_idx]
+                if isinstance(arg, IdentifierExpr):
+                    # Check if it's a rewritten name
+                    orig_name = reverse_map.get(arg.name, arg.name)
+                    if orig_name in self._channel_vars:
+                        self._channel_vars[orig_name].element_type = elem_type

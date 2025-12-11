@@ -14,6 +14,7 @@ statement
     | functionDeclaration
     | asyncFunctionDeclaration
     | variableAssignment
+    | channelSendStatement
     | expressionStatement
     | ifStatement
     | forStatement
@@ -150,6 +151,10 @@ spawnStatement
     : 'spawn' expression '(' argumentList? ')'
     ;
 
+channelSendStatement
+    : IDENTIFIER '<-' expression
+    ;
+
 block
     : '{' statement* '}'
     ;
@@ -161,6 +166,7 @@ expression
     | expression '[' expression ']'                             # indexAccessExpr
     | expression '(' argumentList? ')'                          # functionCallExpr
     | 'await' expression                                        # awaitExpr
+    | '<-' expression                                           # channelReceiveExpr
     | ('!' | '-' | 'not') expression                            # unaryExpr
     | expression ('*' | '/' | '%') expression                   # multiplicativeExpr
     | expression ('+' | '-') expression                         # additiveExpr
@@ -304,6 +310,7 @@ PERCENT     : '%';
 EQ          : '=';
 EQEQ        : '==';
 NEQ         : '!=';
+LARROW      : '<-';  // Channel send/receive operator (must be before LT)
 LT          : '<';
 LE          : '<=';
 GT          : '>';

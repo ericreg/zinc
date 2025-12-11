@@ -35,5 +35,9 @@ name = "spawn"
 path = "src/spawn.rs"
 
 [[bin]]
+name = "channels"
+path = "src/channels.rs"
+
+[[bin]]
 name = "run_all"
 path = "src/main.rs"
