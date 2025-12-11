@@ -222,11 +222,16 @@ class ChannelSendStatement(Statement):
 
     channel_name: str  # Variable name of the sender
     value: Expression
+    is_bounded: bool = False  # Bounded channels need .await on send
 
     def render(self) -> str:
         val = self.value.render_rust()
-        # UnboundedSender::send() is not async, it returns Result directly
-        return f"{self.channel_name}.send({val}).unwrap();"
+        if self.is_bounded:
+            # Bounded Sender::send() is async - needs .await
+            return f"{self.channel_name}.send({val}).await.unwrap();"
+        else:
+            # UnboundedSender::send() is not async, it returns Result directly
+            return f"{self.channel_name}.send({val}).unwrap();"
 
 
 @dataclass

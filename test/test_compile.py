@@ -17,6 +17,7 @@ ZINC_SOURCE_DIR = TEST_DIR / "zinc_source"
 RUST_SOURCE_DIR = TEST_DIR / "rust_source"
 RUST_SRC_DIR = RUST_SOURCE_DIR / "src"  # Cargo src directory
 OUTPUT_DIR = TEST_DIR / "output"
+CARGO_TOML = RUST_SOURCE_DIR / "Cargo.toml"
 
 
 def get_test_cases() -> list[str]:
@@ -24,6 +25,39 @@ def get_test_cases() -> list[str]:
     if not ZINC_SOURCE_DIR.exists():
         return []
     return [f.stem for f in ZINC_SOURCE_DIR.glob("*.zn")]
+
+
+def generate_cargo_toml(test_names: list[str]) -> str:
+    """Generate Cargo.toml content with binary entries for each test."""
+    lines = [
+        '[package]',
+        'name = "zinc_tests"',
+        'version = "0.1.0"',
+        'edition = "2021"',
+        '',
+        '[dependencies]',
+        'tokio = { version = "1", features = ["full"] }',
+        '',
+    ]
+
+    for test_name in sorted(test_names):
+        lines.extend([
+            '[[bin]]',
+            f'name = "{test_name}"',
+            f'path = "src/{test_name}.rs"',
+            '',
+        ])
+
+    # Add run_all binary for main.rs if it exists
+    if (RUST_SRC_DIR / "main.rs").exists():
+        lines.extend([
+            '[[bin]]',
+            'name = "run_all"',
+            'path = "src/main.rs"',
+            '',
+        ])
+
+    return '\n'.join(lines)
 
 
 def compile_zinc(source_code: str) -> str:
@@ -139,6 +173,12 @@ def main(update_output: bool) -> None:
             logger.info(event="wrote_rust", ctx={"rust": str(output_file)})
 
     if update_output:
+        # Generate Cargo.toml with all test binaries
+        test_names = [f.stem for f in ZINC_SOURCE_DIR.glob("*.zn")]
+        cargo_content = generate_cargo_toml(test_names)
+        CARGO_TOML.write_text(cargo_content)
+        logger.info(event="wrote_cargo_toml", ctx={"path": str(CARGO_TOML)})
+
         # Build all binaries once
         logger.info(event="building_cargo")
         build_cargo_project()

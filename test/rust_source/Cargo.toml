@@ -7,12 +7,24 @@ edition = "2021"
 tokio = { version = "1", features = ["full"] }
 
 [[bin]]
+name = "arithmetic"
+path = "src/arithmetic.rs"
+
+[[bin]]
 name = "basic_dynamic_type"
 path = "src/basic_dynamic_type.rs"
 
 [[bin]]
-name = "arithmetic"
-path = "src/arithmetic.rs"
+name = "bounded_channels"
+path = "src/bounded_channels.rs"
+
+[[bin]]
+name = "channels"
+path = "src/channels.rs"
+
+[[bin]]
+name = "functions"
+path = "src/functions.rs"
 
 [[bin]]
 name = "if_else"
@@ -23,20 +35,12 @@ name = "reassign_type"
 path = "src/reassign_type.rs"
 
 [[bin]]
-name = "variable_assignment"
-path = "src/variable_assignment.rs"
-
-[[bin]]
-name = "functions"
-path = "src/functions.rs"
-
-[[bin]]
 name = "spawn"
 path = "src/spawn.rs"
 
 [[bin]]
-name = "channels"
-path = "src/channels.rs"
+name = "variable_assignment"
+path = "src/variable_assignment.rs"
 
 [[bin]]
 name = "run_all"

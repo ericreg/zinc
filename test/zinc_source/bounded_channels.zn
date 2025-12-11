@@ -1,0 +1,30 @@
+fn tx(send_x) {
+    send_x <- 1
+    print("<- 1")
+    send_x <- 2
+    print("<- 2")
+    send_x <- 3
+    print("<- 3")
+}
+
+
+fn main() {
+
+    // create channel
+    x_chan = chan(2)
+
+    // send data on the channel from a spawned task
+    spawn tx(x_chan)
+
+    // receive data from the channel
+    x = <- x_chan
+    print("{x} <-")
+
+    // receive data from the channel
+    x = <- x_chan
+    print("{x} <-")
+
+    // receive data from the channel
+    x = <- x_chan
+    print("{x} <-")
+}

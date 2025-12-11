@@ -77,7 +77,7 @@ def type_to_rust(base_type: BaseType) -> str:
         BaseType.FLOAT: "f64",
         BaseType.STRING: "String",
         BaseType.BOOLEAN: "bool",
-        BaseType.CHANNEL: "Chan",  # Placeholder for mangled names
+        BaseType.CHANNEL: "chan",  # Placeholder for mangled names
         BaseType.UNKNOWN: "unknown",
     }
     return mapping.get(base_type, "unknown")

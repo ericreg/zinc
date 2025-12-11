@@ -902,8 +902,8 @@ class Visitor(ZincVisitor):
                 if i < len(arg_types):
                     if arg_types[i] == BaseType.CHANNEL:
                         # This is a channel parameter - determine if sender or receiver
-                        role_info = channel_param_roles.get(param.name, ("sender", None))
-                        role, source_param = role_info
+                        role_info = channel_param_roles.get(param.name, ("sender", None, BaseType.UNKNOWN))
+                        role, source_param, inferred_elem_type = role_info
 
                         # Infer element type from the source parameter
                         elem_type = BaseType.UNKNOWN
@@ -912,6 +912,10 @@ class Visitor(ZincVisitor):
                             if source_idx < len(arg_types):
                                 elem_type = arg_types[source_idx]
 
+                        # Use inferred type from literals if available
+                        if elem_type == BaseType.UNKNOWN and inferred_elem_type != BaseType.UNKNOWN:
+                            elem_type = inferred_elem_type
+
                         # Fall back to channel variable lookup
                         if elem_type == BaseType.UNKNOWN:
                             elem_type = self._get_channel_element_type(param.name, call_sites)
@@ -919,13 +923,24 @@ class Visitor(ZincVisitor):
                         # Update the channel variable's element type
                         self._update_channel_element_types(call_sites, i, elem_type)
 
-                        chan_info = ChannelTypeInfo(element_type=elem_type, is_bounded=False)
+                        # Look up is_bounded from the original channel variable
+                        is_bounded = self._get_channel_is_bounded(call_sites, i)
+
+                        chan_info = ChannelTypeInfo(element_type=elem_type, is_bounded=is_bounded)
                         if role == "sender":
                             param.resolved_type = chan_info.to_rust_sender()
                         else:
                             param.resolved_type = chan_info.to_rust_receiver()
                     else:
                         param.resolved_type = type_to_rust(arg_types[i])
+
+            # Update is_bounded on ChannelSendStatement objects in the function body
+            # Build mapping of param name -> is_bounded
+            param_is_bounded: dict[str, bool] = {}
+            for i, param in enumerate(mono_func.parameters):
+                if i < len(arg_types) and arg_types[i] == BaseType.CHANNEL:
+                    param_is_bounded[param.name] = self._get_channel_is_bounded(call_sites, i)
+            self._update_send_statements_bounded(mono_func.body, param_is_bounded)
 
             # Infer return type from the function body
             return_type = self._infer_return_type(mono_func.body, arg_types, template.parameters)
@@ -989,15 +1004,16 @@ class Visitor(ZincVisitor):
 
     def _analyze_channel_params(
         self, body: list[Statement], params: list[Parameter]
-    ) -> dict[str, tuple[str, str | None]]:
+    ) -> dict[str, tuple[str, str | None, BaseType]]:
         """Analyze function body to determine if channel params are senders or receivers.
 
-        Returns a dict of param_name -> (role, source_param_name).
+        Returns a dict of param_name -> (role, source_param_name, inferred_elem_type).
         - role is "sender" or "receiver"
         - source_param_name is the param whose value is sent (for type inference)
+        - inferred_elem_type is the type inferred from literals being sent
         """
         param_names = {p.name for p in params}
-        roles: dict[str, tuple[str, str | None]] = {}
+        roles: dict[str, tuple[str, str | None, BaseType]] = {}
 
         def visit_stmt(stmt: Statement) -> None:
             if isinstance(stmt, ChannelSendStatement):
@@ -1005,16 +1021,20 @@ class Visitor(ZincVisitor):
                 if stmt.channel_name in param_names:
                     # Check if the value being sent is another parameter
                     source_param = None
+                    inferred_type = BaseType.UNKNOWN
                     if isinstance(stmt.value, IdentifierExpr):
                         if stmt.value.name in param_names:
                             source_param = stmt.value.name
-                    roles[stmt.channel_name] = ("sender", source_param)
+                    # Also check if the value has a known type (e.g., literal)
+                    if isinstance(stmt.value, Expression) and stmt.value.type_info:
+                        inferred_type = stmt.value.type_info.base
+                    roles[stmt.channel_name] = ("sender", source_param, inferred_type)
             elif isinstance(stmt, VariableAssignment):
                 # x = <- channel : check if value is a receive expression
                 if isinstance(stmt.value, ChannelReceiveExpr):
                     if isinstance(stmt.value.channel, IdentifierExpr):
                         if stmt.value.channel.name in param_names:
-                            roles[stmt.value.channel.name] = ("receiver", None)
+                            roles[stmt.value.channel.name] = ("receiver", None, BaseType.UNKNOWN)
             elif isinstance(stmt, IfStatement):
                 for branch in stmt.branches:
                     for s in branch.body:
@@ -1069,3 +1089,43 @@ class Visitor(ZincVisitor):
                     orig_name = reverse_map.get(arg.name, arg.name)
                     if orig_name in self._channel_vars:
                         self._channel_vars[orig_name].element_type = elem_type
+
+    def _get_channel_is_bounded(
+        self, call_sites: list[CallSite], param_idx: int
+    ) -> bool:
+        """Get whether a channel passed to a function is bounded.
+
+        Looks up the channel variable passed at call sites and returns its is_bounded property.
+        """
+        # Build reverse mapping: tx/rx name -> original channel name
+        reverse_map: dict[str, str] = {}
+        for orig_name, (tx_name, rx_name) in self._channel_name_map.items():
+            reverse_map[tx_name] = orig_name
+            reverse_map[rx_name] = orig_name
+
+        for call_site in call_sites:
+            if param_idx < len(call_site.call_expr.arguments):
+                arg = call_site.call_expr.arguments[param_idx]
+                if isinstance(arg, IdentifierExpr):
+                    # Check if it's a rewritten name
+                    orig_name = reverse_map.get(arg.name, arg.name)
+                    if orig_name in self._channel_vars:
+                        return self._channel_vars[orig_name].is_bounded
+        return False
+
+    def _update_send_statements_bounded(
+        self, body: list[Statement], param_is_bounded: dict[str, bool]
+    ) -> None:
+        """Update is_bounded on ChannelSendStatement objects in a function body.
+
+        Recursively visits statements and sets is_bounded based on the param mapping.
+        """
+        for stmt in body:
+            if isinstance(stmt, ChannelSendStatement):
+                stmt.is_bounded = param_is_bounded.get(stmt.channel_name, False)
+            elif isinstance(stmt, IfStatement):
+                # Recursively process if branches
+                for branch in stmt.branches:
+                    self._update_send_statements_bounded(branch.body, param_is_bounded)
+                if stmt.else_body:
+                    self._update_send_statements_bounded(stmt.else_body, param_is_bounded)
