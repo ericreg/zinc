@@ -20,6 +20,8 @@ from zinc.ast.statements import (
     AssignmentKind,
     VariableAssignment,
     PrintStatement,
+    IfBranch,
+    IfStatement,
 )
 from zinc.ast.symbols import Scope
 
@@ -49,8 +51,12 @@ class Program:
         rust_code = "fn main() {\n"
 
         # Render each statement with proper indentation
-        rust_statements = [INDENT + x.render() for x in self.statements]
-        rust_code += "\n".join(rust_statements) + "\n"
+        for stmt in self.statements:
+            stmt_code = stmt.render()
+            # Indent each line of the statement
+            for line in stmt_code.split("\n"):
+                rust_code += INDENT + line + "\n"
+
         rust_code += "}\n"
         return rust_code
 
@@ -161,6 +167,38 @@ class Visitor(ZincVisitor):
             type_info=result_type,
         )
 
+    def visitRelationalExpr(self, ctx: ZincParser.RelationalExprContext) -> Expression:
+        """Handle relational comparisons: expr ('<' | '<=' | '>' | '>=') expr"""
+        left = self.visit(ctx.expression(0))
+        right = self.visit(ctx.expression(1))
+
+        # Get operator from the middle child (index 1)
+        operator = ctx.getChild(1).getText()
+
+        # Relational expressions always return boolean
+        return BinaryExpr(
+            left=left,
+            operator=operator,
+            right=right,
+            type_info=TypeInfo(BaseType.BOOLEAN),
+        )
+
+    def visitEqualityExpr(self, ctx: ZincParser.EqualityExprContext) -> Expression:
+        """Handle equality comparisons: expr ('==' | '!=') expr"""
+        left = self.visit(ctx.expression(0))
+        right = self.visit(ctx.expression(1))
+
+        # Get operator from the middle child (index 1)
+        operator = ctx.getChild(1).getText()
+
+        # Equality expressions always return boolean
+        return BinaryExpr(
+            left=left,
+            operator=operator,
+            right=right,
+            type_info=TypeInfo(BaseType.BOOLEAN),
+        )
+
     # ============================================================
     # Statement Visitors
     # ============================================================
@@ -230,6 +268,116 @@ class Visitor(ZincVisitor):
             self._statement_index += 1
 
         return self.visitChildren(ctx)
+
+    def visitIfStatement(self, ctx: ZincParser.IfStatementContext):
+        """Visit if/else statement."""
+        branches = []
+        else_body = None
+
+        # Get all expressions (conditions) and blocks
+        expressions = ctx.expression()
+        blocks = ctx.block()
+
+        num_conditions = len(expressions)
+        num_blocks = len(blocks)
+
+        # Process each if/else-if branch (one condition per branch)
+        for i in range(num_conditions):
+            condition = self.visit(expressions[i])
+            body_stmts = self._visit_block(blocks[i])
+            branches.append(IfBranch(condition=condition, body=body_stmts))
+
+        # Check for else block (more blocks than conditions means there's an else)
+        if num_blocks > num_conditions:
+            else_body = self._visit_block(blocks[num_blocks - 1])
+
+        stmt = IfStatement(branches=branches, else_body=else_body)
+        self._pending_other.append((self._statement_index, stmt))
+        self._statement_index += 1
+
+        return None  # Don't continue visiting children
+
+    def _visit_block(self, block_ctx) -> list[Statement]:
+        """Visit a block and return list of statements."""
+        statements = []
+
+        for stmt_ctx in block_ctx.statement():
+            # Handle each statement type
+            stmt = self._visit_statement(stmt_ctx)
+            if stmt:
+                statements.append(stmt)
+
+        return statements
+
+    def _visit_statement(self, stmt_ctx) -> Statement | None:
+        """Visit a single statement and return a Statement object."""
+        # Check for variable assignment
+        if stmt_ctx.variableAssignment():
+            var_ctx = stmt_ctx.variableAssignment()
+            var_name = var_ctx.assignmentTarget().getText()
+            expr = self.visit(var_ctx.expression())
+
+            if isinstance(expr, Expression) and expr.type_info:
+                value_type = expr.type_info.base
+                value = expr
+            else:
+                value = var_ctx.expression().getText()
+                try:
+                    value_type = parse_literal(value)
+                except ValueError:
+                    value_type = BaseType.UNKNOWN
+
+            # For statements inside blocks, we create the assignment directly
+            # (no need for two-pass mutability analysis in nested blocks for now)
+            return VariableAssignment(
+                variable_name=var_name,
+                value=value,
+                kind=AssignmentKind.DECLARATION,
+                needs_mut=False,
+            )
+
+        # Check for expression statement (includes function calls like print)
+        if stmt_ctx.expressionStatement():
+            expr_stmt_ctx = stmt_ctx.expressionStatement()
+            expr_ctx = expr_stmt_ctx.expression()
+
+            # Check if it's a function call
+            if hasattr(expr_ctx, "getRuleIndex"):
+                # Try to detect print() calls
+                expr_text = expr_ctx.getText()
+                if expr_text.startswith("print("):
+                    # Extract arguments
+                    arguments = []
+                    # Navigate to the function call context
+                    func_call_ctx = expr_ctx
+                    if hasattr(func_call_ctx, "argumentList") and func_call_ctx.argumentList():
+                        for arg_expr in func_call_ctx.argumentList().expression():
+                            arguments.append(arg_expr.getText())
+                    return PrintStatement(arguments=arguments)
+
+            # Generic expression - just get text for now
+            return None
+
+        # Check for nested if statement
+        if stmt_ctx.ifStatement():
+            if_ctx = stmt_ctx.ifStatement()
+            branches = []
+            else_body = None
+
+            expressions = if_ctx.expression()
+            blocks = if_ctx.block()
+
+            for i in range(len(expressions)):
+                condition = self.visit(expressions[i])
+                body_stmts = self._visit_block(blocks[i])
+                branches.append(IfBranch(condition=condition, body=body_stmts))
+
+            if len(blocks) > len(expressions):
+                else_body = self._visit_block(blocks[-1])
+
+            return IfStatement(branches=branches, else_body=else_body)
+
+        return None
 
     # ============================================================
     # Pass 2: Finalization
