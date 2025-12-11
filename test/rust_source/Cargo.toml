@@ -1,0 +1,39 @@
+[package]
+name = "zinc_tests"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+
+[[bin]]
+name = "basic_dynamic_type"
+path = "src/basic_dynamic_type.rs"
+
+[[bin]]
+name = "arithmetic"
+path = "src/arithmetic.rs"
+
+[[bin]]
+name = "if_else"
+path = "src/if_else.rs"
+
+[[bin]]
+name = "reassign_type"
+path = "src/reassign_type.rs"
+
+[[bin]]
+name = "variable_assignment"
+path = "src/variable_assignment.rs"
+
+[[bin]]
+name = "functions"
+path = "src/functions.rs"
+
+[[bin]]
+name = "spawn"
+path = "src/spawn.rs"
+
+[[bin]]
+name = "run_all"
+path = "src/main.rs"

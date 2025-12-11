@@ -1,0 +1,8 @@
+fn greet(x) {
+    print("{x}")
+}
+
+fn main() {
+    spawn greet(42)
+    print("done")
+}

@@ -23,6 +23,7 @@ statement
     | returnStatement
     | breakStatement
     | continueStatement
+    | spawnStatement
     | block
     ;
 
@@ -145,6 +146,10 @@ continueStatement
     : 'continue'
     ;
 
+spawnStatement
+    : 'spawn' expression '(' argumentList? ')'
+    ;
+
 block
     : '{' statement* '}'
     ;
@@ -255,6 +260,7 @@ NOT         : 'not';
 SELF        : 'self';
 SELECT      : 'select';
 CASE        : 'case';
+SPAWN       : 'spawn';
 
 // --- Literals ---
 INTEGER

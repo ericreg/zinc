@@ -25,6 +25,7 @@ from zinc.ast.statements import (
     Parameter,
     FunctionDeclaration,
     ReturnStatement,
+    SpawnStatement,
 )
 from zinc.ast.expressions import CallExpr
 from zinc.ast.symbols import Scope
@@ -60,10 +61,12 @@ class Program:
         scope: Scope,
         statements: list[Statement],
         monomorphized: list[Statement] | None = None,
+        uses_spawn: bool = False,
     ):
         self.scope = scope
         self.statements = statements
         self.monomorphized = monomorphized or []
+        self.uses_spawn = uses_spawn
 
     def render(self) -> str:
         """Render the program as valid Rust code."""
@@ -77,11 +80,24 @@ class Program:
 
         # Then render regular statements (including main)
         for stmt in self.statements:
-            stmt_code = stmt.render()
-            if stmt_code:  # Skip empty (template functions render as "")
-                rust_code += stmt_code + "\n"
+            # Special handling for main function when spawn is used
+            if isinstance(stmt, FunctionDeclaration) and stmt.name == "main" and self.uses_spawn:
+                rust_code += self._render_async_main(stmt)
+            else:
+                stmt_code = stmt.render()
+                if stmt_code:  # Skip empty (template functions render as "")
+                    rust_code += stmt_code + "\n"
 
         return rust_code
+
+    def _render_async_main(self, main_func: FunctionDeclaration) -> str:
+        """Render main as an async function with tokio runtime."""
+        lines = ["#[tokio::main]", "async fn main() {"]
+        for stmt in main_func.body:
+            for line in stmt.render().split("\n"):
+                lines.append(f"    {line}")
+        lines.append("}")
+        return "\n".join(lines) + "\n"
 
 
 class Visitor(ZincVisitor):
@@ -100,6 +116,10 @@ class Visitor(ZincVisitor):
         self._function_templates: dict[str, FunctionDeclaration] = {}  # Untyped functions
         self._call_sites: list[CallSite] = []  # All function calls with arg types
         self._monomorphized: list[FunctionDeclaration] = []  # Generated typed functions
+
+        # Spawn tracking
+        self._spawned_functions: set[str] = set()  # Mangled names of functions called via spawn
+        self._uses_spawn: bool = False  # True if any spawn statement is used
 
     # ============================================================
     # Expression Visitors - Return Expression AST nodes
@@ -361,6 +381,54 @@ class Visitor(ZincVisitor):
             value = self.visit(ctx.expression())
         return ReturnStatement(value=value)
 
+    def visitSpawnStatement(self, ctx: ZincParser.SpawnStatementContext):
+        """Visit spawn statement for concurrent execution."""
+        self._uses_spawn = True
+
+        # Get the function name being called
+        func_name = ctx.expression().getText()
+
+        # Build the arguments list
+        arguments = []
+        if ctx.argumentList():
+            for arg_expr in ctx.argumentList().expression():
+                arguments.append(self.visit(arg_expr))
+
+        # Get the callee expression (function name)
+        callee = self.visit(ctx.expression())
+
+        # Create the call expression
+        call_expr = CallExpr(callee=callee, arguments=arguments)
+
+        # Extract argument types for monomorphization
+        arg_types: list[BaseType] = []
+        for arg in arguments:
+            if isinstance(arg, Expression) and arg.type_info:
+                arg_types.append(arg.type_info.base)
+            else:
+                arg_types.append(BaseType.UNKNOWN)
+
+        # Record call site for monomorphization (same as regular calls)
+        call_site = CallSite(
+            func_name=func_name,
+            arg_types=tuple(arg_types),
+            call_expr=call_expr,
+        )
+        self._call_sites.append(call_site)
+
+        # Mark that this function is spawned (we'll set the mangled name later)
+        # For now, track by func_name + arg_types
+        type_suffix = "_".join(type_to_rust(t) for t in arg_types)
+        mangled_name = f"{func_name}_{type_suffix}"
+        self._spawned_functions.add(mangled_name)
+
+        # Create spawn statement
+        stmt = SpawnStatement(call_expr=call_expr)
+        self._pending_other.append((self._statement_index, stmt))
+        self._statement_index += 1
+
+        return None
+
     def visitIfStatement(self, ctx: ZincParser.IfStatementContext):
         """Visit if/else statement."""
         branches = []
@@ -483,6 +551,49 @@ class Visitor(ZincVisitor):
                 else_body = self._visit_block(blocks[-1])
 
             return IfStatement(branches=branches, else_body=else_body)
+
+        # Check for spawn statement
+        if stmt_ctx.spawnStatement():
+            spawn_ctx = stmt_ctx.spawnStatement()
+            self._uses_spawn = True
+
+            # Get the function name being called
+            func_name = spawn_ctx.expression().getText()
+
+            # Build the arguments list
+            arguments = []
+            if spawn_ctx.argumentList():
+                for arg_expr in spawn_ctx.argumentList().expression():
+                    arguments.append(self.visit(arg_expr))
+
+            # Get the callee expression (function name)
+            callee = self.visit(spawn_ctx.expression())
+
+            # Create the call expression
+            call_expr = CallExpr(callee=callee, arguments=arguments)
+
+            # Extract argument types for monomorphization
+            arg_types: list[BaseType] = []
+            for arg in arguments:
+                if isinstance(arg, Expression) and arg.type_info:
+                    arg_types.append(arg.type_info.base)
+                else:
+                    arg_types.append(BaseType.UNKNOWN)
+
+            # Record call site for monomorphization
+            call_site = CallSite(
+                func_name=func_name,
+                arg_types=tuple(arg_types),
+                call_expr=call_expr,
+            )
+            self._call_sites.append(call_site)
+
+            # Mark that this function is spawned
+            type_suffix = "_".join(type_to_rust(t) for t in arg_types)
+            mangled_name = f"{func_name}_{type_suffix}"
+            self._spawned_functions.add(mangled_name)
+
+            return SpawnStatement(call_expr=call_expr)
 
         return None
 
@@ -614,6 +725,10 @@ class Visitor(ZincVisitor):
             return_type = self._infer_return_type(mono_func.body, arg_types, template.parameters)
             if return_type != BaseType.UNKNOWN:
                 mono_func.return_type = type_to_rust(return_type)
+
+            # Mark as async if this function is spawned
+            if mangled_name in self._spawned_functions:
+                mono_func.is_async = True
 
             self._monomorphized.append(mono_func)
 

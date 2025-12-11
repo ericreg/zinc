@@ -157,6 +157,7 @@ class FunctionDeclaration(Statement):
     return_type: Optional[str] = None
     mangled_name: Optional[str] = None  # Monomorphized function name
     is_template: bool = False  # True if this is an untyped template (don't render)
+    is_async: bool = False  # True if called via spawn (becomes async fn)
 
     def render(self) -> str:
         # Skip rendering templates (they get monomorphized)
@@ -180,7 +181,10 @@ class FunctionDeclaration(Statement):
         # Add return type if known
         ret_type = f" -> {self.return_type}" if self.return_type else ""
 
-        lines = [f"fn {func_name}({params}){ret_type} {{"]
+        # Handle async functions
+        async_kw = "async " if self.is_async else ""
+
+        lines = [f"{async_kw}fn {func_name}({params}){ret_type} {{"]
         for stmt in self.body:
             for line in stmt.render().split("\n"):
                 lines.append(f"    {line}")
@@ -198,3 +202,14 @@ class ReturnStatement(Statement):
         if self.value:
             return f"return {self.value.render_rust()};"
         return "return;"
+
+
+@dataclass
+class SpawnStatement(Statement):
+    """Spawn statement for concurrent execution."""
+
+    call_expr: Expression  # The function call to spawn
+
+    def render(self) -> str:
+        call = self.call_expr.render_rust()
+        return f"tokio::spawn({call});"

@@ -42,6 +42,7 @@ def compile(file: Path, output: Path | None):
         scope=visitor._scope,
         statements=visitor.statements,
         monomorphized=visitor._monomorphized,
+        uses_spawn=visitor._uses_spawn,
     )
     rust_code = program.render()
 
@@ -75,6 +76,7 @@ def tree(file: Path):
         scope=visitor._scope,
         statements=visitor.statements,
         monomorphized=visitor._monomorphized,
+        uses_spawn=visitor._uses_spawn,
     )
     click.echo(program)
 

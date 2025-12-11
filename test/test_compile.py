@@ -1,5 +1,6 @@
 """Parameterized tests for Zinc compilation."""
 
+import subprocess
 from pathlib import Path
 
 import click
@@ -14,6 +15,7 @@ from zinc.visitor import Program, Visitor
 TEST_DIR = Path(__file__).parent
 ZINC_SOURCE_DIR = TEST_DIR / "zinc_source"
 RUST_SOURCE_DIR = TEST_DIR / "rust_source"
+RUST_SRC_DIR = RUST_SOURCE_DIR / "src"  # Cargo src directory
 OUTPUT_DIR = TEST_DIR / "output"
 
 
@@ -41,15 +43,43 @@ def compile_zinc(source_code: str) -> str:
         scope=visitor._scope,
         statements=visitor.statements,
         monomorphized=visitor._monomorphized,
+        uses_spawn=visitor._uses_spawn,
     )
     return program.render()
+
+
+def run_cargo_bin(test_name: str) -> str:
+    """Run a test binary using cargo and return its output."""
+    result = subprocess.run(
+        ["cargo", "run", "--bin", test_name, "-q", "--release"],
+        capture_output=True,
+        text=True,
+        cwd=RUST_SOURCE_DIR,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Cargo run failed for {test_name}:\n{result.stderr}"
+        )
+    return result.stdout
+
+
+def build_cargo_project() -> None:
+    """Build the entire Cargo project once."""
+    result = subprocess.run(
+        ["cargo", "build", "--release"],
+        capture_output=True,
+        text=True,
+        cwd=RUST_SOURCE_DIR,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"Cargo build failed:\n{result.stderr}")
 
 
 @pytest.mark.parametrize("test_name", get_test_cases())
 def test_compile(test_name: str) -> None:
     """Test that compiling a source file produces the expected output."""
     zinc_file = ZINC_SOURCE_DIR / f"{test_name}.zn"
-    rust_file = RUST_SOURCE_DIR / f"{test_name}.rs"
+    rust_file = RUST_SRC_DIR / f"{test_name}.rs"
 
     assert zinc_file.exists(), f"Source file not found: {zinc_file}"
     assert rust_file.exists(), f"Expected output file not found: {rust_file}"
@@ -64,11 +94,8 @@ def test_compile(test_name: str) -> None:
         f"Observed:\n{observed_rust_code}"
     )
 
-    # compile the rust code 
-    binary_path = compile_rust(rust_file)
-
-    # execute
-    output = execute_binary(binary_path)
+    # Run the binary using cargo
+    output = run_cargo_bin(test_name)
     expected_output_file = OUTPUT_DIR / f"{test_name}.out"
     expected_output = expected_output_file.read_text()
     assert output == expected_output, (
@@ -77,45 +104,6 @@ def test_compile(test_name: str) -> None:
         f"Observed:\n{output}"
     )
 
-    # clean up
-    binary_path.unlink()
-
-
-
-def compile_rust(file_path: Path) -> Path:
-    """Compile the Rust code at the given file path using rustc.
-
-    Returns the path to the compiled binary.
-    """
-    import subprocess
-
-    binary_path = file_path.parent / file_path.stem
-    result = subprocess.run(
-        ["rustc", str(file_path), "-o", str(binary_path)],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"Rust compilation failed for {file_path}:\n{result.stderr}"
-        )
-    return binary_path
-
-
-def execute_binary(binary_path: Path) -> str:
-    """Execute a compiled binary and return its output."""
-    import subprocess
-
-    result = subprocess.run(
-        [str(binary_path)],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"Binary execution failed for {binary_path}:\n{result.stderr}"
-        )
-    return result.stdout
 
 @click.command()
 @click.option(
@@ -132,7 +120,10 @@ def main(update_output: bool) -> None:
     logger = get_logger()
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    RUST_SRC_DIR.mkdir(parents=True, exist_ok=True)
+
     for source_file in ZINC_SOURCE_DIR.glob("*.zn"):
+        test_name = source_file.stem
 
         # read the zinc source file
         zinc_code = source_file.read_text()
@@ -141,26 +132,37 @@ def main(update_output: bool) -> None:
         rust_code = compile_zinc(zinc_code)
 
         if update_output:
-            output_file = RUST_SOURCE_DIR / f"{source_file.stem}.rs"
+            # Write rust code to cargo src directory
+            output_file = RUST_SRC_DIR / f"{test_name}.rs"
             output_file.write_text(rust_code)
 
-            # compile the rust code to the output file
-            rust_binary = compile_rust(output_file)
+            logger.info(event="wrote_rust", ctx={"rust": str(output_file)})
+
+    if update_output:
+        # Build all binaries once
+        logger.info(event="building_cargo")
+        build_cargo_project()
+
+        # Run each binary and capture output
+        for source_file in ZINC_SOURCE_DIR.glob("*.zn"):
+            test_name = source_file.stem
 
             # run the rust binary and capture the output
-            output = execute_binary(rust_binary)
+            output = run_cargo_bin(test_name)
 
             # write the output to the expected output file
-            expected_output_file = OUTPUT_DIR / f"{source_file.stem}.out"
+            expected_output_file = OUTPUT_DIR / f"{test_name}.out"
             expected_output_file.write_text(output)
 
-            # delete the rust binary
-            rust_binary.unlink()
-
-            logger.info(event="updated_test", ctx={ "zinc": str(source_file), "rust": str(output_file), "output": str(expected_output_file) })
-        
+            logger.info(
+                event="updated_test",
+                ctx={
+                    "zinc": str(source_file),
+                    "rust": str(RUST_SRC_DIR / f"{test_name}.rs"),
+                    "output": str(expected_output_file),
+                },
+            )
 
 
 if __name__ == "__main__":
     main()
-
