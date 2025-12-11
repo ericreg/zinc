@@ -10,12 +10,15 @@ antlr -Dlanguage=Python3 -visitor zinc.g4
 # TODO
 
 - [x] dynamic variable assignments
-- [ ] other functions
-- [ ] arithmetic expressions
+- [x] function/ monomorphic overloading
+- [x] arithmetic expressions
+- [x] if / else if / else
+- [ ] channels
 - [ ] make single quotes string literals
 - [ ] async functions
 - [ ] arrays/lists
-- [ ] dictionaries/maps
-- [ ] control flow (if/else, loops)
+- [ ] dictionaries/maps/sets
+- [ ] structs/objects
+- [ ] loops (for, while, loop)
 - [ ] error handling
 - [ ] modules and imports
