@@ -13,6 +13,7 @@ class BaseType(Enum):
     BOOLEAN = auto()
     FLOAT = auto()
     CHANNEL = auto()  # Channel type (sender or receiver)
+    ARRAY = auto()  # Array or Vec type
     UNKNOWN = auto()  # For unresolved types
 
     def __repr__(self):
@@ -78,6 +79,7 @@ def type_to_rust(base_type: BaseType) -> str:
         BaseType.STRING: "String",
         BaseType.BOOLEAN: "bool",
         BaseType.CHANNEL: "chan",  # Placeholder for mangled names
+        BaseType.ARRAY: "Vec",  # Generic, element type handled separately
         BaseType.UNKNOWN: "unknown",
     }
     return mapping.get(base_type, "unknown")
@@ -110,3 +112,18 @@ class ChannelTypeInfo:
         if self.is_bounded:
             return f"Sender{elem}"
         return f"UnboundedSender{elem}"
+
+
+@dataclass
+class ArrayTypeInfo:
+    """Type information for arrays."""
+
+    element_type: BaseType = BaseType.UNKNOWN
+    is_vector: bool = False  # True if .push() was called
+
+    def to_rust_type(self) -> str:
+        """Generate Rust type string."""
+        elem = type_to_rust(self.element_type)
+        if self.is_vector:
+            return f"Vec<{elem}>"
+        return f"[{elem}]"

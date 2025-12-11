@@ -12,7 +12,7 @@ rm -rf .antlr *.py *.tokens *.interp &&  antlr -Dlanguage=Python3 -visitor zinc.
 - [x] function/ monomorphic overloading
 - [x] arithmetic expressions
 - [x] if / else if / else
-- [ ] channels
+- [x] channels
 - [ ] make single quotes string literals
 - [ ] async functions
 - [ ] arrays/lists

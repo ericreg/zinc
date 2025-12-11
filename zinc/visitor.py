@@ -6,7 +6,7 @@ from typing import Union
 from zinc.parser.zincParser import zincParser as ZincParser
 from zinc.parser.zincVisitor import zincVisitor as ZincVisitor
 
-from zinc.ast.types import BaseType, TypeInfo, parse_literal, type_to_rust, ChannelTypeInfo
+from zinc.ast.types import BaseType, TypeInfo, parse_literal, type_to_rust, ChannelTypeInfo, ArrayTypeInfo
 from zinc.ast.expressions import (
     Expression,
     LiteralExpr,
@@ -17,6 +17,9 @@ from zinc.ast.expressions import (
     CallExpr,
     ChannelCreateExpr,
     ChannelReceiveExpr,
+    ArrayLiteralExpr,
+    IndexExpr,
+    MethodCallExpr,
 )
 from zinc.ast.statements import (
     Statement,
@@ -31,6 +34,7 @@ from zinc.ast.statements import (
     SpawnStatement,
     ChannelSendStatement,
     ChannelDeclaration,
+    MethodCallStatement,
 )
 from zinc.ast.symbols import Scope
 
@@ -140,6 +144,11 @@ class Visitor(ZincVisitor):
         self._pending_channel_decls: list[RawChannelDeclaration] = []  # Channel declarations
         self._channel_name_map: dict[str, tuple[str, str]] = {}  # var_name -> (sender_name, receiver_name)
 
+        # Array tracking
+        self._array_vars: dict[str, ArrayTypeInfo] = {}  # var_name -> array info
+        self._array_push_vars: set[str] = set()  # vars that have .push() called
+        self._array_assignments: dict[str, VariableAssignment] = {}  # var_name -> assignment (for mut fixup)
+
     # ============================================================
     # Expression Visitors - Return Expression AST nodes
     # ============================================================
@@ -165,7 +174,11 @@ class Visitor(ZincVisitor):
             type_info = symbol.type_info if symbol else TypeInfo(BaseType.UNKNOWN)
             return IdentifierExpr(name=name, type_info=type_info)
 
-        # Fallback for other cases (array, struct instantiation, etc.)
+        # Array literal
+        if ctx.arrayLiteral():
+            return self.visit(ctx.arrayLiteral())
+
+        # Fallback for other cases (struct instantiation, etc.)
         return LiteralExpr(value=ctx.getText(), type_info=TypeInfo(BaseType.UNKNOWN))
 
     def visitPrimaryExpr(self, ctx: ZincParser.PrimaryExprContext) -> Expression:
@@ -251,6 +264,38 @@ class Visitor(ZincVisitor):
                 channel_expr = IdentifierExpr(name=receiver_name, type_info=channel_expr.type_info)
 
         return ChannelReceiveExpr(channel=channel_expr)
+
+    def visitArrayLiteral(self, ctx: ZincParser.ArrayLiteralContext) -> Expression:
+        """Visit array literal: [expr, expr, ...]."""
+        elements = []
+        for expr_ctx in ctx.expression():
+            elements.append(self.visit(expr_ctx))
+
+        # Infer element type from first element
+        elem_type = BaseType.UNKNOWN
+        if elements and elements[0].type_info:
+            elem_type = elements[0].type_info.base
+
+        array_info = ArrayTypeInfo(element_type=elem_type, is_vector=False)
+
+        return ArrayLiteralExpr(
+            elements=elements,
+            array_info=array_info,
+            type_info=TypeInfo(BaseType.ARRAY),
+        )
+
+    def visitIndexAccessExpr(self, ctx: ZincParser.IndexAccessExprContext) -> Expression:
+        """Visit index access: expr[expr]."""
+        target = self.visit(ctx.expression(0))
+        index = self.visit(ctx.expression(1))
+
+        # Infer type from array element type if known
+        result_type = None
+        if isinstance(target, IdentifierExpr) and target.name in self._array_vars:
+            array_info = self._array_vars[target.name]
+            result_type = TypeInfo(array_info.element_type)
+
+        return IndexExpr(target=target, index=index, type_info=result_type)
 
     def visitRelationalExpr(self, ctx: ZincParser.RelationalExprContext) -> Expression:
         """Handle relational comparisons: expr ('<' | '<=' | '>' | '>=') expr"""
@@ -379,6 +424,12 @@ class Visitor(ZincVisitor):
         if isinstance(expr, ChannelReceiveExpr):
             value_type = BaseType.UNKNOWN  # Will be inferred during finalization
 
+        # Handle array literal - track for push detection
+        if isinstance(expr, ArrayLiteralExpr):
+            array_info = expr.array_info or ArrayTypeInfo()
+            self._array_vars[var_name] = array_info
+            value_type = BaseType.ARRAY
+
         # Define variable in scope for future lookups
         self._scope.define(var_name, TypeInfo(value_type))
 
@@ -396,15 +447,42 @@ class Visitor(ZincVisitor):
 
     def visitFunctionCallExpr(self, ctx: ZincParser.FunctionCallExprContext) -> Expression | None:
         """Visit function call expression."""
-        # Get the callee expression
-        callee = self.visit(ctx.expression())
-        func_name = ctx.expression().getText()
+        # Get the callee expression context (not visited yet)
+        callee_ctx = ctx.expression()
 
         # Get the arguments as Expression AST nodes
         arguments = []
         if ctx.argumentList():
             for arg_expr in ctx.argumentList().expression():
                 arguments.append(self.visit(arg_expr))
+
+        # Check if this is a method call (expr.method(...))
+        if isinstance(callee_ctx, ZincParser.MemberAccessExprContext):
+            target = self.visit(callee_ctx.expression())
+            method_name = callee_ctx.IDENTIFIER().getText()
+
+            # Track .push() calls for array promotion
+            if method_name == "push" and isinstance(target, IdentifierExpr):
+                var_name = target.name
+                self._array_push_vars.add(var_name)
+
+                # Infer element type from first push argument
+                if var_name in self._array_vars:
+                    array_info = self._array_vars[var_name]
+                    array_info.is_vector = True
+                    if array_info.element_type == BaseType.UNKNOWN and arguments:
+                        if arguments[0].type_info:
+                            array_info.element_type = arguments[0].type_info.base
+
+            return MethodCallExpr(
+                target=target,
+                method_name=method_name,
+                arguments=arguments,
+            )
+
+        # Now visit the callee for regular function calls
+        callee = self.visit(callee_ctx)
+        func_name = callee_ctx.getText()
 
         # Handle chan() builtin for channel creation
         if func_name == "chan":
@@ -560,6 +638,15 @@ class Visitor(ZincVisitor):
             if stmt:
                 statements.append(stmt)
 
+        # Fix up array mutability: arrays with .push() calls need mut
+        for var_name in self._array_push_vars:
+            if var_name in self._array_assignments:
+                assignment = self._array_assignments[var_name]
+                assignment.needs_mut = True
+                # Also update the ArrayLiteralExpr's array_info
+                if isinstance(assignment.value, ArrayLiteralExpr):
+                    assignment.value.array_info = self._array_vars.get(var_name)
+
         return statements
 
     def _visit_statement(self, stmt_ctx) -> Statement | None:
@@ -596,6 +683,22 @@ class Visitor(ZincVisitor):
                     capacity=expr.capacity,
                     channel_info=channel_info,
                 )
+
+            # Handle array literal assignment
+            if isinstance(expr, ArrayLiteralExpr):
+                array_info = expr.array_info or ArrayTypeInfo()
+                self._array_vars[var_name] = array_info
+                self._scope.define(var_name, TypeInfo(BaseType.ARRAY))
+
+                stmt = VariableAssignment(
+                    variable_name=var_name,
+                    value=expr,
+                    kind=AssignmentKind.DECLARATION,
+                    needs_mut=False,  # Will be updated if .push() is called
+                )
+                # Track for later mut fixup when .push() is detected
+                self._array_assignments[var_name] = stmt
+                return stmt
 
             if isinstance(expr, Expression):
                 value = expr
@@ -649,6 +752,14 @@ class Visitor(ZincVisitor):
                 if isinstance(expr, CallExpr):
                     from zinc.ast.statements import ExpressionStatement
                     return ExpressionStatement(expression=expr)
+
+                # Handle method calls (like b.push(10))
+                if isinstance(expr, MethodCallExpr):
+                    return MethodCallStatement(
+                        target=expr.target,
+                        method_name=expr.method_name,
+                        arguments=expr.arguments,
+                    )
 
             # Generic expression - just get text for now
             return None
@@ -797,11 +908,21 @@ class Visitor(ZincVisitor):
                     _, decl_index = var_state[raw.var_name]
                     needs_mut.add(decl_index)
 
+        # Mark arrays with .push() calls as needing mut
+        for var_name in self._array_push_vars:
+            if var_name in var_state:
+                _, decl_index = var_state[var_name]
+                needs_mut.add(decl_index)
+
         # Build the final statements list
         # Create a dict of index -> Statement for assignments
         assignment_statements: dict[int, Statement] = {}
 
         for raw, kind in assignment_info:
+            # Update ArrayLiteralExpr with current array info (may have been modified by .push())
+            if isinstance(raw.value, ArrayLiteralExpr) and raw.var_name in self._array_vars:
+                raw.value.array_info = self._array_vars[raw.var_name]
+
             stmt = VariableAssignment(
                 variable_name=raw.var_name,
                 value=raw.value,

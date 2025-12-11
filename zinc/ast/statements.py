@@ -48,6 +48,15 @@ class VariableAssignment(Statement):
         else:
             # DECLARATION or SHADOW - both need 'let', with optional 'mut'
             mut = "mut " if self.needs_mut else ""
+
+            # Special case for empty Vec needing type annotation
+            from .expressions import ArrayLiteralExpr
+            if isinstance(self.value, ArrayLiteralExpr):
+                if self.value.array_info and self.value.array_info.is_vector:
+                    if not self.value.elements:
+                        elem = type_to_rust(self.value.array_info.element_type)
+                        return f"let {mut}{self.variable_name}: Vec<{elem}> = Vec::new();"
+
             return f"let {mut}{self.variable_name} = {value_code};"
 
 
@@ -74,20 +83,22 @@ class PrintStatement(Statement):
         elif format_string.startswith("'") and format_string.endswith("'"):
             format_string = format_string[1:-1]
 
-        # Extract variable names from {var} patterns
-        variables = re.findall(r"\{(\w+)\}", format_string)
+        # Extract expressions from {expr} patterns
+        # Match both simple vars {var} and indexed access {var[index]}
+        expr_pattern = r"\{([^}]+)\}"
+        expressions = re.findall(expr_pattern, format_string)
 
-        # If there are variables, render as println! with format args
-        if variables:
-            # Replace {var} with {} for Rust's println! macro
-            rust_format_string = re.sub(r"\{\w+\}", "{}", format_string)
+        # If there are expressions, render as println! with format args
+        if expressions:
+            # Replace {expr} with {} for Rust's println! macro
+            rust_format_string = re.sub(expr_pattern, "{}", format_string)
             args_str = f'"{rust_format_string}"'
-            # Add the variables as additional arguments
-            for var in variables:
-                args_str += f", {var}"
+            # Add the expressions as additional arguments
+            for expr in expressions:
+                args_str += f", {expr}"
             return f"println!({args_str});"
         else:
-            # No variables, just a plain string
+            # No expressions, just a plain string
             return f'println!("{format_string}");'
 
 
@@ -254,3 +265,16 @@ class ChannelDeclaration(Statement):
             cap = self.capacity.render_rust() if self.capacity else "32"
             return f"let ({self.sender_name}, mut {self.receiver_name}) = tokio::sync::mpsc::channel::<{elem}>({cap});"
         return f"let ({self.sender_name}, mut {self.receiver_name}) = tokio::sync::mpsc::unbounded_channel::<{elem}>();"
+
+
+@dataclass
+class MethodCallStatement(Statement):
+    """Standalone method call: b.push(10)."""
+
+    target: Expression
+    method_name: str
+    arguments: list[Expression]
+
+    def render(self) -> str:
+        args = ", ".join(arg.render_rust() for arg in self.arguments)
+        return f"{self.target.render_rust()}.{self.method_name}({args});"

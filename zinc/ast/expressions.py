@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Optional
 
-from .types import BaseType, TypeInfo, ChannelTypeInfo, type_to_rust
+from .types import BaseType, TypeInfo, ChannelTypeInfo, ArrayTypeInfo, type_to_rust
 
 
 class Expression(ABC):
@@ -127,3 +127,49 @@ class ChannelReceiveExpr(Expression):
         chan = self.channel.render_rust()
         # Use unwrap() to panic on closed channel
         return f"{chan}.recv().await.unwrap()"
+
+
+@dataclass
+class ArrayLiteralExpr(Expression):
+    """Array literal: [1, 2, 3] or []."""
+
+    elements: list[Expression]
+    array_info: Optional[ArrayTypeInfo] = None
+    type_info: Optional[TypeInfo] = None
+
+    def render_rust(self) -> str:
+        if self.array_info and self.array_info.is_vector:
+            if not self.elements:
+                # Empty Vec - type annotation added at declaration level
+                return "Vec::new()"
+            elems = ", ".join(e.render_rust() for e in self.elements)
+            return f"vec![{elems}]"
+        else:
+            elems = ", ".join(e.render_rust() for e in self.elements)
+            return f"[{elems}]"
+
+
+@dataclass
+class IndexExpr(Expression):
+    """Index access: a[0]."""
+
+    target: Expression
+    index: Expression
+    type_info: Optional[TypeInfo] = None
+
+    def render_rust(self) -> str:
+        return f"{self.target.render_rust()}[{self.index.render_rust()}]"
+
+
+@dataclass
+class MethodCallExpr(Expression):
+    """Method call: obj.method(args)."""
+
+    target: Expression
+    method_name: str
+    arguments: list[Expression]
+    type_info: Optional[TypeInfo] = None
+
+    def render_rust(self) -> str:
+        args = ", ".join(arg.render_rust() for arg in self.arguments)
+        return f"{self.target.render_rust()}.{self.method_name}({args})"

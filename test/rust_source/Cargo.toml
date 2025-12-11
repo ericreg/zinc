@@ -11,6 +11,10 @@ name = "arithmetic"
 path = "src/arithmetic.rs"
 
 [[bin]]
+name = "arrays"
+path = "src/arrays.rs"
+
+[[bin]]
 name = "basic_dynamic_type"
 path = "src/basic_dynamic_type.rs"
 

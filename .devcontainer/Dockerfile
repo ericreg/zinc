@@ -36,3 +36,8 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 # Shell setup
 RUN chsh -s /bin/zsh
 COPY ["./zshrc", "/root/.zshrc"]
+
+COPY ["./regen", "/regen"]
+RUN chmod +x /regen
+
+WORKDIR /workspace/
