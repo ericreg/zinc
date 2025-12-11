@@ -2,7 +2,6 @@ fn main() {
     let mut x = 1;
     println!("x: {}", x);
     x = 2;
-
     println!("x: {}", x);
     let mut x = 2.17;
     println!("x: {}", x);
