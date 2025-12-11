@@ -77,3 +77,19 @@ class ParenExpr(Expression):
 
     def render_rust(self) -> str:
         return f"({self.inner.render_rust()})"
+
+
+@dataclass
+class CallExpr(Expression):
+    """Function call expression."""
+
+    callee: Expression  # The function being called
+    arguments: list[Expression]
+    type_info: Optional[TypeInfo] = None
+    mangled_name: Optional[str] = None  # Monomorphized function name
+
+    def render_rust(self) -> str:
+        # Use mangled name if available, otherwise use callee
+        func_name = self.mangled_name if self.mangled_name else self.callee.render_rust()
+        args = ", ".join(arg.render_rust() for arg in self.arguments)
+        return f"{func_name}({args})"

@@ -35,8 +35,13 @@ def compile_zinc(source_code: str) -> str:
     visitor = Visitor()
     visitor.visit(tree)
     visitor.finalize()  # Pass 2: process assignments
+    visitor.monomorphize()  # Pass 3: generate specialized functions
 
-    program = Program(scope=visitor._scope, statements=visitor.statements)
+    program = Program(
+        scope=visitor._scope,
+        statements=visitor.statements,
+        monomorphized=visitor._monomorphized,
+    )
     return program.render()
 
 

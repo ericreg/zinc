@@ -136,3 +136,65 @@ class IfStatement(Statement):
 
         lines.append("}")
         return "\n".join(lines)
+
+
+@dataclass
+class Parameter:
+    """Function parameter."""
+
+    name: str
+    type_annotation: Optional[str] = None
+    resolved_type: Optional[str] = None  # Resolved type from monomorphization
+
+
+@dataclass
+class FunctionDeclaration(Statement):
+    """Function declaration."""
+
+    name: str
+    parameters: list[Parameter]
+    body: list["Statement"]
+    return_type: Optional[str] = None
+    mangled_name: Optional[str] = None  # Monomorphized function name
+    is_template: bool = False  # True if this is an untyped template (don't render)
+
+    def render(self) -> str:
+        # Skip rendering templates (they get monomorphized)
+        if self.is_template:
+            return ""
+
+        # Use mangled name if available
+        func_name = self.mangled_name if self.mangled_name else self.name
+
+        # Build parameter list with resolved types
+        param_strs = []
+        for p in self.parameters:
+            if p.resolved_type:
+                param_strs.append(f"{p.name}: {p.resolved_type}")
+            elif p.type_annotation:
+                param_strs.append(f"{p.name}: {p.type_annotation}")
+            else:
+                param_strs.append(p.name)
+        params = ", ".join(param_strs)
+
+        # Add return type if known
+        ret_type = f" -> {self.return_type}" if self.return_type else ""
+
+        lines = [f"fn {func_name}({params}){ret_type} {{"]
+        for stmt in self.body:
+            for line in stmt.render().split("\n"):
+                lines.append(f"    {line}")
+        lines.append("}")
+        return "\n".join(lines)
+
+
+@dataclass
+class ReturnStatement(Statement):
+    """Return statement."""
+
+    value: Optional[Expression] = None
+
+    def render(self) -> str:
+        if self.value:
+            return f"return {self.value.render_rust()};"
+        return "return;"

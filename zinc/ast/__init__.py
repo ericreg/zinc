@@ -8,6 +8,7 @@ from .expressions import (
     BinaryExpr,
     UnaryExpr,
     ParenExpr,
+    CallExpr,
 )
 from .statements import (
     Statement,
@@ -16,6 +17,9 @@ from .statements import (
     PrintStatement,
     IfBranch,
     IfStatement,
+    Parameter,
+    FunctionDeclaration,
+    ReturnStatement,
 )
 from .symbols import Symbol, Scope
 
@@ -31,6 +35,7 @@ __all__ = [
     "BinaryExpr",
     "UnaryExpr",
     "ParenExpr",
+    "CallExpr",
     # Statements
     "Statement",
     "AssignmentKind",
@@ -38,6 +43,9 @@ __all__ = [
     "PrintStatement",
     "IfBranch",
     "IfStatement",
+    "Parameter",
+    "FunctionDeclaration",
+    "ReturnStatement",
     # Symbols
     "Symbol",
     "Scope",

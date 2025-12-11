@@ -66,3 +66,15 @@ def parse_literal(literal_text: str) -> BaseType:
         return BaseType.BOOLEAN
     else:
         raise ValueError(f"Unknown literal type: {literal_text}")
+
+
+def type_to_rust(base_type: BaseType) -> str:
+    """Convert a BaseType to its Rust type name."""
+    mapping = {
+        BaseType.INTEGER: "i64",
+        BaseType.FLOAT: "f64",
+        BaseType.STRING: "String",
+        BaseType.BOOLEAN: "bool",
+        BaseType.UNKNOWN: "unknown",
+    }
+    return mapping.get(base_type, "unknown")

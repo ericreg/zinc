@@ -6,7 +6,7 @@ from typing import Union
 from zinc.parser.zincParser import zincParser as ZincParser
 from zinc.parser.zincVisitor import zincVisitor as ZincVisitor
 
-from zinc.ast.types import BaseType, TypeInfo, parse_literal
+from zinc.ast.types import BaseType, TypeInfo, parse_literal, type_to_rust
 from zinc.ast.expressions import (
     Expression,
     LiteralExpr,
@@ -22,7 +22,11 @@ from zinc.ast.statements import (
     PrintStatement,
     IfBranch,
     IfStatement,
+    Parameter,
+    FunctionDeclaration,
+    ReturnStatement,
 )
+from zinc.ast.expressions import CallExpr
 from zinc.ast.symbols import Scope
 
 
@@ -39,25 +43,44 @@ class RawAssignment:
     stmt_index: int  # Position in statement list (for tracking order)
 
 
+@dataclass
+class CallSite:
+    """Records a function call with resolved argument types."""
+
+    func_name: str
+    arg_types: tuple[BaseType, ...]  # Tuple for hashability
+    call_expr: "CallExpr"  # Reference to update mangled_name later
+
+
 class Program:
     """Represents a compiled Zinc program."""
 
-    def __init__(self, scope: Scope, statements: list[Statement]):
+    def __init__(
+        self,
+        scope: Scope,
+        statements: list[Statement],
+        monomorphized: list[Statement] | None = None,
+    ):
         self.scope = scope
         self.statements = statements
+        self.monomorphized = monomorphized or []
 
     def render(self) -> str:
         """Render the program as valid Rust code."""
-        rust_code = "fn main() {\n"
+        rust_code = ""
 
-        # Render each statement with proper indentation
+        # First render monomorphized functions (they need to come before main)
+        for func in self.monomorphized:
+            func_code = func.render()
+            if func_code:  # Skip empty (template functions)
+                rust_code += func_code + "\n"
+
+        # Then render regular statements (including main)
         for stmt in self.statements:
             stmt_code = stmt.render()
-            # Indent each line of the statement
-            for line in stmt_code.split("\n"):
-                rust_code += INDENT + line + "\n"
+            if stmt_code:  # Skip empty (template functions render as "")
+                rust_code += stmt_code + "\n"
 
-        rust_code += "}\n"
         return rust_code
 
 
@@ -72,6 +95,11 @@ class Visitor(ZincVisitor):
         # Track non-assignment statements with their indices
         self._pending_other: list[tuple[int, Statement]] = []
         self._statement_index = 0
+
+        # Monomorphization tracking
+        self._function_templates: dict[str, FunctionDeclaration] = {}  # Untyped functions
+        self._call_sites: list[CallSite] = []  # All function calls with arg types
+        self._monomorphized: list[FunctionDeclaration] = []  # Generated typed functions
 
     # ============================================================
     # Expression Visitors - Return Expression AST nodes
@@ -209,12 +237,45 @@ class Visitor(ZincVisitor):
 
     def visitFunctionDeclaration(self, ctx: ZincParser.FunctionDeclarationContext):
         """Visit function declaration, creating a new scope."""
-        # Add a new scope for the function
+        name = ctx.IDENTIFIER().getText()
+
+        # Parse parameters
+        parameters = []
+        if ctx.parameterList():
+            for param_ctx in ctx.parameterList().parameter():
+                param_name = param_ctx.IDENTIFIER().getText()
+                type_ann = None
+                if param_ctx.type_():
+                    type_ann = param_ctx.type_().getText()
+                parameters.append(Parameter(name=param_name, type_annotation=type_ann))
+
+        # Enter new scope for function body
         self._scope = self._scope.enter_scope()
 
-        result = super().visitFunctionDeclaration(ctx)
+        # Add parameters to scope
+        for param in parameters:
+            self._scope.define(param.name, TypeInfo(BaseType.UNKNOWN))
+
+        # Visit function body
+        body = self._visit_block(ctx.block())
+
         self._scope = self._scope.exit_scope()
-        return result
+
+        # Create function declaration statement
+        stmt = FunctionDeclaration(name=name, parameters=parameters, body=body)
+
+        # Check if this is a function that needs monomorphization (has untyped params)
+        # "main" is special - never monomorphize it
+        has_untyped_params = any(p.type_annotation is None for p in parameters)
+        if name != "main" and has_untyped_params:
+            # Store as template for later monomorphization
+            stmt.is_template = True
+            self._function_templates[name] = stmt
+
+        self._pending_other.append((self._statement_index, stmt))
+        self._statement_index += 1
+
+        return None
 
     def visitVariableAssignment(self, ctx):
         """Visit variable assignment, building Expression AST."""
@@ -250,24 +311,55 @@ class Visitor(ZincVisitor):
 
         return None  # Don't continue visiting children
 
-    def visitFunctionCallExpr(self, ctx: ZincParser.FunctionCallExprContext):
+    def visitFunctionCallExpr(self, ctx: ZincParser.FunctionCallExprContext) -> Expression | None:
         """Visit function call expression."""
-        # Get the function name
+        # Get the callee expression
+        callee = self.visit(ctx.expression())
         func_name = ctx.expression().getText()
 
-        # Get the arguments
+        # Get the arguments as Expression AST nodes
         arguments = []
         if ctx.argumentList():
             for arg_expr in ctx.argumentList().expression():
-                arguments.append(arg_expr.getText())
+                arguments.append(self.visit(arg_expr))
 
-        # If this is a print() call, create a PrintStatement
+        # If this is a print() call at statement level, create a PrintStatement
+        # We check this by seeing if we're being called from top-level statement processing
         if func_name == "print":
-            stmt = PrintStatement(arguments=arguments)
+            # Convert arguments to raw strings for PrintStatement
+            raw_args = [arg_expr.getText() for arg_expr in ctx.argumentList().expression()] if ctx.argumentList() else []
+            stmt = PrintStatement(arguments=raw_args)
             self._pending_other.append((self._statement_index, stmt))
             self._statement_index += 1
+            return None
 
-        return self.visitChildren(ctx)
+        # For other function calls, create CallExpr and track for monomorphization
+        call_expr = CallExpr(callee=callee, arguments=arguments)
+
+        # Extract argument types for monomorphization
+        arg_types: list[BaseType] = []
+        for arg in arguments:
+            if isinstance(arg, Expression) and arg.type_info:
+                arg_types.append(arg.type_info.base)
+            else:
+                arg_types.append(BaseType.UNKNOWN)
+
+        # Record call site if this is a user-defined function (not a builtin)
+        # We'll resolve this during monomorphization
+        self._call_sites.append(CallSite(
+            func_name=func_name,
+            arg_types=tuple(arg_types),
+            call_expr=call_expr,
+        ))
+
+        return call_expr
+
+    def visitReturnStatement(self, ctx: ZincParser.ReturnStatementContext):
+        """Visit return statement."""
+        value = None
+        if ctx.expression():
+            value = self.visit(ctx.expression())
+        return ReturnStatement(value=value)
 
     def visitIfStatement(self, ctx: ZincParser.IfStatementContext):
         """Visit if/else statement."""
@@ -317,9 +409,12 @@ class Visitor(ZincVisitor):
             var_name = var_ctx.assignmentTarget().getText()
             expr = self.visit(var_ctx.expression())
 
-            if isinstance(expr, Expression) and expr.type_info:
-                value_type = expr.type_info.base
+            if isinstance(expr, Expression):
                 value = expr
+                if expr.type_info:
+                    value_type = expr.type_info.base
+                else:
+                    value_type = BaseType.UNKNOWN
             else:
                 value = var_ctx.expression().getText()
                 try:
@@ -336,6 +431,14 @@ class Visitor(ZincVisitor):
                 needs_mut=False,
             )
 
+        # Check for return statement
+        if stmt_ctx.returnStatement():
+            ret_ctx = stmt_ctx.returnStatement()
+            value = None
+            if ret_ctx.expression():
+                value = self.visit(ret_ctx.expression())
+            return ReturnStatement(value=value)
+
         # Check for expression statement (includes function calls like print)
         if stmt_ctx.expressionStatement():
             expr_stmt_ctx = stmt_ctx.expressionStatement()
@@ -343,17 +446,21 @@ class Visitor(ZincVisitor):
 
             # Check if it's a function call
             if hasattr(expr_ctx, "getRuleIndex"):
-                # Try to detect print() calls
                 expr_text = expr_ctx.getText()
+                # Handle print() calls specially
                 if expr_text.startswith("print("):
-                    # Extract arguments
                     arguments = []
-                    # Navigate to the function call context
                     func_call_ctx = expr_ctx
                     if hasattr(func_call_ctx, "argumentList") and func_call_ctx.argumentList():
                         for arg_expr in func_call_ctx.argumentList().expression():
                             arguments.append(arg_expr.getText())
                     return PrintStatement(arguments=arguments)
+
+                # Handle other function calls
+                expr = self.visit(expr_ctx)
+                if isinstance(expr, CallExpr):
+                    from zinc.ast.statements import ExpressionStatement
+                    return ExpressionStatement(expression=expr)
 
             # Generic expression - just get text for now
             return None
@@ -455,3 +562,106 @@ class Visitor(ZincVisitor):
 
         # Sort by index and populate self.statements
         self.statements = [all_statements[i] for i in sorted(all_statements.keys())]
+
+    # ============================================================
+    # Pass 3: Monomorphization
+    # ============================================================
+
+    def monomorphize(self) -> None:
+        """
+        Generate specialized function variants based on call site types.
+
+        For each unique (func_name, arg_types) combination:
+        1. Create a mangled function name
+        2. Clone the function template with resolved parameter types
+        3. Infer return type from the function body
+        4. Update call expressions to use the mangled name
+        """
+        import copy
+
+        # Group call sites by (func_name, arg_types) to find unique signatures
+        signatures: dict[tuple[str, tuple[BaseType, ...]], list[CallSite]] = {}
+        for call_site in self._call_sites:
+            key = (call_site.func_name, call_site.arg_types)
+            if key not in signatures:
+                signatures[key] = []
+            signatures[key].append(call_site)
+
+        # Generate monomorphized functions for each unique signature
+        for (func_name, arg_types), call_sites in signatures.items():
+            # Skip if not a template function (might be a builtin or already typed)
+            if func_name not in self._function_templates:
+                continue
+
+            template = self._function_templates[func_name]
+
+            # Generate mangled name: add_i64_i64
+            type_suffix = "_".join(type_to_rust(t) for t in arg_types)
+            mangled_name = f"{func_name}_{type_suffix}"
+
+            # Clone the template and set resolved types
+            mono_func = copy.deepcopy(template)
+            mono_func.name = func_name  # Keep original name for reference
+            mono_func.mangled_name = mangled_name
+            mono_func.is_template = False
+
+            # Set resolved types on parameters
+            for i, param in enumerate(mono_func.parameters):
+                if i < len(arg_types):
+                    param.resolved_type = type_to_rust(arg_types[i])
+
+            # Infer return type from the function body
+            return_type = self._infer_return_type(mono_func.body, arg_types, template.parameters)
+            if return_type != BaseType.UNKNOWN:
+                mono_func.return_type = type_to_rust(return_type)
+
+            self._monomorphized.append(mono_func)
+
+            # Update all call expressions for this signature to use mangled name
+            for call_site in call_sites:
+                call_site.call_expr.mangled_name = mangled_name
+                # Set the return type on the call expression
+                if return_type != BaseType.UNKNOWN:
+                    call_site.call_expr.type_info = TypeInfo(return_type)
+
+    def _infer_return_type(
+        self,
+        body: list[Statement],
+        arg_types: tuple[BaseType, ...],
+        params: list[Parameter],
+    ) -> BaseType:
+        """Infer the return type of a function from its body."""
+        # Build a mapping of parameter name -> type
+        param_types: dict[str, BaseType] = {}
+        for i, param in enumerate(params):
+            if i < len(arg_types):
+                param_types[param.name] = arg_types[i]
+
+        # Look for return statements and infer their types
+        for stmt in body:
+            if isinstance(stmt, ReturnStatement) and stmt.value:
+                return self._infer_expr_type(stmt.value, param_types)
+
+        return BaseType.UNKNOWN
+
+    def _infer_expr_type(self, expr: Expression, param_types: dict[str, BaseType]) -> BaseType:
+        """Infer the type of an expression given parameter type mappings."""
+        if expr.type_info and expr.type_info.base != BaseType.UNKNOWN:
+            return expr.type_info.base
+
+        if isinstance(expr, IdentifierExpr):
+            # Look up in parameter types
+            if expr.name in param_types:
+                return param_types[expr.name]
+
+        if isinstance(expr, BinaryExpr):
+            left_type = self._infer_expr_type(expr.left, param_types)
+            right_type = self._infer_expr_type(expr.right, param_types)
+            # Use type promotion rules
+            result = TypeInfo.promote(TypeInfo(left_type), TypeInfo(right_type))
+            return result.base
+
+        if isinstance(expr, ParenExpr):
+            return self._infer_expr_type(expr.inner, param_types)
+
+        return BaseType.UNKNOWN
