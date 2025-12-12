@@ -1,7 +1,7 @@
 """Visitor for the Zinc compiler - transforms parse tree to AST and generates code."""
 
 from dataclasses import dataclass
-from typing import Union
+from typing import Sequence, Union
 
 from zinc.parser.zincParser import zincParser as ZincParser
 from zinc.parser.zincVisitor import zincVisitor as ZincVisitor
@@ -20,6 +20,7 @@ from zinc.ast.expressions import (
     ArrayLiteralExpr,
     IndexExpr,
     MethodCallExpr,
+    RangeExpr,
 )
 from zinc.ast.statements import (
     Statement,
@@ -35,6 +36,7 @@ from zinc.ast.statements import (
     ChannelSendStatement,
     ChannelDeclaration,
     MethodCallStatement,
+    ForStatement,
 )
 from zinc.ast.symbols import Scope
 
@@ -76,8 +78,8 @@ class Program:
     def __init__(
         self,
         scope: Scope,
-        statements: list[Statement],
-        monomorphized: list[Statement] | None = None,
+        statements: Sequence[Statement],
+        monomorphized: Sequence[Statement] | None = None,
         uses_spawn: bool = False,
     ):
         self.scope = scope
@@ -296,6 +298,22 @@ class Visitor(ZincVisitor):
             result_type = TypeInfo(array_info.element_type)
 
         return IndexExpr(target=target, index=index, type_info=result_type)
+
+    def visitRangeExpr(self, ctx: ZincParser.RangeExprContext) -> Expression:
+        """Visit range expression: start..end or start..=end."""
+        start = self.visit(ctx.expression(0))
+        end = self.visit(ctx.expression(1))
+
+        # Check if inclusive (..=) or exclusive (..)
+        # The grammar has: expression ('..' | '..=') expression
+        inclusive = ctx.DOTDOTEQ() is not None
+
+        return RangeExpr(
+            start=start,
+            end=end,
+            inclusive=inclusive,
+            type_info=TypeInfo(BaseType.INTEGER),
+        )
 
     def visitRelationalExpr(self, ctx: ZincParser.RelationalExprContext) -> Expression:
         """Handle relational comparisons: expr ('<' | '<=' | '>' | '>=') expr"""
@@ -628,6 +646,40 @@ class Visitor(ZincVisitor):
 
         return None  # Don't continue visiting children
 
+    def visitForStatement(self, ctx: ZincParser.ForStatementContext):
+        """Visit for-in loop statement."""
+        loop_var = ctx.IDENTIFIER().getText()
+        iterable = self.visit(ctx.expression())
+
+        # Enter scope for loop body (loop variable is local)
+        self._scope = self._scope.enter_scope()
+
+        # Infer loop variable type from iterable
+        loop_var_type = TypeInfo(BaseType.UNKNOWN)
+        if isinstance(iterable, IdentifierExpr) and iterable.name in self._array_vars:
+            array_info = self._array_vars[iterable.name]
+            loop_var_type = TypeInfo(array_info.element_type)
+        elif isinstance(iterable, RangeExpr):
+            loop_var_type = TypeInfo(BaseType.INTEGER)
+
+        # Define loop variable in scope
+        self._scope.define(loop_var, loop_var_type)
+
+        # Visit loop body
+        body_stmts = self._visit_block(ctx.block())
+
+        self._scope = self._scope.exit_scope()
+
+        stmt = ForStatement(
+            loop_variable=loop_var,
+            iterable=iterable,
+            body=body_stmts,
+        )
+        self._pending_other.append((self._statement_index, stmt))
+        self._statement_index += 1
+
+        return None  # Don't continue visiting children
+
     def _visit_block(self, block_ctx) -> list[Statement]:
         """Visit a block and return list of statements."""
         statements = []
@@ -782,6 +834,33 @@ class Visitor(ZincVisitor):
                 else_body = self._visit_block(blocks[-1])
 
             return IfStatement(branches=branches, else_body=else_body)
+
+        # Check for for statement
+        if stmt_ctx.forStatement():
+            for_ctx = stmt_ctx.forStatement()
+            loop_var = for_ctx.IDENTIFIER().getText()
+            iterable = self.visit(for_ctx.expression())
+
+            # Enter scope for loop variable
+            self._scope = self._scope.enter_scope()
+
+            # Infer loop variable type from iterable
+            loop_var_type = TypeInfo(BaseType.UNKNOWN)
+            if isinstance(iterable, IdentifierExpr) and iterable.name in self._array_vars:
+                array_info = self._array_vars[iterable.name]
+                loop_var_type = TypeInfo(array_info.element_type)
+            elif isinstance(iterable, RangeExpr):
+                loop_var_type = TypeInfo(BaseType.INTEGER)
+
+            self._scope.define(loop_var, loop_var_type)
+            body_stmts = self._visit_block(for_ctx.block())
+            self._scope = self._scope.exit_scope()
+
+            return ForStatement(
+                loop_variable=loop_var,
+                iterable=iterable,
+                body=body_stmts,
+            )
 
         # Check for spawn statement
         if stmt_ctx.spawnStatement():

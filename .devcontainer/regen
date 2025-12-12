@@ -1,0 +1,5 @@
+#!/bin/zsh
+
+cd /workspace/
+rm -rf .antlr *.py *.tokens *.interp
+antlr -Dlanguage=Python3 -visitor zinc.g4 

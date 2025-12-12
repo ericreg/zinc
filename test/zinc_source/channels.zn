@@ -2,10 +2,6 @@ fn tx(x, send_x) {
     send_x <- x
 }
 
-fn rx(receive_x) {
-    x = <- receive_x
-}
-
 fn main() {
 
     // create channel

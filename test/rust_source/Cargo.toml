@@ -27,6 +27,10 @@ name = "channels"
 path = "src/channels.rs"
 
 [[bin]]
+name = "for_loop"
+path = "src/for_loop.rs"
+
+[[bin]]
 name = "functions"
 path = "src/functions.rs"
 

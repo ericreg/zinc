@@ -278,3 +278,30 @@ class MethodCallStatement(Statement):
     def render(self) -> str:
         args = ", ".join(arg.render_rust() for arg in self.arguments)
         return f"{self.target.render_rust()}.{self.method_name}({args});"
+
+
+@dataclass
+class ForStatement(Statement):
+    """For-in loop statement."""
+
+    loop_variable: str
+    iterable: Expression
+    body: list["Statement"]
+
+    def render(self) -> str:
+        from .expressions import RangeExpr
+
+        if isinstance(self.iterable, RangeExpr):
+            # Ranges are consumed, no & needed
+            iter_code = self.iterable.render_rust()
+        else:
+            # Collections: iterate by reference to avoid consuming
+            iter_code = f"&{self.iterable.render_rust()}"
+
+        lines = [f"for {self.loop_variable} in {iter_code} {{"]
+        for stmt in self.body:
+            stmt_lines = stmt.render().split("\n")
+            for stmt_line in stmt_lines:
+                lines.append(f"    {stmt_line}")
+        lines.append("}")
+        return "\n".join(lines)

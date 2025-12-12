@@ -173,3 +173,17 @@ class MethodCallExpr(Expression):
     def render_rust(self) -> str:
         args = ", ".join(arg.render_rust() for arg in self.arguments)
         return f"{self.target.render_rust()}.{self.method_name}({args})"
+
+
+@dataclass
+class RangeExpr(Expression):
+    """Range expression: 0..10 or 0..=10."""
+
+    start: Expression
+    end: Expression
+    inclusive: bool = False  # True for ..=
+    type_info: Optional[TypeInfo] = None
+
+    def render_rust(self) -> str:
+        op = "..=" if self.inclusive else ".."
+        return f"{self.start.render_rust()}{op}{self.end.render_rust()}"

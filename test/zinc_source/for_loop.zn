@@ -1,0 +1,20 @@
+fn main() {
+
+    // create an array
+    a = [1, 2, 3]
+
+    for x in a {
+        print("{x}")
+    }
+
+    // gets promoted to a vector if we use push
+    b = []
+    b.push(10)
+    b.push(20)
+    b.push(30)
+
+    // print elements
+    for y in b {
+        print("{y}")
+    }
+}
