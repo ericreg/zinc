@@ -2,8 +2,7 @@
 
 Regenerate antlr4 Parser
 ```sh
-cd parser/
-rm -rf .antlr *.py *.tokens *.interp &&  antlr -Dlanguage=Python3 -visitor zinc.g4 
+docker run -it -v /Users/eric/code/zinc/zinc/parser:/workspace zinc-dev /regen
 ```
 
 # TODO
@@ -13,11 +12,13 @@ rm -rf .antlr *.py *.tokens *.interp &&  antlr -Dlanguage=Python3 -visitor zinc.
 - [x] arithmetic expressions
 - [x] if / else if / else
 - [x] channels
-- [ ] make single quotes string literals
-- [ ] async functions
-- [ ] arrays/lists
-- [ ] dictionaries/maps/sets
+- [x] for loops
+- [x] arrays/lists
 - [ ] structs/objects
-- [ ] loops (for, while, loop)
+- [ ] make single quotes string literals
+- [ ] maps
+- [ ] sets
+- [ ] flows
+- [ ] while loops
 - [ ] error handling
 - [ ] modules and imports
