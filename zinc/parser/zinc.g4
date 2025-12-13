@@ -43,12 +43,16 @@ structDeclaration
     ;
 
 structBody
-    : structMember (',' structMember)* ','?
+    : structMember*
     ;
 
 structMember
-    : IDENTIFIER                    // field
+    : structField
     | functionDeclaration           // method
+    ;
+
+structField
+    : 'const'? IDENTIFIER ':' (type | expression)
     ;
 
 // --- Function Declaration ---
@@ -183,6 +187,7 @@ expression
 primaryExpression
     : literal
     | IDENTIFIER
+    | 'self'
     | arrayLiteral
     | structInstantiation
     ;
@@ -213,11 +218,11 @@ arrayLiteral
     ;
 
 structInstantiation
-    : IDENTIFIER '{' (fieldInit (',' fieldInit)* ','?)? '}'
+    : IDENTIFIER '{' (fieldInit (','? fieldInit)* ','?)? '}'
     ;
 
 fieldInit
-    : IDENTIFIER '=' expression
+    : IDENTIFIER ':' expression
     ;
 
 argumentList
@@ -244,6 +249,7 @@ lambdaExpression
 // --- Keywords ---
 USE         : 'use';
 STRUCT      : 'struct';
+CONST       : 'const';
 FN          : 'fn';
 ASYNC       : 'async';
 AWAIT       : 'await';

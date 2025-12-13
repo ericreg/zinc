@@ -1,0 +1,75 @@
+struct MyStruct {
+    // Fields are always declared first, they
+    // will always be zero-initialized unless
+    // given a default value
+
+    // private fields start with underscore
+    _called: bool // private field 
+
+    // uninitialized fields must be given a type
+    // this is not a "hint" they are strictly typed
+    a: i32     // public field
+    b: string  // public field
+
+    // initialized fields (types are inferred)
+    c: 10 // public field with default value
+
+    // initialized constant public field (type inferred)
+    const d: 20
+
+    // uninitialized constant public field, it will be set once
+    // type must be given for all uninitialized fields
+    const e: f64 
+    
+
+    // static method
+    fn new(a, b) {
+        return MyStruct {
+            a: a
+            b: b
+            _called: true
+        }
+    }
+
+    // static method
+    fn get_value() {
+        return 5
+    }
+
+    // instance method
+    fn increment() {
+        self.c = self.c + self.get_value()
+    }
+
+    fn to_string() {
+        return "MyStruct(a: {self.a}, b: {self.b}, c: {self.c}, d: {self.d})"
+    }
+}
+
+fn main() {
+
+    // literal syntax commas required when there is more than one field in a line
+    my_struct = MyStruct { a: 5, b: "3" }
+    
+    // literal syntax multi-line, commas optional
+    your_struct = MyStruct {
+        a: 5    // comma optional
+        b: "3",   // comma optional, but allowed
+    }
+
+    // literal syntax commas required 
+    another_struct = MyStruct { a: 5, b: "3" }
+
+    // "constructor" syntax new is just a regular function
+    // it can have any name
+    another_struct = MyStruct.new(3, "5")
+
+    // increment the struct's c field
+    another_struct.increment()
+
+    // get the increment value from static method
+    increment_value_static = MyStruct.get_value()
+
+    // get the increment value from static method called on instance
+    increment_value_static = my_struct.get_value()
+}

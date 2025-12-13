@@ -26,7 +26,28 @@ class LiteralExpr(Expression):
     type_info: TypeInfo = field(default_factory=lambda: TypeInfo(BaseType.UNKNOWN))
 
     def render_rust(self) -> str:
+        # Handle format string interpolation like "{self.a}" or "{var}"
+        if self.type_info and self.type_info.base == BaseType.STRING:
+            import re
+            interpolations = re.findall(r"\{([^}]+)\}", self.value)
+            if interpolations:
+                # Convert to format!() macro
+                format_string = re.sub(r"\{[^}]+\}", "{}", self.value)
+                args = ", ".join(interpolations)
+                return f"format!({format_string}, {args})"
         return self.value
+
+    def render_rust_as_string(self) -> str:
+        """Render as an owned String (for struct fields expecting String type)."""
+        import re
+        # Check for format string interpolation
+        interpolations = re.findall(r"\{([^}]+)\}", self.value)
+        if interpolations:
+            format_string = re.sub(r"\{[^}]+\}", "{}", self.value)
+            args = ", ".join(interpolations)
+            return f"format!({format_string}, {args})"
+        # Wrap with String::from()
+        return f"String::from({self.value})"
 
 
 @dataclass
@@ -169,9 +190,13 @@ class MethodCallExpr(Expression):
     method_name: str
     arguments: list[Expression]
     type_info: Optional[TypeInfo] = None
+    is_static: bool = False  # True if calling a static method
 
     def render_rust(self) -> str:
         args = ", ".join(arg.render_rust() for arg in self.arguments)
+        # Static method call on self should use Self::method() syntax
+        if self.is_static:
+            return f"Self::{self.method_name}({args})"
         return f"{self.target.render_rust()}.{self.method_name}({args})"
 
 

@@ -22,6 +22,18 @@ from zinc.ast.expressions import (
     MethodCallExpr,
     RangeExpr,
 )
+from zinc.ast.structs import (
+    StructField,
+    StructMethod,
+    StructDeclaration,
+    StructInstantiationExpr,
+    SelfExpr,
+    MemberAccessExpr,
+    StaticMethodCallExpr,
+    FieldModifier,
+    is_known_type,
+    zinc_type_to_base,
+)
 from zinc.ast.statements import (
     Statement,
     AssignmentKind,
@@ -151,6 +163,13 @@ class Visitor(ZincVisitor):
         self._array_push_vars: set[str] = set()  # vars that have .push() called
         self._array_assignments: dict[str, VariableAssignment] = {}  # var_name -> assignment (for mut fixup)
 
+        # Struct tracking
+        self._struct_definitions: dict[str, StructDeclaration] = {}  # name -> struct
+        self._current_struct: str | None = None  # When visiting struct body
+        self._current_struct_fields: list[StructField] | None = None  # Fields of current struct
+        self._current_struct_method: str | None = None  # Current method being visited
+        self._struct_method_self_usage: dict[str, set[str]] = {}  # method_name -> {"read", "write"}
+
     # ============================================================
     # Expression Visitors - Return Expression AST nodes
     # ============================================================
@@ -160,6 +179,13 @@ class Visitor(ZincVisitor):
         text = ctx.getText()
         base_type = parse_literal(text)
         type_info = TypeInfo(base_type)
+
+        # Track self usage in string interpolations like "{self.field}"
+        if base_type == BaseType.STRING and self._current_struct_method:
+            import re
+            if re.search(r"\{self\.", text):
+                self._struct_method_self_usage[self._current_struct_method].add("read")
+
         return LiteralExpr(value=text, type_info=type_info)
 
     def visitPrimaryExpression(self, ctx: ZincParser.PrimaryExpressionContext) -> Expression:
@@ -168,9 +194,14 @@ class Visitor(ZincVisitor):
         if ctx.literal():
             return self.visit(ctx.literal())
 
+        # Self keyword
+        if ctx.getText() == "self":
+            return SelfExpr(type_info=TypeInfo(BaseType.STRUCT))
+
         # Identifier (variable reference)
         if ctx.IDENTIFIER():
             name = ctx.IDENTIFIER().getText()
+
             # Look up variable type in scope
             symbol = self._scope.lookup(name)
             type_info = symbol.type_info if symbol else TypeInfo(BaseType.UNKNOWN)
@@ -180,7 +211,11 @@ class Visitor(ZincVisitor):
         if ctx.arrayLiteral():
             return self.visit(ctx.arrayLiteral())
 
-        # Fallback for other cases (struct instantiation, etc.)
+        # Struct instantiation
+        if ctx.structInstantiation():
+            return self.visit(ctx.structInstantiation())
+
+        # Fallback for other cases
         return LiteralExpr(value=ctx.getText(), type_info=TypeInfo(BaseType.UNKNOWN))
 
     def visitPrimaryExpr(self, ctx: ZincParser.PrimaryExprContext) -> Expression:
@@ -347,6 +382,31 @@ class Visitor(ZincVisitor):
             type_info=TypeInfo(BaseType.BOOLEAN),
         )
 
+    def visitMemberAccessExpr(self, ctx: ZincParser.MemberAccessExprContext) -> Expression:
+        """Handle member access: expr.member"""
+        target = self.visit(ctx.expression())
+        member = ctx.IDENTIFIER().getText()
+
+        # Track self usage in struct methods
+        if isinstance(target, SelfExpr) and self._current_struct_method:
+            # Reading self.field counts as "read"
+            self._struct_method_self_usage[self._current_struct_method].add("read")
+
+        # Check if this is a static method call on a struct type (MyStruct.method)
+        if isinstance(target, IdentifierExpr) and target.name in self._struct_definitions:
+            # This will be a static method call - return StaticMethodCallExpr
+            # (arguments will be added by visitFunctionCallExpr)
+            struct_decl = self._struct_definitions[target.name]
+            return StaticMethodCallExpr(
+                struct_name=target.name,
+                method_name=member,
+                arguments=[],
+                type_info=None,
+                struct_decl=struct_decl,
+            )
+
+        return MemberAccessExpr(target=target, member=member)
+
     # ============================================================
     # Statement Visitors
     # ============================================================
@@ -396,6 +456,253 @@ class Visitor(ZincVisitor):
         self._statement_index += 1
 
         return None
+
+    def visitStructDeclaration(self, ctx: ZincParser.StructDeclarationContext):
+        """Visit struct declaration."""
+        name = ctx.IDENTIFIER().getText()
+        self._current_struct = name
+
+        fields: list[StructField] = []
+        methods: list[StructMethod] = []
+
+        # Visit struct body - collect fields first
+        body_ctx = ctx.structBody()
+        for member_ctx in body_ctx.structMember():
+            if member_ctx.structField():
+                field = self._visit_struct_field(member_ctx.structField())
+                fields.append(field)
+
+        # Store fields for parameter type inference
+        self._current_struct_fields = fields
+
+        # Then visit methods (now fields are available for type inference)
+        for member_ctx in body_ctx.structMember():
+            if member_ctx.functionDeclaration():
+                method = self._visit_struct_method(member_ctx.functionDeclaration())
+                methods.append(method)
+
+        self._current_struct = None
+        self._current_struct_fields = None
+
+        # Create struct declaration
+        struct_decl = StructDeclaration(name=name, fields=fields, methods=methods)
+        self._struct_definitions[name] = struct_decl
+
+        # Post-process: mark static method calls on self
+        static_methods = {m.name for m in methods if m.is_static}
+        self._mark_static_method_calls(methods, static_methods)
+
+        # Add to pending statements
+        self._pending_other.append((self._statement_index, struct_decl))
+        self._statement_index += 1
+
+        return None
+
+    def _visit_struct_field(self, ctx) -> StructField:
+        """Parse a struct field declaration."""
+        # Check for const modifier
+        is_const = ctx.getChild(0).getText() == "const" if ctx.getChildCount() > 0 else False
+
+        # Get field name - it's after 'const' if present, otherwise first
+        if is_const:
+            name = ctx.IDENTIFIER().getText()
+        else:
+            name = ctx.IDENTIFIER().getText()
+
+        type_ann = None
+        default_value = None
+        resolved_type = None
+
+        # After the colon, we have either a type or an expression
+        # Check if there's a type() context
+        if ctx.type_():
+            type_ann = ctx.type_().getText()
+            resolved_type = zinc_type_to_base(type_ann)
+        elif ctx.expression():
+            default_value = self.visit(ctx.expression())
+            if default_value and default_value.type_info:
+                resolved_type = default_value.type_info.base
+
+        modifier = FieldModifier.CONST if is_const else FieldModifier.NONE
+
+        return StructField(
+            name=name,
+            type_annotation=type_ann,
+            default_value=default_value,
+            modifier=modifier,
+            resolved_type=resolved_type,
+        )
+
+    def _visit_struct_method(self, ctx: ZincParser.FunctionDeclarationContext) -> StructMethod:
+        """Parse a struct method and determine if static/instance."""
+        name = ctx.IDENTIFIER().getText()
+        self._current_struct_method = name
+        self._struct_method_self_usage[name] = set()
+
+        # Parse parameters
+        parameters: list[Parameter] = []
+        if ctx.parameterList():
+            for param_ctx in ctx.parameterList().parameter():
+                param_name = param_ctx.IDENTIFIER().getText()
+                type_ann = None
+                if param_ctx.type_():
+                    type_ann = param_ctx.type_().getText()
+                parameters.append(Parameter(name=param_name, type_annotation=type_ann))
+
+        # Enter scope for method body
+        self._scope = self._scope.enter_scope()
+
+        # Add parameters to scope
+        for param in parameters:
+            self._scope.define(param.name, TypeInfo(BaseType.UNKNOWN))
+
+        # Visit method body - this will track self usage
+        body = self._visit_block(ctx.block())
+
+        self._scope = self._scope.exit_scope()
+
+        # Infer parameter types from usage in method body
+        self._infer_method_param_types(parameters, body)
+
+        # Analyze self usage to determine static vs instance
+        self_usage = self._struct_method_self_usage.get(name, set())
+        is_static = len(self_usage) == 0
+
+        if is_static:
+            self_mutability = None
+        elif "write" in self_usage:
+            self_mutability = "&mut self"
+        else:
+            self_mutability = "&self"
+
+        self._current_struct_method = None
+
+        # Infer return type from body
+        return_type = self._infer_method_return_type(body)
+
+        return StructMethod(
+            name=name,
+            parameters=parameters,
+            body=body,
+            return_type=return_type,
+            is_static=is_static,
+            self_mutability=self_mutability,
+        )
+
+    def _infer_method_return_type(self, body: list[Statement]) -> str | None:
+        """Infer return type from method body."""
+        for stmt in body:
+            if isinstance(stmt, ReturnStatement) and stmt.value:
+                # Check if returning a struct instantiation of our own type
+                if isinstance(stmt.value, StructInstantiationExpr):
+                    if self._current_struct and stmt.value.struct_name == self._current_struct:
+                        return "Self"
+                    return stmt.value.struct_name
+                if stmt.value.type_info:
+                    return type_to_rust(stmt.value.type_info.base)
+        return None
+
+    def _mark_static_method_calls(self, methods: list[StructMethod], static_methods: set[str]) -> None:
+        """Mark MethodCallExpr nodes that call static methods on self.
+
+        After all methods are processed, we know which ones are static.
+        Go through all method bodies and mark self.static_method() calls.
+        """
+        from zinc.ast.structs import SelfExpr
+
+        def visit_expr(expr: Expression) -> None:
+            """Recursively visit expressions to find method calls on self."""
+            if isinstance(expr, MethodCallExpr):
+                if isinstance(expr.target, SelfExpr) and expr.method_name in static_methods:
+                    expr.is_static = True
+                # Visit arguments
+                for arg in expr.arguments:
+                    visit_expr(arg)
+            elif isinstance(expr, BinaryExpr):
+                visit_expr(expr.left)
+                visit_expr(expr.right)
+            elif isinstance(expr, UnaryExpr):
+                visit_expr(expr.operand)
+            elif isinstance(expr, ParenExpr):
+                visit_expr(expr.inner)
+            elif isinstance(expr, CallExpr):
+                for arg in expr.arguments:
+                    visit_expr(arg)
+
+        def visit_stmt(stmt: Statement) -> None:
+            """Recursively visit statements to find method calls on self."""
+            if isinstance(stmt, VariableAssignment):
+                if isinstance(stmt.value, Expression):
+                    visit_expr(stmt.value)
+            elif isinstance(stmt, ReturnStatement):
+                if stmt.value:
+                    visit_expr(stmt.value)
+            elif isinstance(stmt, IfStatement):
+                for branch in stmt.branches:
+                    visit_expr(branch.condition)
+                    for s in branch.body:
+                        visit_stmt(s)
+                if stmt.else_body:
+                    for s in stmt.else_body:
+                        visit_stmt(s)
+
+        for method in methods:
+            for stmt in method.body:
+                visit_stmt(stmt)
+
+    def _infer_method_param_types(self, parameters: list[Parameter], body: list[Statement]) -> None:
+        """Infer parameter types from usage in method body.
+
+        When a parameter is used as a field value in struct instantiation,
+        we can infer its type from the field's declared type.
+        """
+        if not self._current_struct or not self._current_struct_fields:
+            return
+
+        # Build field name -> type mapping
+        field_types: dict[str, str] = {}
+        for f in self._current_struct_fields:
+            if f.type_annotation:
+                from zinc.ast.structs import zinc_type_to_rust
+                field_types[f.name] = zinc_type_to_rust(f.type_annotation)
+            elif f.resolved_type:
+                field_types[f.name] = type_to_rust(f.resolved_type)
+
+        # Build param name -> Parameter mapping
+        param_map = {p.name: p for p in parameters}
+
+        # Scan body for struct instantiation that uses parameters as field values
+        for stmt in body:
+            if isinstance(stmt, ReturnStatement) and stmt.value:
+                if isinstance(stmt.value, StructInstantiationExpr):
+                    for field_name, field_value in stmt.value.field_inits.items():
+                        # Check if field_value is an identifier referencing a parameter
+                        if isinstance(field_value, IdentifierExpr):
+                            param_name = field_value.name
+                            if param_name in param_map and field_name in field_types:
+                                param = param_map[param_name]
+                                if not param.type_annotation and not param.resolved_type:
+                                    param.resolved_type = field_types[field_name]
+
+    def visitStructInstantiation(self, ctx: ZincParser.StructInstantiationContext) -> Expression:
+        """Visit struct literal: MyStruct { a: 1, b: 2 }."""
+        struct_name = ctx.IDENTIFIER().getText()
+
+        field_inits: dict[str, Expression] = {}
+        for field_ctx in ctx.fieldInit():
+            field_name = field_ctx.IDENTIFIER().getText()
+            field_value = self.visit(field_ctx.expression())
+            field_inits[field_name] = field_value
+
+        # Look up struct declaration for default values
+        struct_decl = self._struct_definitions.get(struct_name)
+
+        return StructInstantiationExpr(
+            struct_name=struct_name,
+            field_inits=field_inits,
+            type_info=TypeInfo(BaseType.STRUCT),
+            struct_decl=struct_decl,
+        )
 
     def visitVariableAssignment(self, ctx):
         """Visit variable assignment, building Expression AST."""
@@ -479,6 +786,16 @@ class Visitor(ZincVisitor):
             target = self.visit(callee_ctx.expression())
             method_name = callee_ctx.IDENTIFIER().getText()
 
+            # Check if target is a struct type (static method call)
+            if isinstance(target, IdentifierExpr) and target.name in self._struct_definitions:
+                struct_decl = self._struct_definitions[target.name]
+                return StaticMethodCallExpr(
+                    struct_name=target.name,
+                    method_name=method_name,
+                    arguments=arguments,
+                    struct_decl=struct_decl,
+                )
+
             # Track .push() calls for array promotion
             if method_name == "push" and isinstance(target, IdentifierExpr):
                 var_name = target.name
@@ -501,6 +818,22 @@ class Visitor(ZincVisitor):
         # Now visit the callee for regular function calls
         callee = self.visit(callee_ctx)
         func_name = callee_ctx.getText()
+
+        # Handle static method calls (MyStruct.method())
+        if isinstance(callee, StaticMethodCallExpr):
+            callee.arguments = arguments
+            return callee
+
+        # Handle instance method calls on self (self.method())
+        if isinstance(callee, MemberAccessExpr) and isinstance(callee.target, SelfExpr):
+            # This is self.method() - track as read
+            if self._current_struct_method:
+                self._struct_method_self_usage[self._current_struct_method].add("read")
+            return MethodCallExpr(
+                target=callee.target,
+                method_name=callee.member,
+                arguments=arguments,
+            )
 
         # Handle chan() builtin for channel creation
         if func_name == "chan":
@@ -706,8 +1039,25 @@ class Visitor(ZincVisitor):
         # Check for variable assignment
         if stmt_ctx.variableAssignment():
             var_ctx = stmt_ctx.variableAssignment()
-            var_name = var_ctx.assignmentTarget().getText()
+            target_ctx = var_ctx.assignmentTarget()
+            var_name = target_ctx.getText()
             expr = self.visit(var_ctx.expression())
+
+            # Check for self.field = ... assignment (track self write)
+            if target_ctx.memberAccess():
+                member_ctx = target_ctx.memberAccess()
+                # Visit the target to get the expression
+                target_expr = self.visit(member_ctx.expression())
+                if isinstance(target_expr, SelfExpr) and self._current_struct_method:
+                    self._struct_method_self_usage[self._current_struct_method].add("write")
+                    # Create an assignment to self.field
+                    field_name = member_ctx.IDENTIFIER().getText()
+                    return VariableAssignment(
+                        variable_name=f"self.{field_name}",
+                        value=expr,
+                        kind=AssignmentKind.REASSIGNMENT,
+                        needs_mut=False,
+                    )
 
             # Handle channel creation
             if isinstance(expr, ChannelCreateExpr):

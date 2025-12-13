@@ -14,6 +14,7 @@ class BaseType(Enum):
     FLOAT = auto()
     CHANNEL = auto()  # Channel type (sender or receiver)
     ARRAY = auto()  # Array or Vec type
+    STRUCT = auto()  # Struct type
     UNKNOWN = auto()  # For unresolved types
 
     def __repr__(self):

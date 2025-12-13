@@ -44,6 +44,11 @@ class zincVisitor(ParseTreeVisitor):
         return self.visitChildren(ctx)
 
 
+    # Visit a parse tree produced by zincParser#structField.
+    def visitStructField(self, ctx:zincParser.StructFieldContext):
+        return self.visitChildren(ctx)
+
+
     # Visit a parse tree produced by zincParser#functionDeclaration.
     def visitFunctionDeclaration(self, ctx:zincParser.FunctionDeclarationContext):
         return self.visitChildren(ctx)

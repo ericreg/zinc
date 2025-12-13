@@ -71,6 +71,15 @@ class zincListener(ParseTreeListener):
         pass
 
 
+    # Enter a parse tree produced by zincParser#structField.
+    def enterStructField(self, ctx:zincParser.StructFieldContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#structField.
+    def exitStructField(self, ctx:zincParser.StructFieldContext):
+        pass
+
+
     # Enter a parse tree produced by zincParser#functionDeclaration.
     def enterFunctionDeclaration(self, ctx:zincParser.FunctionDeclarationContext):
         pass
