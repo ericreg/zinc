@@ -44,6 +44,15 @@ class zincListener(ParseTreeListener):
         pass
 
 
+    # Enter a parse tree produced by zincParser#constDeclaration.
+    def enterConstDeclaration(self, ctx:zincParser.ConstDeclarationContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#constDeclaration.
+    def exitConstDeclaration(self, ctx:zincParser.ConstDeclarationContext):
+        pass
+
+
     # Enter a parse tree produced by zincParser#structDeclaration.
     def enterStructDeclaration(self, ctx:zincParser.StructDeclarationContext):
         pass

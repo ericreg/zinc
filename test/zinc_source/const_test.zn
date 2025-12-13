@@ -1,0 +1,9 @@
+const PI = 3.14159
+const MAX_SIZE = 100
+
+fn main() {
+    area = PI * 5.0 * 5.0
+    print("Area: {area}")
+
+    // MAX_SIZE is not used, so should not appear in reachable consts
+}

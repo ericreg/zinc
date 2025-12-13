@@ -29,6 +29,11 @@ class zincVisitor(ParseTreeVisitor):
         return self.visitChildren(ctx)
 
 
+    # Visit a parse tree produced by zincParser#constDeclaration.
+    def visitConstDeclaration(self, ctx:zincParser.ConstDeclarationContext):
+        return self.visitChildren(ctx)
+
+
     # Visit a parse tree produced by zincParser#structDeclaration.
     def visitStructDeclaration(self, ctx:zincParser.StructDeclarationContext):
         return self.visitChildren(ctx)

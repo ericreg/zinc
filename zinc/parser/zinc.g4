@@ -10,6 +10,7 @@ program
 
 statement
     : useStatement
+    | constDeclaration
     | structDeclaration
     | functionDeclaration
     | asyncFunctionDeclaration
@@ -35,6 +36,11 @@ useStatement
 
 modulePath
     : IDENTIFIER ('::' IDENTIFIER)*
+    ;
+
+// --- Const Declaration (global constants) ---
+constDeclaration
+    : 'const' IDENTIFIER '=' expression
     ;
 
 // --- Struct Declaration ---

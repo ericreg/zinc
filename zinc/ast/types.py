@@ -2,7 +2,6 @@
 
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import Optional
 
 
 class BaseType(Enum):
@@ -15,6 +14,7 @@ class BaseType(Enum):
     CHANNEL = auto()  # Channel type (sender or receiver)
     ARRAY = auto()  # Array or Vec type
     STRUCT = auto()  # Struct type
+    VOID = auto()  # For functions with no return value
     UNKNOWN = auto()  # For unresolved types
 
     def __repr__(self):

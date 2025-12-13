@@ -1,0 +1,34 @@
+// Test: Static methods (methods that don't use self)
+// Methods are automatically static if they never reference 'self'
+
+struct Calculator {
+    value: i32
+
+    // Static method - returns a constant
+    fn pi() {
+        return 3
+    }
+
+    // Static method - constructor pattern
+    fn new(initial) {
+        return Calculator { value: initial }
+    }
+
+    // Static method - factory with default
+    fn zero() {
+        return Calculator { value: 0 }
+    }
+}
+
+fn main() {
+    pi_value = Calculator.pi()
+    print(pi_value)
+
+    // Use static constructor
+    calc = Calculator.new(100)
+    print(calc.value)
+
+    // Use factory method
+    zero_calc = Calculator.zero()
+    print(zero_calc.value)
+}
