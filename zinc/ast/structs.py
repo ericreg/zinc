@@ -38,10 +38,11 @@ class StructField:
 
     def rust_type(self) -> str:
         """Get Rust type for this field."""
-        if self.resolved_type:
-            return type_to_rust(self.resolved_type)
+        # Prefer explicit type annotation over inferred type
         if self.type_annotation:
             return zinc_type_to_rust(self.type_annotation)
+        if self.resolved_type:
+            return type_to_rust(self.resolved_type)
         return "unknown"
 
     def rust_default(self) -> str:
@@ -64,6 +65,13 @@ class StructMethod:
     self_mutability: Optional[str] = None  # None, "&self", or "&mut self"
     is_template: bool = False  # True if untyped parameters
 
+    def has_untyped_params(self) -> bool:
+        """Check if any parameters lack type information."""
+        for p in self.parameters:
+            if not p.resolved_type and not p.type_annotation:
+                return True
+        return False
+
     def render(self, struct_name: str) -> str:
         """Generate Rust code for this method."""
         # Build parameter list
@@ -75,9 +83,10 @@ class StructMethod:
             if p.resolved_type:
                 param_strs.append(f"{p.name}: {p.resolved_type}")
             elif p.type_annotation:
-                param_strs.append(f"{p.name}: {p.type_annotation}")
+                param_strs.append(f"{p.name}: {zinc_type_to_rust(p.type_annotation)}")
             else:
-                param_strs.append(p.name)
+                # This shouldn't happen if has_untyped_params is checked first
+                param_strs.append(f"{p.name}: /* untyped */")
         params = ", ".join(param_strs)
 
         # Return type
@@ -112,10 +121,11 @@ class StructDeclaration(Statement):
         lines.append("}")
         lines.append("")
 
-        # Impl block
-        if self.methods:
+        # Impl block - skip methods with untyped parameters
+        renderable_methods = [m for m in self.methods if not m.has_untyped_params()]
+        if renderable_methods:
             lines.append(f"impl {self.name} {{")
-            for method in self.methods:
+            for method in renderable_methods:
                 method_code = method.render(self.name)
                 for line in method_code.split("\n"):
                     lines.append(f"    {line}")

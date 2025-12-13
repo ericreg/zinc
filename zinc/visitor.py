@@ -169,6 +169,8 @@ class Visitor(ZincVisitor):
         self._current_struct_fields: list[StructField] | None = None  # Fields of current struct
         self._current_struct_method: str | None = None  # Current method being visited
         self._struct_method_self_usage: dict[str, set[str]] = {}  # method_name -> {"read", "write"}
+        self._struct_instance_vars: dict[str, str] = {}  # var_name -> struct type name
+        self._struct_mut_method_vars: set[str] = set()  # vars with &mut self method calls
 
     # ============================================================
     # Expression Visitors - Return Expression AST nodes
@@ -475,6 +477,10 @@ class Visitor(ZincVisitor):
         # Store fields for parameter type inference
         self._current_struct_fields = fields
 
+        # Pre-register struct (without methods) so struct instantiation in method bodies can find it
+        preliminary_struct_decl = StructDeclaration(name=name, fields=fields, methods=[])
+        self._struct_definitions[name] = preliminary_struct_decl
+
         # Then visit methods (now fields are available for type inference)
         for member_ctx in body_ctx.structMember():
             if member_ctx.functionDeclaration():
@@ -484,7 +490,7 @@ class Visitor(ZincVisitor):
         self._current_struct = None
         self._current_struct_fields = None
 
-        # Create struct declaration
+        # Update struct declaration with methods
         struct_decl = StructDeclaration(name=name, fields=fields, methods=methods)
         self._struct_definitions[name] = struct_decl
 
@@ -591,6 +597,30 @@ class Visitor(ZincVisitor):
 
     def _infer_method_return_type(self, body: list[Statement]) -> str | None:
         """Infer return type from method body."""
+        # Build field name -> type mapping if we're in a struct
+        field_types: dict[str, str] = {}
+        if self._current_struct and self._current_struct_fields:
+            for f in self._current_struct_fields:
+                # Use rust_type() which prefers explicit annotation over resolved type
+                field_types[f.name] = f.rust_type()
+
+        def get_expr_type(expr: Expression) -> str | None:
+            """Get the type of an expression."""
+            if isinstance(expr, MemberAccessExpr):
+                if isinstance(expr.target, SelfExpr):
+                    return field_types.get(expr.member)
+            if isinstance(expr, BinaryExpr):
+                # For binary expr, get type from operands (assumes same type for arithmetic)
+                left_type = get_expr_type(expr.left)
+                if left_type:
+                    return left_type
+                right_type = get_expr_type(expr.right)
+                if right_type:
+                    return right_type
+            if expr.type_info:
+                return type_to_rust(expr.type_info.base)
+            return None
+
         for stmt in body:
             if isinstance(stmt, ReturnStatement) and stmt.value:
                 # Check if returning a struct instantiation of our own type
@@ -598,8 +628,10 @@ class Visitor(ZincVisitor):
                     if self._current_struct and stmt.value.struct_name == self._current_struct:
                         return "Self"
                     return stmt.value.struct_name
-                if stmt.value.type_info:
-                    return type_to_rust(stmt.value.type_info.base)
+                # Try to infer type from expression
+                inferred_type = get_expr_type(stmt.value)
+                if inferred_type:
+                    return inferred_type
         return None
 
     def _mark_static_method_calls(self, methods: list[StructMethod], static_methods: set[str]) -> None:
@@ -653,8 +685,11 @@ class Visitor(ZincVisitor):
     def _infer_method_param_types(self, parameters: list[Parameter], body: list[Statement]) -> None:
         """Infer parameter types from usage in method body.
 
-        When a parameter is used as a field value in struct instantiation,
-        we can infer its type from the field's declared type.
+        Inference sources:
+        1. Parameter used in struct field init: infer from field type
+        2. Parameter assigned to self.field: infer from field type
+        3. Parameter in binary expr with self.field: infer from field type
+        4. Parameter in binary expr with literal: infer from literal type
         """
         if not self._current_struct or not self._current_struct_fields:
             return
@@ -662,17 +697,59 @@ class Visitor(ZincVisitor):
         # Build field name -> type mapping
         field_types: dict[str, str] = {}
         for f in self._current_struct_fields:
-            if f.type_annotation:
-                from zinc.ast.structs import zinc_type_to_rust
-                field_types[f.name] = zinc_type_to_rust(f.type_annotation)
-            elif f.resolved_type:
-                field_types[f.name] = type_to_rust(f.resolved_type)
+            # Use rust_type() which prefers explicit annotation over resolved type
+            rust_type = f.rust_type()
+            if rust_type != "unknown":
+                field_types[f.name] = rust_type
 
         # Build param name -> Parameter mapping
         param_map = {p.name: p for p in parameters}
 
-        # Scan body for struct instantiation that uses parameters as field values
-        for stmt in body:
+        def get_expr_type(expr: Expression) -> str | None:
+            """Get the type of an expression if known."""
+            if isinstance(expr, MemberAccessExpr):
+                if isinstance(expr.target, SelfExpr):
+                    return field_types.get(expr.member)
+            if expr.type_info:
+                return type_to_rust(expr.type_info.base)
+            return None
+
+        def infer_from_binary_expr(expr: BinaryExpr) -> None:
+            """Infer param types from binary expressions like a + b or self.x + param."""
+            left = expr.left
+            right = expr.right
+            left_is_param = isinstance(left, IdentifierExpr) and left.name in param_map
+            right_is_param = isinstance(right, IdentifierExpr) and right.name in param_map
+
+            # If one side is a param and other has known type, infer
+            if left_is_param and not right_is_param:
+                right_type = get_expr_type(right)
+                if right_type and isinstance(left, IdentifierExpr):
+                    param = param_map[left.name]
+                    if not param.type_annotation and not param.resolved_type:
+                        param.resolved_type = right_type
+            elif right_is_param and not left_is_param:
+                left_type = get_expr_type(left)
+                if left_type and isinstance(right, IdentifierExpr):
+                    param = param_map[right.name]
+                    if not param.type_annotation and not param.resolved_type:
+                        param.resolved_type = left_type
+
+            # Recurse into nested binary expressions
+            if isinstance(left, BinaryExpr):
+                infer_from_binary_expr(left)
+            if isinstance(right, BinaryExpr):
+                infer_from_binary_expr(right)
+
+        def scan_expr(expr: Expression) -> None:
+            """Recursively scan expressions for type inference."""
+            if isinstance(expr, BinaryExpr):
+                infer_from_binary_expr(expr)
+            elif isinstance(expr, ParenExpr):
+                scan_expr(expr.inner)
+
+        def scan_stmt(stmt: Statement) -> None:
+            """Scan a statement for parameter type inference opportunities."""
             if isinstance(stmt, ReturnStatement) and stmt.value:
                 if isinstance(stmt.value, StructInstantiationExpr):
                     for field_name, field_value in stmt.value.field_inits.items():
@@ -683,6 +760,28 @@ class Visitor(ZincVisitor):
                                 param = param_map[param_name]
                                 if not param.type_annotation and not param.resolved_type:
                                     param.resolved_type = field_types[field_name]
+                else:
+                    scan_expr(stmt.value)
+            elif isinstance(stmt, VariableAssignment):
+                # Check for self.field = param assignments
+                var_name = stmt.variable_name
+                if var_name.startswith("self."):
+                    field_name = var_name[5:]  # Remove "self." prefix
+                    if field_name in field_types:
+                        # Check if the value is a parameter identifier
+                        if isinstance(stmt.value, IdentifierExpr):
+                            param_name = stmt.value.name
+                            if param_name in param_map:
+                                param = param_map[param_name]
+                                if not param.type_annotation and not param.resolved_type:
+                                    param.resolved_type = field_types[field_name]
+                        # Also check binary expressions in assignment
+                        elif isinstance(stmt.value, BinaryExpr):
+                            scan_expr(stmt.value)
+
+        # Scan body for type inference opportunities
+        for stmt in body:
+            scan_stmt(stmt)
 
     def visitStructInstantiation(self, ctx: ZincParser.StructInstantiationContext) -> Expression:
         """Visit struct literal: MyStruct { a: 1, b: 2 }."""
@@ -755,6 +854,18 @@ class Visitor(ZincVisitor):
             self._array_vars[var_name] = array_info
             value_type = BaseType.ARRAY
 
+        # Track struct instance variables for mutability analysis
+        if isinstance(expr, StructInstantiationExpr):
+            self._struct_instance_vars[var_name] = expr.struct_name
+        elif isinstance(expr, StaticMethodCallExpr):
+            # e.g., counter = Counter.new(...)
+            struct_decl = self._struct_definitions.get(expr.struct_name)
+            if struct_decl:
+                # Check if the method returns Self
+                method = next((m for m in struct_decl.methods if m.name == expr.method_name), None)
+                if method and method.return_type == "Self":
+                    self._struct_instance_vars[var_name] = expr.struct_name
+
         # Define variable in scope for future lookups
         self._scope.define(var_name, TypeInfo(value_type))
 
@@ -808,6 +919,17 @@ class Visitor(ZincVisitor):
                     if array_info.element_type == BaseType.UNKNOWN and arguments:
                         if arguments[0].type_info:
                             array_info.element_type = arguments[0].type_info.base
+
+            # Track struct instance method calls that need &mut self
+            if isinstance(target, IdentifierExpr):
+                var_name = target.name
+                if var_name in self._struct_instance_vars:
+                    struct_name = self._struct_instance_vars[var_name]
+                    struct_decl = self._struct_definitions.get(struct_name)
+                    if struct_decl:
+                        method = next((m for m in struct_decl.methods if m.name == method_name), None)
+                        if method and method.self_mutability == "&mut self":
+                            self._struct_mut_method_vars.add(var_name)
 
             return MethodCallExpr(
                 target=target,
@@ -1032,6 +1154,12 @@ class Visitor(ZincVisitor):
                 if isinstance(assignment.value, ArrayLiteralExpr):
                     assignment.value.array_info = self._array_vars.get(var_name)
 
+        # Fix up struct instance mutability: struct vars with &mut self method calls need mut
+        for var_name in self._struct_mut_method_vars:
+            if var_name in self._array_assignments:  # Reusing array tracking dict
+                assignment = self._array_assignments[var_name]
+                assignment.needs_mut = True
+
         return statements
 
     def _visit_statement(self, stmt_ctx) -> Statement | None:
@@ -1100,6 +1228,34 @@ class Visitor(ZincVisitor):
                 )
                 # Track for later mut fixup when .push() is detected
                 self._array_assignments[var_name] = stmt
+                return stmt
+
+            # Track struct instance variables for mutability analysis
+            struct_name = None
+            if isinstance(expr, StructInstantiationExpr):
+                struct_name = expr.struct_name
+            elif isinstance(expr, StaticMethodCallExpr):
+                # e.g., counter = Counter.new(...)
+                struct_decl = self._struct_definitions.get(expr.struct_name)
+                if struct_decl:
+                    # Check if the method returns Self
+                    method = next((m for m in struct_decl.methods if m.name == expr.method_name), None)
+                    if method and method.return_type == "Self":
+                        struct_name = expr.struct_name
+
+            if struct_name:
+                self._struct_instance_vars[var_name] = struct_name
+                # Check if already tracked for mut method calls
+                needs_mut = var_name in self._struct_mut_method_vars
+
+                stmt = VariableAssignment(
+                    variable_name=var_name,
+                    value=expr,
+                    kind=AssignmentKind.DECLARATION,
+                    needs_mut=needs_mut,
+                )
+                # Track for later mut fixup when &mut self method is called
+                self._array_assignments[var_name] = stmt  # Reuse array tracking dict
                 return stmt
 
             if isinstance(expr, Expression):
@@ -1339,6 +1495,12 @@ class Visitor(ZincVisitor):
 
         # Mark arrays with .push() calls as needing mut
         for var_name in self._array_push_vars:
+            if var_name in var_state:
+                _, decl_index = var_state[var_name]
+                needs_mut.add(decl_index)
+
+        # Mark struct instances with &mut self method calls as needing mut
+        for var_name in self._struct_mut_method_vars:
             if var_name in var_state:
                 _, decl_index = var_state[var_name]
                 needs_mut.add(decl_index)
