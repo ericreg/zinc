@@ -921,6 +921,8 @@ class Visitor(ZincVisitor):
                             array_info.element_type = arguments[0].type_info.base
 
             # Track struct instance method calls that need &mut self
+            # Also extract parameter types for automatic type coercion
+            param_types: list[str] | None = None
             if isinstance(target, IdentifierExpr):
                 var_name = target.name
                 if var_name in self._struct_instance_vars:
@@ -928,13 +930,25 @@ class Visitor(ZincVisitor):
                     struct_decl = self._struct_definitions.get(struct_name)
                     if struct_decl:
                         method = next((m for m in struct_decl.methods if m.name == method_name), None)
-                        if method and method.self_mutability == "&mut self":
-                            self._struct_mut_method_vars.add(var_name)
+                        if method:
+                            if method.self_mutability == "&mut self":
+                                self._struct_mut_method_vars.add(var_name)
+                            # Extract parameter types for coercion
+                            param_types = []
+                            for p in method.parameters:
+                                if p.resolved_type:
+                                    param_types.append(p.resolved_type)
+                                elif p.type_annotation:
+                                    from zinc.ast.structs import zinc_type_to_rust
+                                    param_types.append(zinc_type_to_rust(p.type_annotation))
+                                else:
+                                    param_types.append("unknown")
 
             return MethodCallExpr(
                 target=target,
                 method_name=method_name,
                 arguments=arguments,
+                param_types=param_types,
             )
 
         # Now visit the callee for regular function calls

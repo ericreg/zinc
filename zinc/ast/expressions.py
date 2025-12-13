@@ -191,9 +191,23 @@ class MethodCallExpr(Expression):
     arguments: list[Expression]
     type_info: Optional[TypeInfo] = None
     is_static: bool = False  # True if calling a static method
+    param_types: Optional[list[str]] = None  # Expected parameter types for coercion
 
     def render_rust(self) -> str:
-        args = ", ".join(arg.render_rust() for arg in self.arguments)
+        args_rendered = []
+        for i, arg in enumerate(self.arguments):
+            arg_rendered = arg.render_rust()
+            # Check if we need to cast for non-narrowing conversion
+            if self.param_types and i < len(self.param_types):
+                expected_type = self.param_types[i]
+                if arg.type_info:
+                    actual_type = type_to_rust(arg.type_info.base)
+                    # i64 -> i32 is safe for literals and small values
+                    if actual_type == "i64" and expected_type == "i32":
+                        arg_rendered = f"({arg_rendered}) as i32"
+            args_rendered.append(arg_rendered)
+
+        args = ", ".join(args_rendered)
         # Static method call on self should use Self::method() syntax
         if self.is_static:
             return f"Self::{self.method_name}({args})"
