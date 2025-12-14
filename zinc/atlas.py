@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 from antlr4 import ParserRuleContext
 
-from zinc.ast.types import BaseType
+from zinc.ast.types import BaseType, type_to_rust
 from zinc.parser.zincVisitor import zincVisitor
 from zinc.parser.zincParser import zincParser as ZincParser
 
@@ -97,10 +97,10 @@ class Atlas:
         return mangled
 
     def _mangle_name(self, name: str, arg_types: list[BaseType]) -> str:
-        """Generate mangled name like 'add_integer_integer'."""
+        """Generate mangled name like 'add_i64_i64'."""
         if not arg_types:
             return name
-        type_suffix = "_".join(t.name.lower() for t in arg_types)
+        type_suffix = "_".join(type_to_rust(t) for t in arg_types)
         return f"{name}_{type_suffix}"
 
     def topological_order(self) -> list[str]:
