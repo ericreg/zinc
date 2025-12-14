@@ -1,4 +1,4 @@
-fn tx_i64_chan(x: i64, send_x: chan) {
+async fn tx_i64_chan(x: i64, send_x: chan) {
     send_x.send(x).unwrap();
 }
 

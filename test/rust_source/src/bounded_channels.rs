@@ -1,4 +1,4 @@
-fn tx_chan(send_x: chan) {
+async fn tx_chan(send_x: chan) {
     send_x.send(1).unwrap();
     println!("<- 1");
     send_x.send(2).unwrap();
@@ -11,7 +11,7 @@ fn tx_chan(send_x: chan) {
 async fn main() {
     let x_chan = chan(2);
     tokio::spawn(tx_chan(x_chan));
-    let x = x_chan.recv().await.unwrap();
+    let mut x = x_chan.recv().await.unwrap();
     println!("{} <-", x);
     x = x_chan.recv().await.unwrap();
     println!("{} <-", x);
