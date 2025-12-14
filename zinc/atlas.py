@@ -60,14 +60,54 @@ class Atlas:
     # Const usage: func mangled_name -> set of const names used
     const_usages: dict[str, set[str]] = field(default_factory=dict)
 
+    # Raw function definitions (name -> ctx) for specialization creation
+    function_defs: dict[str, ParserRuleContext] = field(default_factory=dict)
+
     def is_reachable(self, name: str) -> bool:
         """Check if a function, struct, or const is reachable."""
         return name in self.functions or name in self.structs or name in self.consts
 
+    def add_specialization(
+        self,
+        name: str,
+        arg_types: list[BaseType],
+        ctx: ParserRuleContext,
+        caller_mangled: str | None = None,
+    ) -> str:
+        """Create a new function specialization. Returns mangled name.
+
+        If caller_mangled is provided, updates the call graph to record that
+        caller_mangled calls this specialization.
+        """
+        mangled = self._mangle_name(name, arg_types)
+        if mangled not in self.functions:
+            self.functions[mangled] = FunctionInstance(
+                name=name,
+                mangled_name=mangled,
+                ctx=ctx,
+                arg_types=list(arg_types),  # Copy to avoid mutation
+            )
+            # Initialize call graph entry for the new specialization
+            self.calls[mangled] = set()
+
+        # Update call graph: caller calls this specialization
+        if caller_mangled and caller_mangled in self.calls:
+            self.calls[caller_mangled].add(mangled)
+
+        return mangled
+
+    def _mangle_name(self, name: str, arg_types: list[BaseType]) -> str:
+        """Generate mangled name like 'add_integer_integer'."""
+        if not arg_types:
+            return name
+        type_suffix = "_".join(t.name.lower() for t in arg_types)
+        return f"{name}_{type_suffix}"
+
     def topological_order(self) -> list[str]:
         """Return function mangled_names in dependency order (callees first).
 
-        Uses DFS-based topological sort.
+        Uses DFS-based topological sort. Only considers functions that exist
+        in self.functions (i.e., have been specialized).
         """
         visited: set[str] = set()
         result: list[str] = []
@@ -75,10 +115,14 @@ class Atlas:
         def dfs(name: str) -> None:
             if name in visited:
                 return
+            # Only process functions that actually exist
+            if name not in self.functions:
+                return
             visited.add(name)
-            # Visit callees first
+            # Visit callees first (only those that exist as specializations)
             for callee in self.calls.get(name, set()):
-                dfs(callee)
+                if callee in self.functions:
+                    dfs(callee)
             result.append(name)
 
         # Start DFS from all functions
@@ -135,11 +179,13 @@ class AtlasBuilder(zincVisitor):
         """Build the Atlas after visiting the parse tree.
 
         Uses worklist algorithm to discover reachable code from main.
+        Only creates FunctionInstance for main - other functions get their
+        FunctionInstances created by SymbolTableVisitor during monomorphization.
         """
         if self._main_ctx is None:
             raise ValueError("No main() function found")
 
-        # Create main function instance
+        # Create main function instance (only main is created here)
         main_instance = FunctionInstance(
             name="main",
             mangled_name="main",
@@ -148,9 +194,10 @@ class AtlasBuilder(zincVisitor):
         )
         self._reachable_functions["main"] = main_instance
 
-        # Worklist algorithm: discover reachable code
+        # Worklist algorithm: discover reachable functions (but don't create instances)
         worklist = ["main"]
         visited: set[str] = set()
+        reachable_func_names: set[str] = {"main"}
 
         while worklist:
             func_name = worklist.pop()
@@ -158,40 +205,37 @@ class AtlasBuilder(zincVisitor):
                 continue
             visited.add(func_name)
 
-            if func_name not in self._reachable_functions:
+            # Get function ctx - either from reachable_functions or function_defs
+            if func_name in self._reachable_functions:
+                func_ctx = self._reachable_functions[func_name].ctx
+            elif func_name in self._function_defs:
+                func_ctx = self._function_defs[func_name]
+            else:
                 continue
 
-            func = self._reachable_functions[func_name]
-            self._current_function = func.mangled_name
-            self._calls[func.mangled_name] = set()
-            self._struct_usages[func.mangled_name] = set()
-            self._const_usages[func.mangled_name] = set()
+            self._current_function = func_name
+            self._calls[func_name] = set()
+            self._struct_usages[func_name] = set()
+            self._const_usages[func_name] = set()
 
             # Walk the function body to find calls, struct usages, and const usages
-            self._walk_for_references(func.ctx)
+            self._walk_for_references(func_ctx)
 
-            # Add discovered functions to worklist
-            for callee in self._calls[func.mangled_name]:
+            # Add discovered functions to worklist (but don't create FunctionInstances)
+            for callee in self._calls[func_name]:
                 if callee not in visited and callee in self._function_defs:
-                    # Create function instance if not exists
-                    if callee not in self._reachable_functions:
-                        callee_ctx = self._function_defs[callee]
-                        self._reachable_functions[callee] = FunctionInstance(
-                            name=callee,
-                            mangled_name=callee,  # Will be updated during type resolution
-                            ctx=callee_ctx,
-                            arg_types=[],  # Will be populated during type resolution
-                        )
+                    reachable_func_names.add(callee)
                     worklist.append(callee)
 
         return Atlas(
             main=main_instance,
-            functions=self._reachable_functions,
+            functions=self._reachable_functions,  # Only contains main at this point
             structs=self._reachable_structs,
             consts=self._reachable_consts,
             calls=self._calls,
             struct_usages=self._struct_usages,
             const_usages=self._const_usages,
+            function_defs=self._function_defs,
         )
 
     def _walk_for_references(self, ctx: ParserRuleContext) -> None:
@@ -226,6 +270,17 @@ class AtlasBuilder(zincVisitor):
                 target = callee_ctx.expression().getText()
                 if target in self._struct_defs:
                     self._add_struct_usage(target, callee_ctx.IDENTIFIER().getText())
+
+        # Check for spawn statement - spawn expr(args) where expr is function name
+        if isinstance(ctx, ZincParser.SpawnStatementContext):
+            expr = ctx.expression()
+            # The expression is the function name (e.g., greet in "spawn greet(42)")
+            if isinstance(expr, ZincParser.PrimaryExprContext):
+                primary = expr.primaryExpression()
+                if primary and primary.IDENTIFIER():
+                    func_name = primary.IDENTIFIER().getText()
+                    if func_name not in ("print", "chan") and self._current_function:
+                        self._calls[self._current_function].add(func_name)
 
         # Check for struct instantiation
         if isinstance(ctx, ZincParser.StructInstantiationContext):

@@ -125,17 +125,43 @@ class SymbolTableVisitor(zincVisitor):
         self.atlas = atlas
         self.symbols = SymbolTable()
         self._block_counters: dict[str, int] = {}  # For unique block names
+        self._current_function: str | None = None
+        # Maps call site interval -> mangled name for CodeGen to use
+        self.specialization_map: dict[tuple[int, int], str] = {}
 
     def resolve(self) -> SymbolTable:
-        """Main entry point - resolve types for all reachable code."""
+        """Main entry point - resolve types for all reachable code.
+
+        Processes functions in reverse topological order (callers before callees).
+        When a call site is visited, creates a specialization in the Atlas with
+        concrete argument types. Then processes each specialization.
+        """
         self._register_builtins()
 
         for const in self.atlas.consts.values():
             self._resolve_const(const)
 
-        for mangled_name in self.atlas.topological_order():
-            func = self.atlas.functions[mangled_name]
-            self._resolve_function(func)
+        # Process in reverse topological order (callers before callees)
+        # This ensures we see call sites and create specializations before
+        # processing the callee function
+        order = list(reversed(self.atlas.topological_order()))
+        processed: set[str] = set()
+
+        # Keep processing until no new specializations are added
+        while True:
+            new_work = False
+            # Get current list of functions (may grow as we discover specializations)
+            current_functions = list(self.atlas.functions.keys())
+            for mangled_name in current_functions:
+                if mangled_name in processed:
+                    continue
+                processed.add(mangled_name)
+                new_work = True
+                func = self.atlas.functions[mangled_name]
+                self._resolve_function(func)
+
+            if not new_work:
+                break
 
         return self.symbols
 
@@ -172,11 +198,36 @@ class SymbolTableVisitor(zincVisitor):
         )
 
     def _resolve_function(self, func: FunctionInstance) -> None:
-        """Resolve types within a function body."""
+        """Resolve types within a function body for a specific specialization."""
         self._block_counters.clear()
-        self.symbols.enter_scope(func.name)
-        self.visit(func.ctx)
+        self._current_function = func.mangled_name
+
+        # Use mangled name for scope so symbols are per-specialization
+        self.symbols.enter_scope(func.mangled_name)
+
+        # Define parameters with types from func.arg_types
+        ctx = func.ctx
+        if hasattr(ctx, "parameterList") and ctx.parameterList():
+            for i, param_ctx in enumerate(ctx.parameterList().parameter()):
+                param_name = param_ctx.IDENTIFIER().getText()
+                # Use arg type from specialization if available
+                if i < len(func.arg_types):
+                    param_type = func.arg_types[i]
+                else:
+                    param_type = BaseType.UNKNOWN
+                self.symbols.define(
+                    id=param_name,
+                    kind=SymbolKind.PARAMETER,
+                    resolved_type=param_type,
+                    interval=param_ctx.getSourceInterval(),
+                )
+
+        # Visit function body (skip parameter list since we handled it)
+        if hasattr(ctx, "block"):
+            self.visit(ctx.block())
+
         self.symbols.exit_scope()
+        self._current_function = None
 
     def visitLiteral(self, ctx: ZincParser.LiteralContext) -> BaseType:
         """Visit a literal and create a symbol for it."""
@@ -359,18 +410,33 @@ class SymbolTableVisitor(zincVisitor):
         return BaseType.UNKNOWN
 
     def visitFunctionCallExpr(self, ctx: ZincParser.FunctionCallExprContext) -> BaseType:
-        """Visit function call expression."""
-        callee_type = self.visit(ctx.expression())
+        """Visit function call expression and create specialization if needed."""
+        self.visit(ctx.expression())
 
+        # Collect argument types
+        arg_types: list[BaseType] = []
         if ctx.argumentList():
             for arg_expr in ctx.argumentList().expression():
-                self.visit(arg_expr)
+                arg_type = self.visit(arg_expr)
+                arg_types.append(arg_type)
 
+        # Create specialization for user-defined functions
         callee_ctx = ctx.expression()
         if isinstance(callee_ctx, ZincParser.PrimaryExprContext):
             primary = callee_ctx.primaryExpression()
             if primary and primary.IDENTIFIER():
                 func_name = primary.IDENTIFIER().getText()
+                if func_name not in ("print", "chan"):
+                    # Look up function definition
+                    func_def = self.atlas.function_defs.get(func_name)
+                    if func_def and arg_types:
+                        # Create specialization in Atlas (pass caller for call graph)
+                        mangled = self.atlas.add_specialization(
+                            func_name, arg_types, func_def, self._current_function
+                        )
+                        # Store mapping from call site to mangled name
+                        self.specialization_map[ctx.getSourceInterval()] = mangled
+
                 func_symbol = self.symbols.lookup_by_id(func_name)
                 if func_symbol:
                     self.symbols.define_temp(
@@ -481,20 +547,33 @@ class SymbolTableVisitor(zincVisitor):
         for stmt in ctx.statement():
             self.visit(stmt)
 
-    def visitFunctionDeclaration(self, ctx: ZincParser.FunctionDeclarationContext) -> None:
-        """Visit function declaration."""
-        if ctx.parameterList():
-            for param_ctx in ctx.parameterList().parameter():
-                param_name = param_ctx.IDENTIFIER().getText()
-                self.symbols.define(
-                    id=param_name,
-                    kind=SymbolKind.PARAMETER,
-                    resolved_type=BaseType.UNKNOWN,
-                    interval=param_ctx.getSourceInterval(),
-                )
-
-        self.visit(ctx.block())
-
     def visitExpressionStatement(self, ctx: ZincParser.ExpressionStatementContext) -> None:
         """Visit expression statement."""
         self.visit(ctx.expression())
+
+    def visitSpawnStatement(self, ctx: ZincParser.SpawnStatementContext) -> None:
+        """Visit spawn statement and create specialization for spawned function."""
+        # Grammar: spawn expression '(' argumentList? ')'
+        # The expression is the function name
+        func_expr = ctx.expression()
+        if isinstance(func_expr, ZincParser.PrimaryExprContext):
+            primary = func_expr.primaryExpression()
+            if primary and primary.IDENTIFIER():
+                func_name = primary.IDENTIFIER().getText()
+
+                # Collect argument types
+                arg_types: list[BaseType] = []
+                if ctx.argumentList():
+                    for arg_expr in ctx.argumentList().expression():
+                        arg_type = self.visit(arg_expr)
+                        arg_types.append(arg_type)
+
+                # Create specialization for the spawned function
+                if func_name not in ("print", "chan"):
+                    func_def = self.atlas.function_defs.get(func_name)
+                    if func_def and arg_types:
+                        mangled = self.atlas.add_specialization(
+                            func_name, arg_types, func_def, self._current_function
+                        )
+                        # Store mapping from spawn site to mangled name
+                        self.specialization_map[ctx.getSourceInterval()] = mangled

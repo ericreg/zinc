@@ -5,10 +5,10 @@ from antlr4 import InputStream, CommonTokenStream
 
 from zinc.parser.zincLexer import zincLexer as ZincLexer
 from zinc.parser.zincParser import zincParser as ZincParser
-from zinc.visitor import Visitor, Program
 from zinc.struct_logging import configure_logging, get_logger
 from zinc.atlas import AtlasBuilder
 from zinc.symbols import SymbolTableVisitor
+from zinc.codegen import CodeGenVisitor
 
 configure_logging()
 logger = get_logger()
@@ -36,17 +36,18 @@ def compile(file: Path, output: Path | None):
     parser = ZincParser(stream)
     tree = parser.program()
 
-    visitor = Visitor()
-    visitor.visit(tree)
-    visitor.finalize()  # Pass 2: process assignments
-    visitor.monomorphize()  # Pass 3: generate specialized functions
+    # Pass 1: Build Atlas (reachability)
+    atlas_builder = AtlasBuilder()
+    atlas_builder.visit(tree)
+    atlas = atlas_builder.build()
 
-    program = Program(
-        scope=visitor._scope,
-        statements=visitor.statements,
-        monomorphized=visitor._monomorphized,
-        uses_spawn=visitor._uses_spawn,
-    )
+    # Pass 2: Build SymbolTable
+    symbol_visitor = SymbolTableVisitor(atlas)
+    symbols = symbol_visitor.resolve()
+
+    # Pass 3: Generate Rust code
+    codegen = CodeGenVisitor(atlas, symbols, symbol_visitor.specialization_map)
+    program = codegen.generate()
     rust_code = program.render()
 
     if output:
@@ -70,17 +71,18 @@ def tree(file: Path):
 
     tree = parser.program()
 
-    visitor = Visitor()
-    visitor.visit(tree)
-    visitor.finalize()  # Pass 2: process assignments
-    visitor.monomorphize()  # Pass 3: generate specialized functions
+    # Pass 1: Build Atlas (reachability)
+    atlas_builder = AtlasBuilder()
+    atlas_builder.visit(tree)
+    atlas = atlas_builder.build()
 
-    program = Program(
-        scope=visitor._scope,
-        statements=visitor.statements,
-        monomorphized=visitor._monomorphized,
-        uses_spawn=visitor._uses_spawn,
-    )
+    # Pass 2: Build SymbolTable
+    symbol_visitor = SymbolTableVisitor(atlas)
+    symbols = symbol_visitor.resolve()
+
+    # Pass 3: Generate Rust code
+    codegen = CodeGenVisitor(atlas, symbols, symbol_visitor.specialization_map)
+    program = codegen.generate()
     click.echo(program)
 
 
