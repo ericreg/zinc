@@ -5,7 +5,7 @@ from enum import Enum, auto
 
 from antlr4 import ParserRuleContext
 
-from zinc.ast.types import BaseType, TypeInfo, parse_literal
+from zinc.ast.types import BaseType, TypeInfo, parse_literal, is_mutating_method, type_to_rust
 from zinc.parser.zincVisitor import zincVisitor
 from zinc.parser.zincParser import zincParser as ZincParser
 from zinc.atlas import Atlas, FunctionInstance, ConstInstance
@@ -29,10 +29,12 @@ class Symbol:
     """A symbol in the symbol table."""
 
     id: str | None  # Original name (None for temporaries/literals)
-    unique_name: str  # Scoped unique name (e.g., "main.a", "tmp_0")
+    unique_name: str  # Scoped unique name with type (e.g., "main.a/i64", "tmp_0")
     kind: SymbolKind
     resolved_type: BaseType
     source_interval: tuple[int, int]  # ANTLR source interval (start, stop)
+    is_mutated: bool = False  # True if variable needs 'mut' (reassigned or mutating method called)
+    is_shadow: bool = False  # True if this shadows a previous binding of the same name
 
 
 class SymbolTable:
@@ -66,18 +68,25 @@ class SymbolTable:
         kind: SymbolKind,
         resolved_type: BaseType,
         interval: tuple[int, int],
+        is_shadow: bool = False,
     ) -> Symbol:
         """Define a named symbol in current scope."""
-        unique_name = f"{self.current_scope}.{id}" if self._scope_path else id
+        # Include type in unique_name for shadowing support
+        type_suffix = type_to_rust(resolved_type)
+        base_name = f"{self.current_scope}.{id}" if self._scope_path else id
+        unique_name = f"{base_name}/{type_suffix}"
+
         symbol = Symbol(
             id=id,
             unique_name=unique_name,
             kind=kind,
             resolved_type=resolved_type,
             source_interval=interval,
+            is_shadow=is_shadow,
         )
         self._symbols.append(symbol)
         self._by_interval[f"({interval[0]}, {interval[1]})"] = symbol
+        # Always update scope - this handles shadowing within same scope
         self._scope_stack[-1][id] = symbol
         return symbol
 
@@ -126,6 +135,7 @@ class SymbolTableVisitor(zincVisitor):
         self.symbols = SymbolTable()
         self._block_counters: dict[str, int] = {}  # For unique block names
         self._current_function: str | None = None
+        self._current_return_type: BaseType = BaseType.VOID  # Track return type during resolution
         # Maps call site interval -> mangled name for CodeGen to use
         self.specialization_map: dict[tuple[int, int], str] = {}
 
@@ -201,6 +211,7 @@ class SymbolTableVisitor(zincVisitor):
         """Resolve types within a function body for a specific specialization."""
         self._block_counters.clear()
         self._current_function = func.mangled_name
+        self._current_return_type = BaseType.VOID  # Reset for this function
 
         # Use mangled name for scope so symbols are per-specialization
         self.symbols.enter_scope(func.mangled_name)
@@ -225,6 +236,9 @@ class SymbolTableVisitor(zincVisitor):
         # Visit function body (skip parameter list since we handled it)
         if hasattr(ctx, "block"):
             self.visit(ctx.block())
+
+        # Store the inferred return type
+        func.return_type = self._current_return_type
 
         self.symbols.exit_scope()
         self._current_function = None
@@ -420,8 +434,25 @@ class SymbolTableVisitor(zincVisitor):
                 arg_type = self.visit(arg_expr)
                 arg_types.append(arg_type)
 
-        # Create specialization for user-defined functions
         callee_ctx = ctx.expression()
+
+        # Check for method call (e.g., b.push(10))
+        if isinstance(callee_ctx, ZincParser.MemberAccessExprContext):
+            method_name = callee_ctx.IDENTIFIER().getText()
+            receiver_ctx = callee_ctx.expression()
+
+            # Get the receiver variable name if it's a simple identifier
+            if isinstance(receiver_ctx, ZincParser.PrimaryExprContext):
+                primary = receiver_ctx.primaryExpression()
+                if primary and primary.IDENTIFIER():
+                    var_name = primary.IDENTIFIER().getText()
+                    var_symbol = self.symbols.lookup_by_id(var_name)
+                    if var_symbol:
+                        # Check if this method mutates the receiver
+                        if is_mutating_method(var_symbol.resolved_type, method_name):
+                            var_symbol.is_mutated = True
+
+        # Create specialization for user-defined functions
         if isinstance(callee_ctx, ZincParser.PrimaryExprContext):
             primary = callee_ctx.primaryExpression()
             if primary and primary.IDENTIFIER():
@@ -462,21 +493,36 @@ class SymbolTableVisitor(zincVisitor):
         return BaseType.STRUCT
 
     def visitVariableAssignment(self, ctx: ZincParser.VariableAssignmentContext) -> None:
-        """Visit variable assignment and create symbol."""
+        """Visit variable assignment with shadowing support."""
         expr_type = self.visit(ctx.expression())
         target = ctx.assignmentTarget()
-        var_name = target.getText()
 
         if target.IDENTIFIER():
+            var_name = target.IDENTIFIER().getText()
             existing = self.symbols.lookup_by_id(var_name)
+
             if existing is None:
+                # First assignment - create new symbol
                 self.symbols.define(
                     id=var_name,
                     kind=SymbolKind.VARIABLE,
                     resolved_type=expr_type,
                     interval=target.getSourceInterval(),
+                    is_shadow=False,
+                )
+            elif existing.resolved_type != expr_type:
+                # Type change - create shadow symbol
+                self.symbols.define(
+                    id=var_name,
+                    kind=SymbolKind.VARIABLE,
+                    resolved_type=expr_type,
+                    interval=target.getSourceInterval(),
+                    is_shadow=True,
                 )
             else:
+                # Same type reassignment - mark original as mutated
+                existing.is_mutated = True
+                # Still create entry in _by_interval for this assignment
                 self.symbols.define_temp(
                     resolved_type=expr_type,
                     interval=target.getSourceInterval(),
@@ -488,9 +534,12 @@ class SymbolTableVisitor(zincVisitor):
             )
 
     def visitReturnStatement(self, ctx: ZincParser.ReturnStatementContext) -> None:
-        """Visit return statement."""
+        """Visit return statement and track return type."""
         if ctx.expression():
-            self.visit(ctx.expression())
+            return_type = self.visit(ctx.expression())
+            # Track the return type (first return statement wins)
+            if self._current_return_type == BaseType.VOID:
+                self._current_return_type = return_type
 
     def visitIfStatement(self, ctx: ZincParser.IfStatementContext) -> None:
         """Visit if/else statement."""

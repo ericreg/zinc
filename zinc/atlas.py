@@ -16,6 +16,7 @@ class FunctionInstance:
     mangled_name: str  # Unique name (e.g., "add_i64_i64")
     ctx: ParserRuleContext  # Parse tree reference
     arg_types: list[BaseType]  # Concrete argument types
+    return_type: BaseType = field(default=BaseType.VOID)  # Inferred return type
 
 
 @dataclass

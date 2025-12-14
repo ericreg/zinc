@@ -1,18 +1,18 @@
 fn main() {
     let x = 1;
     println!("x: {}", x);
-    let x = 2;
+    x = 2;
     println!("x: {}", x);
-    let x = 2.17;
+    x = 2.17;
     println!("x: {}", x);
-    let x = 3.14;
+    x = 3.14;
     println!("x: {}", x);
-    let x = "hello";
+    x = "hello";
     println!("x: {}", x);
-    let x = "world";
+    x = "world";
     println!("x: {}", x);
-    let x = true;
+    x = true;
     println!("x: {}", x);
-    let x = false;
+    x = false;
     println!("x: {}", x);
 }

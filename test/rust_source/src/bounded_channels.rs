@@ -1,19 +1,20 @@
-async fn tx_chan(send_x: tokio::sync::mpsc::Sender<i64>) {
-    send_x.send(1).await.unwrap();
+fn tx_chan(send_x: chan) {
+    send_x.send(1).unwrap();
     println!("<- 1");
-    send_x.send(2).await.unwrap();
+    send_x.send(2).unwrap();
     println!("<- 2");
-    send_x.send(3).await.unwrap();
+    send_x.send(3).unwrap();
     println!("<- 3");
 }
+
 #[tokio::main]
 async fn main() {
-    let (x_chan_tx, mut x_chan_rx) = tokio::sync::mpsc::channel::<i64>(2);
-    tokio::spawn(tx_chan(x_chan_tx));
-    let x = x_chan_rx.recv().await.unwrap();
+    let x_chan = chan(2);
+    tokio::spawn(tx_chan(x_chan));
+    let x = x_chan.recv().await.unwrap();
     println!("{} <-", x);
-    let x = x_chan_rx.recv().await.unwrap();
+    x = x_chan.recv().await.unwrap();
     println!("{} <-", x);
-    let x = x_chan_rx.recv().await.unwrap();
+    x = x_chan.recv().await.unwrap();
     println!("{} <-", x);
 }

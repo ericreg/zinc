@@ -1,10 +1,10 @@
 fn main() {
     let x = 1;
     println!("x: {}", x);
-    let x = 3.14;
+    x = 3.14;
     println!("x: {}", x);
-    let x = "zinc";
+    x = "zinc";
     println!("x: {}", x);
-    let x = true;
+    x = true;
     println!("x: {}", x);
 }

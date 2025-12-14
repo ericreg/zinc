@@ -128,3 +128,19 @@ class ArrayTypeInfo:
         if self.is_vector:
             return f"Vec<{elem}>"
         return f"[{elem}]"
+
+
+# Registry of mutating methods by type
+# Maps BaseType -> set of method names that mutate the receiver
+MUTATING_METHODS: dict[BaseType, set[str]] = {
+    BaseType.ARRAY: {"push", "pop", "remove", "insert", "clear", "sort", "reverse"},
+    # Add more types as needed:
+    # BaseType.SET: {"add", "remove", "clear"},
+    # BaseType.MAP: {"insert", "remove", "clear"},
+}
+
+
+def is_mutating_method(receiver_type: BaseType, method_name: str) -> bool:
+    """Check if a method call mutates the receiver."""
+    methods = MUTATING_METHODS.get(receiver_type, set())
+    return method_name in methods

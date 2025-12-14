@@ -27,6 +27,10 @@ name = "channels"
 path = "src/channels.rs"
 
 [[bin]]
+name = "const_test"
+path = "src/const_test.rs"
+
+[[bin]]
 name = "for_loop"
 path = "src/for_loop.rs"
 
@@ -39,44 +43,16 @@ name = "if_else"
 path = "src/if_else.rs"
 
 [[bin]]
+name = "monomorphization"
+path = "src/monomorphization.rs"
+
+[[bin]]
 name = "reassign_type"
 path = "src/reassign_type.rs"
 
 [[bin]]
 name = "spawn"
 path = "src/spawn.rs"
-
-[[bin]]
-name = "structs_01_basic_fields"
-path = "src/structs/01_basic_fields.rs"
-
-[[bin]]
-name = "structs_02_private_fields"
-path = "src/structs/02_private_fields.rs"
-
-[[bin]]
-name = "structs_03_const_fields"
-path = "src/structs/03_const_fields.rs"
-
-[[bin]]
-name = "structs_04_static_methods"
-path = "src/structs/04_static_methods.rs"
-
-[[bin]]
-name = "structs_05_instance_methods"
-path = "src/structs/05_instance_methods.rs"
-
-[[bin]]
-name = "structs_06_string_interpolation"
-path = "src/structs/06_string_interpolation.rs"
-
-[[bin]]
-name = "structs_07_string_conversion"
-path = "src/structs/07_string_conversion.rs"
-
-[[bin]]
-name = "structs_08_integration"
-path = "src/structs/08_integration.rs"
 
 [[bin]]
 name = "variable_assignment"

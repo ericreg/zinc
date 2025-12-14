@@ -50,7 +50,9 @@ class RustProgram:
             parts.append("fn main() {")
 
         for stmt in self.main_body:
-            parts.append(f"    {stmt}")
+            # Handle multiline statements by indenting each line
+            for line in stmt.split("\n"):
+                parts.append(f"    {line}")
         parts.append("}")
 
         return "\n".join(parts)
@@ -157,10 +159,18 @@ class CodeGenVisitor(zincVisitor):
         body_stmts = self._generate_function_body(func)
         param_str = ", ".join(params)
 
+        # Build return type suffix if not void
+        if func.return_type != BaseType.VOID:
+            return_type_str = f" -> {type_to_rust(func.return_type)}"
+        else:
+            return_type_str = ""
+
         # Use mangled_name for the Rust function name
-        lines = [f"fn {func.mangled_name}({param_str}) {{"]
+        lines = [f"fn {func.mangled_name}({param_str}){return_type_str} {{"]
         for stmt in body_stmts:
-            lines.append(f"    {stmt}")
+            # Handle multiline statements (like for loops, if/else) by indenting each line
+            for line in stmt.split("\n"):
+                lines.append(f"    {line}")
         lines.append("}")
 
         return "\n".join(lines)
@@ -356,16 +366,29 @@ class CodeGenVisitor(zincVisitor):
     # --- Statement Visitors (return Rust statement strings) ---
 
     def visitVariableAssignment(self, ctx: ZincParser.VariableAssignmentContext) -> str:
-        """Visit variable assignment."""
+        """Visit variable assignment with shadowing support."""
         target = ctx.assignmentTarget().getText()
         value = self.visit(ctx.expression())
 
         if ctx.assignmentTarget().IDENTIFIER():
             var_name = target
-            if var_name not in self._declared_vars:
-                self._declared_vars.add(var_name)
+            identifier = ctx.assignmentTarget().IDENTIFIER()
+            symbol = self.symbols.lookup_by_interval(identifier.getSourceInterval())
+
+            if symbol is None:
+                # Fallback - shouldn't happen
                 return f"let {var_name} = {value};"
-            return f"{var_name} = {value};"
+
+            if symbol.is_shadow or var_name not in self._declared_vars:
+                # First declaration OR shadow (type change) -> use let
+                self._declared_vars.add(var_name)
+                if symbol.is_mutated:
+                    return f"let mut {var_name} = {value};"
+                return f"let {var_name} = {value};"
+            else:
+                # Same-type reassignment -> bare assignment
+                return f"{var_name} = {value};"
+
         return f"{target} = {value};"
 
     def visitIfStatement(self, ctx: ZincParser.IfStatementContext) -> str:
