@@ -166,7 +166,8 @@ class CodeGenVisitor(zincVisitor):
             return_type_str = ""
 
         # Use mangled_name for the Rust function name
-        lines = [f"fn {func.mangled_name}({param_str}){return_type_str} {{"]
+        async_kw = "async " if func.is_async else ""
+        lines = [f"{async_kw}fn {func.mangled_name}({param_str}){return_type_str} {{"]
         for stmt in body_stmts:
             # Handle multiline statements (like for loops, if/else) by indenting each line
             for line in stmt.split("\n"):

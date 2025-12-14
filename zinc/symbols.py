@@ -626,3 +626,5 @@ class SymbolTableVisitor(zincVisitor):
                         )
                         # Store mapping from spawn site to mangled name
                         self.specialization_map[ctx.getSourceInterval()] = mangled
+                        # Mark the function as async since it's being spawned
+                        self.atlas.functions[mangled].is_async = True

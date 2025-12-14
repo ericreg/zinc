@@ -17,6 +17,7 @@ class FunctionInstance:
     ctx: ParserRuleContext  # Parse tree reference
     arg_types: list[BaseType]  # Concrete argument types
     return_type: BaseType = field(default=BaseType.VOID)  # Inferred return type
+    is_async: bool = False  # True if called via spawn (becomes async fn)
 
 
 @dataclass

@@ -1,4 +1,4 @@
-fn greet_i64(x: i64) {
+async fn greet_i64(x: i64) {
     println!("{}", x);
 }
 
