@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 from antlr4 import ParserRuleContext
 
-from zinc.ast.types import BaseType, type_to_rust
+from zinc.ast.types import BaseType, type_to_rust, ChannelTypeInfo
 from zinc.parser.zincVisitor import zincVisitor
 from zinc.parser.zincParser import zincParser as ZincParser
 
@@ -18,6 +18,8 @@ class FunctionInstance:
     arg_types: list[BaseType]  # Concrete argument types
     return_type: BaseType = field(default=BaseType.VOID)  # Inferred return type
     is_async: bool = False  # True if called via spawn (becomes async fn)
+    # Rich type info for channel arguments (arg_index -> ChannelTypeInfo)
+    arg_channel_infos: dict[int, ChannelTypeInfo] = field(default_factory=dict)
 
 
 @dataclass

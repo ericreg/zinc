@@ -94,7 +94,9 @@ def compile_zinc(source_code: str) -> str:
     symbols = symbol_visitor.resolve()
 
     # Pass 3: Generate Rust code
-    codegen = CodeGenVisitor(atlas, symbols, symbol_visitor.specialization_map)
+    codegen = CodeGenVisitor(
+        atlas, symbols, symbol_visitor.specialization_map, symbol_visitor._channel_infos
+    )
     program = codegen.generate()
     return program.render()
 

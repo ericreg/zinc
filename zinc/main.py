@@ -46,7 +46,9 @@ def compile(file: Path, output: Path | None):
     symbols = symbol_visitor.resolve()
 
     # Pass 3: Generate Rust code
-    codegen = CodeGenVisitor(atlas, symbols, symbol_visitor.specialization_map)
+    codegen = CodeGenVisitor(
+        atlas, symbols, symbol_visitor.specialization_map, symbol_visitor._channel_infos
+    )
     program = codegen.generate()
     rust_code = program.render()
 
@@ -81,7 +83,9 @@ def tree(file: Path):
     symbols = symbol_visitor.resolve()
 
     # Pass 3: Generate Rust code
-    codegen = CodeGenVisitor(atlas, symbols, symbol_visitor.specialization_map)
+    codegen = CodeGenVisitor(
+        atlas, symbols, symbol_visitor.specialization_map, symbol_visitor._channel_infos
+    )
     program = codegen.generate()
     click.echo(program)
 

@@ -5,7 +5,7 @@ from enum import Enum, auto
 
 from antlr4 import ParserRuleContext
 
-from zinc.ast.types import BaseType, TypeInfo, parse_literal, is_mutating_method, type_to_rust
+from zinc.ast.types import BaseType, TypeInfo, parse_literal, is_mutating_method, type_to_rust, ChannelTypeInfo
 from zinc.parser.zincVisitor import zincVisitor
 from zinc.parser.zincParser import zincParser as ZincParser
 from zinc.atlas import Atlas, FunctionInstance, ConstInstance
@@ -138,6 +138,8 @@ class SymbolTableVisitor(zincVisitor):
         self._current_return_type: BaseType = BaseType.VOID  # Track return type during resolution
         # Maps call site interval -> mangled name for CodeGen to use
         self.specialization_map: dict[tuple[int, int], str] = {}
+        # Track channel variables and their type info (var_name -> ChannelTypeInfo)
+        self._channel_infos: dict[str, ChannelTypeInfo] = {}
 
     def resolve(self) -> SymbolTable:
         """Main entry point - resolve types for all reachable code.
@@ -232,6 +234,9 @@ class SymbolTableVisitor(zincVisitor):
                     resolved_type=param_type,
                     interval=param_ctx.getSourceInterval(),
                 )
+                # Track channel parameters for element type inference
+                if param_type == BaseType.CHANNEL and i in func.arg_channel_infos:
+                    self._channel_infos[param_name] = func.arg_channel_infos[i]
 
         # Visit function body (skip parameter list since we handled it)
         if hasattr(ctx, "block"):
@@ -501,6 +506,17 @@ class SymbolTableVisitor(zincVisitor):
             var_name = target.IDENTIFIER().getText()
             existing = self.symbols.lookup_by_id(var_name)
 
+            # Check if this is a chan() call - track channel info
+            if expr_type == BaseType.CHANNEL:
+                expr = ctx.expression()
+                if isinstance(expr, ZincParser.FunctionCallExprContext):
+                    callee = expr.expression()
+                    if isinstance(callee, ZincParser.PrimaryExprContext):
+                        primary = callee.primaryExpression()
+                        if primary and primary.IDENTIFIER() and primary.IDENTIFIER().getText() == "chan":
+                            # Create ChannelTypeInfo for this channel variable
+                            self._channel_infos[var_name] = ChannelTypeInfo(element_type=BaseType.UNKNOWN)
+
             if existing is None:
                 # First assignment - create new symbol
                 self.symbols.define(
@@ -610,12 +626,22 @@ class SymbolTableVisitor(zincVisitor):
             if primary and primary.IDENTIFIER():
                 func_name = primary.IDENTIFIER().getText()
 
-                # Collect argument types
+                # Collect argument types and track channel arguments
                 arg_types: list[BaseType] = []
+                arg_channel_infos: dict[int, ChannelTypeInfo] = {}
                 if ctx.argumentList():
-                    for arg_expr in ctx.argumentList().expression():
+                    for i, arg_expr in enumerate(ctx.argumentList().expression()):
                         arg_type = self.visit(arg_expr)
                         arg_types.append(arg_type)
+
+                        # Check if argument is a channel variable
+                        if arg_type == BaseType.CHANNEL:
+                            if isinstance(arg_expr, ZincParser.PrimaryExprContext):
+                                arg_primary = arg_expr.primaryExpression()
+                                if arg_primary and arg_primary.IDENTIFIER():
+                                    chan_var = arg_primary.IDENTIFIER().getText()
+                                    if chan_var in self._channel_infos:
+                                        arg_channel_infos[i] = self._channel_infos[chan_var]
 
                 # Create specialization for the spawned function
                 if func_name not in ("print", "chan"):
@@ -628,3 +654,43 @@ class SymbolTableVisitor(zincVisitor):
                         self.specialization_map[ctx.getSourceInterval()] = mangled
                         # Mark the function as async since it's being spawned
                         self.atlas.functions[mangled].is_async = True
+                        # Propagate channel type info to the function instance
+                        self.atlas.functions[mangled].arg_channel_infos = arg_channel_infos
+
+    def visitChannelSendStatement(self, ctx: ZincParser.ChannelSendStatementContext) -> None:
+        """Visit channel send statement and infer channel element type."""
+        # Grammar: IDENTIFIER '<-' expression
+        channel_name = ctx.IDENTIFIER().getText()
+        value_type = self.visit(ctx.expression())
+
+        # Update channel info with inferred element type
+        if channel_name in self._channel_infos:
+            chan_info = self._channel_infos[channel_name]
+            if chan_info.element_type == BaseType.UNKNOWN:
+                chan_info.element_type = value_type
+
+    def visitChannelReceiveExpr(self, ctx: ZincParser.ChannelReceiveExprContext) -> BaseType:
+        """Visit channel receive expression."""
+        # Grammar: '<-' expression
+        # The expression should be a channel variable
+        chan_expr = ctx.expression()
+        self.visit(chan_expr)
+
+        # Try to get channel name and look up element type
+        if isinstance(chan_expr, ZincParser.PrimaryExprContext):
+            primary = chan_expr.primaryExpression()
+            if primary and primary.IDENTIFIER():
+                channel_name = primary.IDENTIFIER().getText()
+                if channel_name in self._channel_infos:
+                    elem_type = self._channel_infos[channel_name].element_type
+                    self.symbols.define_temp(
+                        resolved_type=elem_type,
+                        interval=ctx.getSourceInterval(),
+                    )
+                    return elem_type
+
+        self.symbols.define_temp(
+            resolved_type=BaseType.UNKNOWN,
+            interval=ctx.getSourceInterval(),
+        )
+        return BaseType.UNKNOWN

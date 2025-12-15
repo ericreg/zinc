@@ -7,7 +7,7 @@ from zinc.parser.zincVisitor import zincVisitor
 from zinc.parser.zincParser import zincParser as ZincParser
 from zinc.atlas import Atlas, FunctionInstance, StructInstance, ConstInstance
 from zinc.symbols import SymbolTable, SymbolKind
-from zinc.ast.types import BaseType, type_to_rust
+from zinc.ast.types import BaseType, type_to_rust, ChannelTypeInfo
 
 
 @dataclass
@@ -66,10 +66,12 @@ class CodeGenVisitor(zincVisitor):
         atlas: Atlas,
         symbols: SymbolTable,
         specialization_map: dict[tuple[int, int], str] | None = None,
+        channel_infos: dict[str, ChannelTypeInfo] | None = None,
     ):
         self.atlas = atlas
         self.symbols = symbols
         self._specialization_map = specialization_map or {}
+        self._channel_infos = channel_infos or {}  # var_name -> ChannelTypeInfo
         self._uses_async = False
         self._current_function: str | None = None
         self._declared_vars: set[str] = set()
@@ -151,7 +153,12 @@ class CodeGenVisitor(zincVisitor):
             for i, param_ctx in enumerate(ctx.parameterList().parameter()):
                 param_name = param_ctx.IDENTIFIER().getText()
                 if i < len(func.arg_types):
-                    type_str = type_to_rust(func.arg_types[i])
+                    # Check if this is a channel parameter with type info
+                    if i in func.arg_channel_infos:
+                        chan_info = func.arg_channel_infos[i]
+                        type_str = chan_info.to_rust_sender()
+                    else:
+                        type_str = type_to_rust(func.arg_types[i])
                     params.append(f"{param_name}: {type_str}")
                 else:
                     params.append(param_name)
@@ -350,7 +357,16 @@ class CodeGenVisitor(zincVisitor):
 
     def visitChannelReceiveExpr(self, ctx: ZincParser.ChannelReceiveExprContext) -> str:
         """Visit channel receive expression."""
-        receiver = self.visit(ctx.expression())
+        # Get the channel variable name and use _rx suffix
+        chan_expr = ctx.expression()
+        if isinstance(chan_expr, ZincParser.PrimaryExprContext):
+            primary = chan_expr.primaryExpression()
+            if primary and primary.IDENTIFIER():
+                chan_name = primary.IDENTIFIER().getText()
+                # Check if this is a channel we created (in main)
+                if chan_name in self._channel_infos:
+                    return f"{chan_name}_rx.recv().await.unwrap()"
+        receiver = self.visit(chan_expr)
         return f"{receiver}.recv().await.unwrap()"
 
     def visitStructInstantiation(self, ctx: ZincParser.StructInstantiationContext) -> str:
@@ -369,7 +385,27 @@ class CodeGenVisitor(zincVisitor):
     def visitVariableAssignment(self, ctx: ZincParser.VariableAssignmentContext) -> str:
         """Visit variable assignment with shadowing support."""
         target = ctx.assignmentTarget().getText()
-        value = self.visit(ctx.expression())
+
+        # Check if this is a chan() call - generate tuple destructuring
+        expr = ctx.expression()
+        if isinstance(expr, ZincParser.FunctionCallExprContext):
+            callee = expr.expression()
+            if isinstance(callee, ZincParser.PrimaryExprContext):
+                primary = callee.primaryExpression()
+                if primary and primary.IDENTIFIER() and primary.IDENTIFIER().getText() == "chan":
+                    var_name = target
+                    # Look up channel info to get element type
+                    if var_name in self._channel_infos:
+                        chan_info = self._channel_infos[var_name]
+                        elem_type = type_to_rust(chan_info.element_type)
+                        self._declared_vars.add(var_name)
+                        return f"let ({var_name}_tx, mut {var_name}_rx) = tokio::sync::mpsc::unbounded_channel::<{elem_type}>();"
+                    else:
+                        # Fallback - unknown element type
+                        self._declared_vars.add(var_name)
+                        return f"let ({var_name}_tx, mut {var_name}_rx) = tokio::sync::mpsc::unbounded_channel();"
+
+        value = self.visit(expr)
 
         if ctx.assignmentTarget().IDENTIFIER():
             var_name = target
@@ -471,7 +507,16 @@ class CodeGenVisitor(zincVisitor):
         func_name = self.visit(ctx.expression())
         args = []
         if ctx.argumentList():
-            args = [self.visit(arg) for arg in ctx.argumentList().expression()]
+            for arg in ctx.argumentList().expression():
+                arg_code = self.visit(arg)
+                # Check if this argument is a channel - use _tx suffix
+                if isinstance(arg, ZincParser.PrimaryExprContext):
+                    primary = arg.primaryExpression()
+                    if primary and primary.IDENTIFIER():
+                        var_name = primary.IDENTIFIER().getText()
+                        if var_name in self._channel_infos:
+                            arg_code = f"{var_name}_tx"
+                args.append(arg_code)
 
         # Look up mangled name from specialization map
         mangled = self._specialization_map.get(ctx.getSourceInterval())
