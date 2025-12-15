@@ -32,7 +32,7 @@ python -m zinc.main check program.zn
 
 Variables are declared by assignment. The same variable can be reassigned to different types:
 
-```zinc
+```rust
 fn main() {
     x = 1           // integer
     x = 3.14        // reassign to float
@@ -46,7 +46,7 @@ fn main() {
 
 Functions are declared with `fn`. Parameters don't require type annotations - the compiler infers types through monomorphization:
 
-```zinc
+```rust
 fn add(a, b) {
     return a + b
 }
@@ -67,7 +67,7 @@ The compiler creates specialized versions of functions based on the argument typ
 
 Parentheses around conditions are optional:
 
-```zinc
+```rust
 fn main() {
     x = 10
 
@@ -95,7 +95,7 @@ fn main() {
 
 Iterate over arrays with `for...in`:
 
-```zinc
+```rust
 fn main() {
     a = [1, 2, 3]
 
@@ -109,7 +109,7 @@ fn main() {
 
 Pattern matching with range support:
 
-```zinc
+```rust
 fn main() {
     age = 25
 
@@ -131,7 +131,7 @@ fn main() {
 
 Arrays are created with bracket syntax. They're automatically promoted to vectors when using `.push()`:
 
-```zinc
+```rust
 fn main() {
     // Fixed array
     a = [1, 2, 3]
@@ -156,7 +156,7 @@ fn main() {
 
 Structs support fields with default values, static methods, and instance methods:
 
-```zinc
+```rust
 struct Counter {
     count: 0      // field with default value
     step: 1
@@ -208,7 +208,7 @@ fn main() {
 
 **Private Fields:** Prefix field names with `_` to make them private:
 
-```zinc
+```rust
 struct Person {
     _secret: "hidden"    // private field
     name: ""             // public field
@@ -223,7 +223,7 @@ Zinc provides Go-style concurrency with channels and spawn.
 
 Create channels with `chan()` (unbounded) or `chan(n)` (bounded with capacity n):
 
-```zinc
+```rust
 fn tx(x, send_x) {
     send_x <- x          // send value to channel
 }
@@ -245,7 +245,7 @@ fn main() {
 
 Use `spawn` to run functions concurrently (compiles to `tokio::spawn`):
 
-```zinc
+```rust
 fn greet(x) {
     print("{x}")
 }
@@ -260,7 +260,7 @@ fn main() {
 
 Handle multiple channel operations:
 
-```zinc
+```rust
 loop {
     select {
         case await event1() {
@@ -277,7 +277,7 @@ loop {
 
 Use `{expression}` inside strings for interpolation:
 
-```zinc
+```rust
 fn main() {
     name = "Alice"
     age = 30
@@ -289,7 +289,7 @@ fn main() {
 
 Define global constants with `const`:
 
-```zinc
+```rust
 const PI = 3.14159
 const MAX_SIZE = 100
 
