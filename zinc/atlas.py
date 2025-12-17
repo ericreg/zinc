@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 from antlr4 import ParserRuleContext
+from sortedcontainers import SortedDict, SortedSet
 
 from zinc.ast.types import BaseType, type_to_rust, ChannelTypeInfo
 from zinc.parser.zincVisitor import zincVisitor
@@ -28,7 +29,7 @@ class StructInstance:
 
     name: str
     ctx: ParserRuleContext
-    methods_used: set[str] = field(default_factory=set)  # Which methods are actually called
+    methods_used: SortedSet[str] = field(default_factory=SortedSet)  # Which methods are actually called
 
 
 @dataclass
@@ -47,25 +48,25 @@ class Atlas:
     main: FunctionInstance
 
     # All reachable functions (keyed by mangled_name)
-    functions: dict[str, FunctionInstance] = field(default_factory=dict)
+    functions: SortedDict[str, FunctionInstance] = field(default_factory=SortedDict)
 
     # All reachable structs (keyed by struct name)
-    structs: dict[str, StructInstance] = field(default_factory=dict)
+    structs: SortedDict[str, StructInstance] = field(default_factory=SortedDict)
 
     # All reachable global constants (keyed by const name)
-    consts: dict[str, ConstInstance] = field(default_factory=dict)
+    consts: SortedDict[str, ConstInstance] = field(default_factory=SortedDict)
 
     # Call graph: caller mangled_name -> set of callee mangled_names
-    calls: dict[str, set[str]] = field(default_factory=dict)
+    calls: SortedDict[str, SortedSet[str]] = field(default_factory=SortedDict)
 
     # Struct usage: func mangled_name -> set of struct names used
-    struct_usages: dict[str, set[str]] = field(default_factory=dict)
+    struct_usages: SortedDict[str, SortedSet[str]] = field(default_factory=SortedDict)
 
     # Const usage: func mangled_name -> set of const names used
-    const_usages: dict[str, set[str]] = field(default_factory=dict)
+    const_usages: SortedDict[str, SortedSet[str]] = field(default_factory=SortedDict)
 
     # Raw function definitions (name -> ctx) for specialization creation
-    function_defs: dict[str, ParserRuleContext] = field(default_factory=dict)
+    function_defs: SortedDict[str, ParserRuleContext] = field(default_factory=SortedDict)
 
     def is_reachable(self, name: str) -> bool:
         """Check if a function, struct, or const is reachable."""
@@ -92,7 +93,7 @@ class Atlas:
                 arg_types=list(arg_types),  # Copy to avoid mutation
             )
             # Initialize call graph entry for the new specialization
-            self.calls[mangled] = set()
+            self.calls[mangled] = SortedSet()
 
         # Update call graph: caller calls this specialization
         if caller_mangled and caller_mangled in self.calls:
@@ -141,20 +142,20 @@ class AtlasBuilder(zincVisitor):
 
     def __init__(self):
         # Collected definitions (first pass)
-        self._function_defs: dict[str, ParserRuleContext] = {}  # name -> ctx
-        self._struct_defs: dict[str, ParserRuleContext] = {}  # name -> ctx
-        self._const_defs: dict[str, ParserRuleContext] = {}  # name -> ctx
+        self._function_defs: SortedDict[str, ParserRuleContext] = SortedDict()  # name -> ctx
+        self._struct_defs: SortedDict[str, ParserRuleContext] = SortedDict()  # name -> ctx
+        self._const_defs: SortedDict[str, ParserRuleContext] = SortedDict()  # name -> ctx
         self._main_ctx: ParserRuleContext | None = None
 
         # Reachability tracking
-        self._reachable_functions: dict[str, FunctionInstance] = {}
-        self._reachable_structs: dict[str, StructInstance] = {}
-        self._reachable_consts: dict[str, ConstInstance] = {}
+        self._reachable_functions: SortedDict[str, FunctionInstance] = SortedDict()
+        self._reachable_structs: SortedDict[str, StructInstance] = SortedDict()
+        self._reachable_consts: SortedDict[str, ConstInstance] = SortedDict()
 
         # Graph edges (populated during reachability walk)
-        self._calls: dict[str, set[str]] = {}
-        self._struct_usages: dict[str, set[str]] = {}
-        self._const_usages: dict[str, set[str]] = {}
+        self._calls: SortedDict[str, SortedSet[str]] = SortedDict()
+        self._struct_usages: SortedDict[str, SortedSet[str]] = SortedDict()
+        self._const_usages: SortedDict[str, SortedSet[str]] = SortedDict()
 
         # Current context for edge building
         self._current_function: str | None = None
@@ -218,9 +219,9 @@ class AtlasBuilder(zincVisitor):
                 continue
 
             self._current_function = func_name
-            self._calls[func_name] = set()
-            self._struct_usages[func_name] = set()
-            self._const_usages[func_name] = set()
+            self._calls[func_name] = SortedSet()
+            self._struct_usages[func_name] = SortedSet()
+            self._const_usages[func_name] = SortedSet()
 
             # Walk the function body to find calls, struct usages, and const usages
             self._walk_for_references(func_ctx)
@@ -314,7 +315,7 @@ class AtlasBuilder(zincVisitor):
             self._reachable_structs[struct_name] = StructInstance(
                 name=struct_name,
                 ctx=self._struct_defs[struct_name],
-                methods_used=set(),
+                methods_used=SortedSet(),
             )
 
         if method_name:

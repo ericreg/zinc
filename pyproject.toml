@@ -26,6 +26,7 @@ dependencies = [
   "click==8.1.0",
   "structlog==24.0.0",
   "colorama==0.4.6",
+  "sortedcontainers==2.4.0",
 ]
 
 # Installs all testing dependencies needed when pytest runs. Do NOT put

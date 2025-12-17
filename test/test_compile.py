@@ -1,6 +1,7 @@
 """Parameterized tests for Zinc compilation."""
 
 import subprocess
+from collections import Counter
 from pathlib import Path
 
 import click
@@ -20,6 +21,7 @@ RUST_SOURCE_DIR = TEST_DIR / "rust_source"
 RUST_SRC_DIR = RUST_SOURCE_DIR / "src"  # Cargo src directory
 OUTPUT_DIR = TEST_DIR / "output"
 CARGO_TOML = RUST_SOURCE_DIR / "Cargo.toml"
+NON_DETERMINISTIC_FOLDER = "non_deterministic"
 
 
 def get_test_cases() -> list[str]:
@@ -101,6 +103,53 @@ def compile_zinc(source_code: str) -> str:
     return program.render()
 
 
+# === Non-deterministic test support ===
+
+
+def is_nondeterministic_test(test_path: str) -> bool:
+    """Check if a test should use non-deterministic comparison."""
+    parts = Path(test_path).parts
+    return NON_DETERMINISTIC_FOLDER in parts
+
+
+def lines_as_multiset(text: str) -> Counter[str]:
+    """Convert text to a multiset (Counter) of lines."""
+    return Counter(text.splitlines())
+
+
+def compare_outputs_as_multisets(expected: str, observed: str) -> bool:
+    """Compare two outputs as multisets of lines (ignoring line order)."""
+    return lines_as_multiset(expected) == lines_as_multiset(observed)
+
+
+def format_multiset_diff(expected: str, observed: str) -> str:
+    """Format a helpful diff message for multiset comparison failure."""
+    expected_multiset = lines_as_multiset(expected)
+    observed_multiset = lines_as_multiset(observed)
+
+    missing = expected_multiset - observed_multiset
+    extra = observed_multiset - expected_multiset
+
+    lines = []
+    if missing:
+        lines.append("Missing lines (expected but not found):")
+        for line, count in sorted(missing.items()):
+            lines.append(f"  {repr(line)} x{count}")
+    if extra:
+        lines.append("Extra lines (found but not expected):")
+        for line, count in sorted(extra.items()):
+            lines.append(f"  {repr(line)} x{count}")
+
+    lines.extend([
+        "",
+        f"Expected ({len(expected.splitlines())} lines):",
+        expected,
+        f"Observed ({len(observed.splitlines())} lines):",
+        observed
+    ])
+    return "\n".join(lines)
+
+
 def run_cargo_bin(test_path: str) -> str:
     """Run a test binary using cargo and return its output.
 
@@ -162,11 +211,18 @@ def test_compile(test_path: str) -> None:
     # Output file path mirrors the test path structure
     expected_output_file = OUTPUT_DIR / f"{test_path}.out"
     expected_output = expected_output_file.read_text()
-    assert output == expected_output, (
-        f"Execution output mismatch for {test_path}\n"
-        f"Expected:\n{expected_output}\n"
-        f"Observed:\n{output}"
-    )
+
+    if is_nondeterministic_test(test_path):
+        assert compare_outputs_as_multisets(expected_output, output), (
+            f"Execution output mismatch for {test_path} (non-deterministic comparison)\n"
+            f"{format_multiset_diff(expected_output, output)}"
+        )
+    else:
+        assert output == expected_output, (
+            f"Execution output mismatch for {test_path}\n"
+            f"Expected:\n{expected_output}\n"
+            f"Observed:\n{output}"
+        )
 
 
 @click.command()

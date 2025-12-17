@@ -47,12 +47,12 @@ name = "monomorphization"
 path = "src/monomorphization.rs"
 
 [[bin]]
-name = "reassign_type"
-path = "src/reassign_type.rs"
+name = "non_deterministic_spawn"
+path = "src/non_deterministic/spawn.rs"
 
 [[bin]]
-name = "spawn"
-path = "src/spawn.rs"
+name = "reassign_type"
+path = "src/reassign_type.rs"
 
 [[bin]]
 name = "variable_assignment"

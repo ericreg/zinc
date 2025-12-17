@@ -13,15 +13,32 @@
                 "justMyCode": true,
             "console": "integratedTerminal"
         },
+        {
+            "name": "Debug pytest",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/test/test_compile.py",
+            "args": [
+                "-k",
+                "monomorphization",
+            ],
+            "justMyCode": true,
+            "console": "integratedTerminal"
+        },
+        
 
         {
             "name": "pytest",
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/test/test_compile.py",
+            "args": [
+                "-k",
+                "monomorphization",
+            ],
             "justMyCode": true,
             "console": "integratedTerminal",
-            "args": ["--update-output"]
+            // "args": ["--update-output"]
         }
     ]
 }
