@@ -1,0 +1,105 @@
+// Test: Comprehensive integration test
+// Combines multiple struct features together
+
+struct BankAccount {
+    _account_number: i32    // private field
+    _balance: i32           // private field
+    owner: string           // public field
+    const bank_name: string // const field (set-once)
+
+    // Static constructor
+    fn new(owner, account_number, initial_balance) {
+        return BankAccount {
+            _account_number: account_number
+            _balance: initial_balance
+            owner: owner
+            bank_name: "Zinc Bank"
+        }
+    }
+
+    // Instance method - reads self (&self)
+    fn get_balance() {
+        return self._balance
+    }
+
+    // Instance method - writes self (&mut self)
+    fn deposit(amount) {
+        self._balance = self._balance + amount
+    }
+
+    // Instance method - writes self (&mut self)
+    fn withdraw(amount) {
+        self._balance = self._balance - amount
+    }
+
+    // Instance method with string interpolation (&self)
+    fn summary() {
+        return "Account for {self.owner} at {self.bank_name}"
+    }
+
+    // Static utility method
+    fn transfer_fee() {
+        return 5
+    }
+}
+
+struct Transaction {
+    from_account: string
+    to_account: string
+    amount: i32
+    _processed: bool
+
+    fn new(from, to, amount) {
+        return Transaction {
+            from_account: from
+            to_account: to
+            amount: amount
+            _processed: false
+        }
+    }
+
+    fn mark_processed() {
+        self._processed = true
+    }
+
+    fn is_processed() {
+        return self._processed
+    }
+
+    fn describe() {
+        return "Transfer {self.amount} from {self.from_account} to {self.to_account}"
+    }
+}
+
+fn main() {
+    // Create accounts
+    alice_account = BankAccount.new("Alice", 1001, 1000)
+    bob_account = BankAccount.new("Bob", 1002, 500)
+
+    // Print summaries
+    print(alice_account.summary())
+    print(bob_account.summary())
+
+    // Check balances
+    print(alice_account.get_balance())
+    print(bob_account.get_balance())
+
+    // Alice deposits money
+    alice_account.deposit(200)
+    print(alice_account.get_balance())
+
+    // Create and process a transaction
+    tx = Transaction.new("Alice", "Bob", 100)
+    print(tx.describe())
+
+    // Simulate transfer
+    fee = BankAccount.transfer_fee()
+    alice_account.withdraw(100 + fee)
+    bob_account.deposit(100)
+
+    tx.mark_processed()
+
+    // Final balances
+    print(alice_account.get_balance())
+    print(bob_account.get_balance())
+}

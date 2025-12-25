@@ -6,13 +6,8 @@ struct User {
 }
 
 fn main() {
-    let user = User {
-        _id: 42,
-        _password: String::from("secret123"),
-        username: String::from("alice"),
-        email: String::from("alice@example.com"),
-    };
-    println!("user.username");
-    println!("user.email");
-    println!("user._id");
+    let user = User { _id: 42, _password: String::from("secret123"), username: String::from("alice"), email: String::from("alice@example.com") };
+    println!("{}", user.username);
+    println!("{}", user.email);
+    println!("{}", user._id);
 }

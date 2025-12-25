@@ -320,7 +320,8 @@ Zinc uses a 3-pass compiler:
 - [x] Arrays/lists
 - [x] String interpolation
 - [x] Constants
-- [ ] Structs/objects with methods
+- [x] Structs/objects with methods
+- [ ] Constant folding
 - [ ] While loops
 - [ ] Maps
 - [ ] Sets

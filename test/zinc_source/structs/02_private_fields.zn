@@ -1,0 +1,27 @@
+// Test: Private fields (underscore prefix)
+// Fields starting with _ are private (no pub in Rust output)
+
+struct User {
+    _id: i32           // private field
+    _password: string  // private field
+    username: string   // public field
+    email: string      // public field
+}
+
+fn main() {
+    // Create user with all fields
+    user = User {
+        _id: 42
+        _password: "secret123"
+        username: "alice"
+        email: "alice@example.com"
+    }
+
+    // Access public fields
+    print(user.username)
+    print(user.email)
+
+    // Private fields are still accessible within the module
+    // (privacy is enforced at Rust compile time for external access)
+    print(user._id)
+}

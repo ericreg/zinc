@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 
 from zinc.parser.zincVisitor import zincVisitor
 from zinc.parser.zincParser import zincParser as ZincParser
-from zinc.atlas import Atlas, FunctionInstance, StructInstance, ConstInstance
+from zinc.atlas import Atlas, FunctionInstance, StructInstance, ConstInstance, StructFieldInfo, StructMethodInfo
 from zinc.symbols import SymbolTable, SymbolKind
 from zinc.ast.types import BaseType, type_to_rust, ChannelTypeInfo
 
@@ -76,9 +76,19 @@ class CodeGenVisitor(zincVisitor):
         self._current_function: str | None = None
         self._declared_vars: set[str] = set()
         self._indent_level = 0
+        # Struct tracking
+        self._struct_instance_vars: dict[str, str] = {}  # var_name -> struct_name
+        self._mut_struct_vars: set[str] = set()  # vars that need `let mut`
+        self._current_struct: str | None = None  # When generating struct method
+        self._current_struct_fields: dict[str, StructFieldInfo] | None = None
+        # Track variables that hold compile-time literal values
+        self._literal_vars: set[str] = set()
 
     def generate(self) -> RustProgram:
         """Main entry point - generate Rust code for all reachable code."""
+        # Pre-scan to determine which struct vars need mut
+        self._prescan_for_mut_vars()
+
         imports = self._generate_imports()
         consts = [self._generate_const(c) for c in self.atlas.consts.values()]
         structs = [self._generate_struct(s) for s in self.atlas.structs.values()]
@@ -103,6 +113,91 @@ class CodeGenVisitor(zincVisitor):
             uses_async=self._uses_async,
         )
 
+    def _prescan_for_mut_vars(self) -> None:
+        """Scan all code to find struct variables that call &mut self methods."""
+        main_func = self.atlas.functions.get("main")
+        if main_func:
+            self._prescan_block(main_func.ctx.block())
+
+    def _prescan_block(self, block_ctx) -> None:
+        """Recursively scan a block for struct assignments and method calls."""
+        for stmt_ctx in block_ctx.statement():
+            self._prescan_statement(stmt_ctx)
+
+    def _prescan_statement(self, stmt_ctx) -> None:
+        """Scan a statement for struct tracking and literal variable tracking."""
+        # Track variable assignments of struct instances and literal values
+        if stmt_ctx.variableAssignment():
+            var_ctx = stmt_ctx.variableAssignment()
+            target = var_ctx.assignmentTarget()
+            if target.IDENTIFIER():
+                var_name = target.IDENTIFIER().getText()
+                expr = var_ctx.expression()
+                struct_name = self._detect_struct_assignment(expr)
+                if struct_name:
+                    self._struct_instance_vars[var_name] = struct_name
+                # Track if variable is assigned a compile-time literal value
+                elif self._is_compile_time_literal_expr(expr):
+                    self._literal_vars.add(var_name)
+
+        # Track method calls that require mut
+        if stmt_ctx.expressionStatement():
+            expr = stmt_ctx.expressionStatement().expression()
+            self._check_for_mut_method_call(expr)
+
+        # Recurse into blocks
+        if stmt_ctx.ifStatement():
+            for block in stmt_ctx.ifStatement().block():
+                self._prescan_block(block)
+        if stmt_ctx.forStatement():
+            self._prescan_block(stmt_ctx.forStatement().block())
+        if stmt_ctx.whileStatement():
+            self._prescan_block(stmt_ctx.whileStatement().block())
+        if stmt_ctx.loopStatement():
+            self._prescan_block(stmt_ctx.loopStatement().block())
+
+    def _detect_struct_assignment(self, expr_ctx) -> str | None:
+        """Detect if expression assigns a struct instance, return struct name."""
+        # Direct struct instantiation: Point { x: 1, y: 2 }
+        if isinstance(expr_ctx, ZincParser.PrimaryExprContext):
+            primary = expr_ctx.primaryExpression()
+            if primary and primary.structInstantiation():
+                return primary.structInstantiation().IDENTIFIER().getText()
+
+        # Static method call returning Self: Counter.new(0)
+        if isinstance(expr_ctx, ZincParser.FunctionCallExprContext):
+            callee = expr_ctx.expression()
+            if isinstance(callee, ZincParser.MemberAccessExprContext):
+                target_text = callee.expression().getText()
+                method_name = callee.IDENTIFIER().getText()
+                struct = next((s for s in self.atlas.structs.values() if s.name == target_text), None)
+                if struct:
+                    method = next((m for m in struct.methods if m.name == method_name), None)
+                    if method and method.return_type == "Self":
+                        return target_text
+        return None
+
+    def _check_for_mut_method_call(self, expr_ctx) -> None:
+        """Check if expression is a method call requiring &mut self."""
+        if isinstance(expr_ctx, ZincParser.FunctionCallExprContext):
+            callee = expr_ctx.expression()
+            if isinstance(callee, ZincParser.MemberAccessExprContext):
+                target_ctx = callee.expression()
+                method_name = callee.IDENTIFIER().getText()
+
+                # Get target variable name
+                if isinstance(target_ctx, ZincParser.PrimaryExprContext):
+                    primary = target_ctx.primaryExpression()
+                    if primary and primary.IDENTIFIER():
+                        target_text = primary.IDENTIFIER().getText()
+                        if target_text in self._struct_instance_vars:
+                            struct_name = self._struct_instance_vars[target_text]
+                            struct = next((s for s in self.atlas.structs.values() if s.name == struct_name), None)
+                            if struct:
+                                method = next((m for m in struct.methods if m.name == method_name), None)
+                                if method and method.self_mutability == "&mut self":
+                                    self._mut_struct_vars.add(target_text)
+
     def _generate_imports(self) -> list[str]:
         """Generate import statements based on what's used."""
         imports = []
@@ -122,24 +217,73 @@ class CodeGenVisitor(zincVisitor):
         return f"const {name.upper()} = {value};"
 
     def _generate_struct(self, struct: StructInstance) -> str:
-        """Generate a struct definition."""
-        ctx: ZincParser.StructDeclarationContext = struct.ctx
-        name = struct.name
-        lines = [f"struct {name} {{"]
+        """Generate a struct definition and impl block."""
+        lines = []
 
-        if ctx.structBody():
-            for member in ctx.structBody().structMember():
-                if member.structField():
-                    field = member.structField()
-                    field_name = field.IDENTIFIER().getText()
-                    if field.typeAnnotation():
-                        type_str = field.typeAnnotation().getText()
-                    else:
-                        type_str = "unknown"
-                    lines.append(f"    pub {field_name}: {type_str},")
-
+        # Struct definition
+        lines.append(f"struct {struct.name} {{")
+        for f in struct.fields:
+            vis = "" if f.is_private else "pub "
+            rust_type = f.rust_type()
+            lines.append(f"    {vis}{f.name}: {rust_type},")
         lines.append("}")
+
+        # Impl block (only if there are methods)
+        if struct.methods:
+            lines.append("")
+            lines.append(f"impl {struct.name} {{")
+            for method in struct.methods:
+                method_code = self._generate_struct_method(method, struct)
+                for line in method_code.split("\n"):
+                    lines.append(f"    {line}")
+            lines.append("}")
+
         return "\n".join(lines)
+
+    def _generate_struct_method(self, method: StructMethodInfo, struct: StructInstance) -> str:
+        """Generate a single struct method."""
+        # Build parameter list
+        param_strs = []
+        if not method.is_static:
+            param_strs.append(method.self_mutability or "&self")
+
+        for name, type_ann, resolved in method.parameters:
+            if type_ann:
+                param_strs.append(f"{name}: {self._zinc_type_to_rust(type_ann)}")
+            elif resolved:
+                param_strs.append(f"{name}: {resolved}")
+            else:
+                param_strs.append(f"{name}: i64")  # Default fallback
+
+        params = ", ".join(param_strs)
+        ret_type = f" -> {method.return_type}" if method.return_type else ""
+
+        # Generate body
+        self._current_struct = struct.name
+        self._current_struct_fields = {f.name: f for f in struct.fields}
+        body_stmts = self._generate_block(method.body_ctx)
+        self._current_struct = None
+        self._current_struct_fields = None
+
+        lines = [f"fn {method.name}({params}){ret_type} {{"]
+        for stmt in body_stmts:
+            for line in stmt.split("\n"):
+                lines.append(f"    {line}")
+        lines.append("}")
+
+        return "\n".join(lines)
+
+    def _zinc_type_to_rust(self, zinc_type: str) -> str:
+        """Convert Zinc type annotation to Rust type."""
+        mapping = {
+            "i32": "i32",
+            "i64": "i64",
+            "f32": "f32",
+            "f64": "f64",
+            "string": "String",
+            "bool": "bool",
+        }
+        return mapping.get(zinc_type.lower(), zinc_type)
 
     def _generate_function(self, func: FunctionInstance) -> str:
         """Generate a function definition using mangled name."""
@@ -314,20 +458,58 @@ class CodeGenVisitor(zincVisitor):
         return f"{start}..{end}"
 
     def visitMemberAccessExpr(self, ctx: ZincParser.MemberAccessExprContext) -> str:
-        """Visit member access."""
-        obj = self.visit(ctx.expression())
+        """Visit member access - could be field access or static method reference."""
+        target_text = ctx.expression().getText()
         member = ctx.IDENTIFIER().getText()
+
+        # Check if target is a struct type (for static method calls)
+        struct_names = [s.name for s in self.atlas.structs.values()]
+        if target_text in struct_names:
+            # Return struct::method format for function call handler
+            return f"{target_text}::{member}"
+
+        # Regular member access (field or instance method)
+        obj = self.visit(ctx.expression())
         return f"{obj}.{member}"
 
     def visitFunctionCallExpr(self, ctx: ZincParser.FunctionCallExprContext) -> str:
-        """Visit function call, using mangled name for user-defined functions."""
-        callee = self.visit(ctx.expression())
+        """Visit function call, handling static and instance method calls."""
+        callee_ctx = ctx.expression()
         args = []
+        arg_ctxs = []
         if ctx.argumentList():
-            args = [self.visit(arg) for arg in ctx.argumentList().expression()]
+            arg_ctxs = list(ctx.argumentList().expression())
+            args = [self.visit(arg) for arg in arg_ctxs]
+
+        # Get callee text first to check for static method
+        callee = self.visit(callee_ctx)
 
         if callee == "print":
             return self._render_print_call(args)
+
+        # Static method call (StructName::method)
+        if "::" in callee:
+            struct_name, method_name = callee.split("::")
+            struct = next((s for s in self.atlas.structs.values() if s.name == struct_name), None)
+            if struct:
+                args = self._process_method_args(struct, method_name, args, arg_ctxs)
+            return f"{callee}({', '.join(args)})"
+
+        # Instance method call (obj.method) - already visited, callee is "obj.method"
+        if isinstance(callee_ctx, ZincParser.MemberAccessExprContext):
+            # Check if this is an instance method on a struct variable
+            target_ctx = callee_ctx.expression()
+            method_name = callee_ctx.IDENTIFIER().getText()
+            if isinstance(target_ctx, ZincParser.PrimaryExprContext):
+                primary = target_ctx.primaryExpression()
+                if primary and primary.IDENTIFIER():
+                    target_var = primary.IDENTIFIER().getText()
+                    if target_var in self._struct_instance_vars:
+                        struct_name = self._struct_instance_vars[target_var]
+                        struct = next((s for s in self.atlas.structs.values() if s.name == struct_name), None)
+                        if struct:
+                            args = self._process_method_args(struct, method_name, args, arg_ctxs)
+            return f"{callee}({', '.join(args)})"
 
         # Look up mangled name from specialization map
         mangled = self._specialization_map.get(ctx.getSourceInterval())
@@ -335,6 +517,136 @@ class CodeGenVisitor(zincVisitor):
             return f"{mangled}({', '.join(args)})"
 
         return f"{callee}({', '.join(args)})"
+
+    def _process_method_args(
+        self,
+        struct: StructInstance,
+        method_name: str,
+        args: list[str],
+        arg_ctxs: list | None = None,
+    ) -> list[str]:
+        """Process method arguments: String conversion and integer narrowing."""
+        method = next((m for m in struct.methods if m.name == method_name), None)
+        if not method:
+            return args
+
+        processed = []
+        for i, arg in enumerate(args):
+            if i < len(method.parameters):
+                _, type_ann, resolved = method.parameters[i]
+                param_type = type_ann or resolved
+
+                # Convert string literal to String::from() for String parameters
+                if param_type and param_type.lower() == "string" and arg.startswith('"'):
+                    processed.append(f"String::from({arg})")
+                # Apply integer narrowing for literals
+                elif param_type and param_type in ("i32", "i64"):
+                    arg_ctx = arg_ctxs[i] if arg_ctxs and i < len(arg_ctxs) else None
+                    narrowed = self._apply_literal_narrowing(arg, param_type, arg_ctx)
+                    processed.append(narrowed)
+                else:
+                    processed.append(arg)
+            else:
+                processed.append(arg)
+
+        return processed
+
+    def _apply_literal_narrowing(
+        self, arg: str, target_type: str, arg_ctx=None
+    ) -> str:
+        """Apply safe integer narrowing when argument is a literal expression.
+
+        Only narrows when the argument is:
+        1. A direct numeric literal (e.g., 5, 100)
+        2. An expression containing only literals and calls to functions returning literals
+        """
+        if target_type not in ("i32", "i64"):
+            return arg
+
+        # Check if the expression contains only compile-time known values
+        if self._is_compile_time_literal_expr(arg_ctx):
+            # If target is i32 and we have an i64-inferred expression, cast it
+            if target_type == "i32":
+                # Wrap the expression with an explicit cast
+                return f"({arg}) as i32"
+
+        return arg
+
+    def _is_compile_time_literal_expr(self, ctx) -> bool:
+        """Check if expression contains only compile-time known literal values.
+
+        Returns True for:
+        - Numeric literals
+        - Expressions of literals (e.g., 100 + 5)
+        - Calls to static methods that return literal values
+        - Variables that were assigned compile-time literal values
+        """
+        if ctx is None:
+            return False
+
+        # Direct literal
+        if isinstance(ctx, ZincParser.PrimaryExprContext):
+            primary = ctx.primaryExpression()
+            if primary:
+                if primary.literal():
+                    lit_text = primary.literal().getText()
+                    # Check if it's a numeric literal (not a string)
+                    if lit_text and not lit_text.startswith('"'):
+                        return True
+                # Variable reference - check if it's a known literal variable
+                if primary.IDENTIFIER():
+                    var_name = primary.IDENTIFIER().getText()
+                    return var_name in self._literal_vars
+            return False
+
+        # Binary expressions (additive, multiplicative)
+        if isinstance(ctx, (ZincParser.AdditiveExprContext, ZincParser.MultiplicativeExprContext)):
+            left = ctx.expression(0)
+            right = ctx.expression(1)
+            return self._is_compile_time_literal_expr(left) and self._is_compile_time_literal_expr(right)
+
+        # Parenthesized expression
+        if isinstance(ctx, ZincParser.ParenExprContext):
+            return self._is_compile_time_literal_expr(ctx.expression())
+
+        # Function call - check if it's a static method returning a literal
+        if isinstance(ctx, ZincParser.FunctionCallExprContext):
+            callee_ctx = ctx.expression()
+            if isinstance(callee_ctx, ZincParser.MemberAccessExprContext):
+                target_text = callee_ctx.expression().getText()
+                method_name = callee_ctx.IDENTIFIER().getText()
+                # Check if this is a static method call on a struct
+                struct = next((s for s in self.atlas.structs.values() if s.name == target_text), None)
+                if struct:
+                    method = next((m for m in struct.methods if m.name == method_name), None)
+                    if method and method.is_static and method.body_ctx:
+                        # Check if method body is just "return <literal>"
+                        return self._method_returns_literal(method.body_ctx)
+            return False
+
+        return False
+
+    def _method_returns_literal(self, block_ctx) -> bool:
+        """Check if a method body is just 'return <literal>'."""
+        if not block_ctx:
+            return False
+        stmts = block_ctx.statement()
+        if len(stmts) != 1:
+            return False
+        stmt = stmts[0]
+        if not stmt.returnStatement():
+            return False
+        ret_stmt = stmt.returnStatement()
+        if not ret_stmt.expression():
+            return False
+        expr = ret_stmt.expression()
+        # Check if expression is a literal
+        if isinstance(expr, ZincParser.PrimaryExprContext):
+            primary = expr.primaryExpression()
+            if primary and primary.literal():
+                lit_text = primary.literal().getText()
+                return lit_text and not lit_text.startswith('"')
+        return False
 
     def _render_print_call(self, args: list[str]) -> str:
         """Render a print() call as println!()."""
@@ -372,13 +684,35 @@ class CodeGenVisitor(zincVisitor):
     def visitStructInstantiation(self, ctx: ZincParser.StructInstantiationContext) -> str:
         """Visit struct instantiation."""
         name = ctx.IDENTIFIER().getText()
-        fields = []
+
+        # Get provided field values
+        provided_fields: dict[str, str] = {}
         for field_ctx in ctx.fieldInit():
             field_name = field_ctx.IDENTIFIER().getText()
             field_value = self.visit(field_ctx.expression())
-            fields.append(f"{field_name}: {field_value}")
-        fields_str = ", ".join(fields)
-        return f"{name} {{ {fields_str} }}"
+            provided_fields[field_name] = field_value
+
+        # Look up struct definition to get all fields with defaults
+        struct = next((s for s in self.atlas.structs.values() if s.name == name), None)
+        if struct:
+            fields = []
+            for f in struct.fields:
+                if f.name in provided_fields:
+                    value = provided_fields[f.name]
+                    # Convert string literals to String::from() for String fields
+                    if f.rust_type() == "String" and value.startswith('"'):
+                        value = f"String::from({value})"
+                    fields.append(f"{f.name}: {value}")
+                else:
+                    # Use default value
+                    fields.append(f"{f.name}: {f.rust_default()}")
+            fields_str = ", ".join(fields)
+            return f"{name} {{ {fields_str} }}"
+        else:
+            # Fallback - just use provided fields
+            fields = [f"{k}: {v}" for k, v in provided_fields.items()]
+            fields_str = ", ".join(fields)
+            return f"{name} {{ {fields_str} }}"
 
     # --- Statement Visitors (return Rust statement strings) ---
 
@@ -419,7 +753,9 @@ class CodeGenVisitor(zincVisitor):
             if symbol.is_shadow or var_name not in self._declared_vars:
                 # First declaration OR shadow (type change) -> use let
                 self._declared_vars.add(var_name)
-                if symbol.is_mutated:
+                # Check if this is a struct var that needs mut
+                needs_mut = symbol.is_mutated or var_name in self._mut_struct_vars
+                if needs_mut:
                     return f"let mut {var_name} = {value};"
                 return f"let {var_name} = {value};"
             else:

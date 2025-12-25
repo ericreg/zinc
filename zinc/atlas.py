@@ -24,12 +24,74 @@ class FunctionInstance:
 
 
 @dataclass
+class StructFieldInfo:
+    """Analyzed struct field information."""
+
+    name: str
+    type_annotation: str | None = None  # Explicit type like "i32", "string"
+    default_value: str | None = None  # Default value expression text
+    is_private: bool = False  # Starts with _
+    is_const: bool = False  # Has 'const' modifier
+    resolved_type: BaseType = field(default=BaseType.UNKNOWN)
+
+    def rust_type(self) -> str:
+        """Get Rust type string for this field."""
+        if self.type_annotation:
+            # Map zinc types to Rust
+            mapping = {
+                "i32": "i32",
+                "i64": "i64",
+                "f32": "f32",
+                "f64": "f64",
+                "string": "String",
+                "bool": "bool",
+            }
+            return mapping.get(self.type_annotation.lower(), self.type_annotation)
+        return type_to_rust(self.resolved_type)
+
+    def rust_default(self) -> str:
+        """Get Rust default value for this field."""
+        if self.default_value:
+            # Handle string literals
+            if self.rust_type() == "String" and self.default_value.startswith('"'):
+                return f"String::from({self.default_value})"
+            return self.default_value
+        # Zero-initialize based on type
+        defaults = {
+            "i32": "0",
+            "i64": "0",
+            "f32": "0.0",
+            "f64": "0.0",
+            "String": "String::new()",
+            "bool": "false",
+        }
+        return defaults.get(self.rust_type(), "Default::default()")
+
+
+@dataclass
+class StructMethodInfo:
+    """Analyzed struct method information."""
+
+    name: str
+    parameters: list[tuple[str, str | None, str | None]] = field(
+        default_factory=list
+    )  # (name, type_annotation, resolved_type)
+    is_static: bool = False  # True if no self usage
+    self_mutability: str | None = None  # None, "&self", or "&mut self"
+    return_type: str | None = None
+    body_ctx: ParserRuleContext | None = None  # For codegen
+
+
+@dataclass
 class StructInstance:
     """A struct that is used in the program."""
 
     name: str
     ctx: ParserRuleContext
     methods_used: SortedSet[str] = field(default_factory=SortedSet)  # Which methods are actually called
+    # Analyzed data (populated by SymbolTableVisitor)
+    fields: list[StructFieldInfo] = field(default_factory=list)
+    methods: list[StructMethodInfo] = field(default_factory=list)
 
 
 @dataclass

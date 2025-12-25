@@ -8,7 +8,7 @@ from antlr4 import ParserRuleContext
 from zinc.ast.types import BaseType, TypeInfo, parse_literal, is_mutating_method, type_to_rust, ChannelTypeInfo
 from zinc.parser.zincVisitor import zincVisitor
 from zinc.parser.zincParser import zincParser as ZincParser
-from zinc.atlas import Atlas, FunctionInstance, ConstInstance
+from zinc.atlas import Atlas, FunctionInstance, ConstInstance, StructFieldInfo, StructMethodInfo
 
 
 class SymbolKind(Enum):
@@ -153,6 +153,10 @@ class SymbolTableVisitor(zincVisitor):
         for const in self.atlas.consts.values():
             self._resolve_const(const)
 
+        # Analyze structs before processing functions
+        for struct in self.atlas.structs.values():
+            self._analyze_struct(struct)
+
         # Process in reverse topological order (callers before callees)
         # This ensures we see call sites and create specializations before
         # processing the callee function
@@ -191,6 +195,351 @@ class SymbolTableVisitor(zincVisitor):
             resolved_type=BaseType.CHANNEL,
             interval=(-1, -1),
         )
+
+    def _analyze_struct(self, struct) -> None:
+        """Analyze a struct declaration and populate fields/methods."""
+        ctx = struct.ctx
+
+        # Parse fields
+        struct.fields = self._parse_struct_fields(ctx)
+
+        # Build field type map for parameter inference
+        field_types: dict[str, str] = {}
+        for f in struct.fields:
+            field_types[f.name] = f.rust_type()
+
+        # Analyze methods
+        struct.methods = []
+        if ctx.structBody():
+            for member in ctx.structBody().structMember():
+                if member.functionDeclaration():
+                    method = self._analyze_struct_method(
+                        member.functionDeclaration(), field_types, struct.name
+                    )
+                    struct.methods.append(method)
+
+    def _parse_struct_fields(self, ctx) -> list[StructFieldInfo]:
+        """Parse struct field declarations from parse tree."""
+        fields = []
+        if not ctx.structBody():
+            return fields
+
+        for member in ctx.structBody().structMember():
+            if not member.structField():
+                continue
+
+            field_ctx = member.structField()
+
+            # Check for const modifier - it's the first child if present
+            is_const = False
+            first_child = field_ctx.getChild(0)
+            if first_child and first_child.getText() == "const":
+                is_const = True
+
+            name = field_ctx.IDENTIFIER().getText()
+            type_ann = None
+            default_val = None
+            resolved_type = BaseType.UNKNOWN
+
+            # Field can have type annotation OR default value expression
+            if field_ctx.type_():
+                type_ann = field_ctx.type_().getText()
+                # Map to BaseType
+                type_map = {
+                    "i32": BaseType.INTEGER,
+                    "i64": BaseType.INTEGER,
+                    "f32": BaseType.FLOAT,
+                    "f64": BaseType.FLOAT,
+                    "string": BaseType.STRING,
+                    "bool": BaseType.BOOLEAN,
+                }
+                resolved_type = type_map.get(type_ann.lower(), BaseType.UNKNOWN)
+            elif field_ctx.expression():
+                default_val = field_ctx.expression().getText()
+                # Try to infer type from literal
+                try:
+                    resolved_type = parse_literal(default_val)
+                except ValueError:
+                    resolved_type = BaseType.UNKNOWN
+
+            fields.append(
+                StructFieldInfo(
+                    name=name,
+                    type_annotation=type_ann,
+                    default_value=default_val,
+                    is_private=name.startswith("_"),
+                    is_const=is_const,
+                    resolved_type=resolved_type,
+                )
+            )
+
+        return fields
+
+    def _analyze_struct_method(
+        self, ctx: ZincParser.FunctionDeclarationContext, field_types: dict[str, str], struct_name: str
+    ) -> StructMethodInfo:
+        """Analyze a struct method for static/instance and self mutability."""
+        name = ctx.IDENTIFIER().getText()
+
+        # Parse parameters
+        parameters: list[tuple[str, str | None, str | None]] = []
+        if ctx.parameterList():
+            for param_ctx in ctx.parameterList().parameter():
+                param_name = param_ctx.IDENTIFIER().getText()
+                param_type = param_ctx.type_().getText() if param_ctx.type_() else None
+                parameters.append((param_name, param_type, None))
+
+        # Track self usage in method body
+        self_reads, self_writes = self._track_self_usage(ctx.block())
+
+        # Determine static vs instance
+        is_static = not (self_reads or self_writes)
+        if is_static:
+            self_mutability = None
+        elif self_writes:
+            self_mutability = "&mut self"
+        else:
+            self_mutability = "&self"
+
+        # Infer parameter types from usage
+        resolved_params = self._infer_method_params(ctx.block(), parameters, field_types)
+
+        # Infer return type
+        return_type = self._infer_return_type(ctx.block(), struct_name, field_types)
+
+        return StructMethodInfo(
+            name=name,
+            parameters=resolved_params,
+            is_static=is_static,
+            self_mutability=self_mutability,
+            return_type=return_type,
+            body_ctx=ctx.block(),
+        )
+
+    def _track_self_usage(self, block_ctx) -> tuple[bool, bool]:
+        """Walk a block and track self reads and writes. Returns (reads, writes)."""
+        reads = False
+        writes = False
+
+        def walk(node):
+            nonlocal reads, writes
+            if node is None:
+                return
+
+            # Check for self.field = ... (write) - must check before read
+            if isinstance(node, ZincParser.VariableAssignmentContext):
+                target = node.assignmentTarget()
+                # Check if target is a member access on self
+                if target.memberAccess():
+                    member = target.memberAccess()
+                    target_expr = member.expression()
+                    # Check if expression is 'self'
+                    if isinstance(target_expr, ZincParser.PrimaryExprContext):
+                        primary = target_expr.primaryExpression()
+                        if primary and primary.getText() == "self":
+                            writes = True
+
+            # Check for self.field access (read) via member access expression
+            if isinstance(node, ZincParser.MemberAccessExprContext):
+                target_expr = node.expression()
+                if isinstance(target_expr, ZincParser.PrimaryExprContext):
+                    primary = target_expr.primaryExpression()
+                    if primary and primary.getText() == "self":
+                        reads = True
+
+            # Check for self in string interpolations
+            if isinstance(node, ZincParser.LiteralContext):
+                if node.STRING():
+                    text = node.STRING().getText()
+                    if "{self." in text:
+                        reads = True
+
+            # Recurse into children
+            if hasattr(node, "getChildCount"):
+                for i in range(node.getChildCount()):
+                    child = node.getChild(i)
+                    if isinstance(child, ParserRuleContext):
+                        walk(child)
+
+        walk(block_ctx)
+        return reads, writes
+
+    def _infer_method_params(
+        self, block_ctx, params: list[tuple[str, str | None, str | None]], field_types: dict[str, str]
+    ) -> list[tuple[str, str | None, str | None]]:
+        """Infer parameter types from method body usage."""
+        param_names = {p[0] for p in params}
+        inferred: dict[str, str] = {}
+
+        def get_self_field_type(expr_ctx) -> str | None:
+            """If expression is self.field, return its type."""
+            if isinstance(expr_ctx, ZincParser.MemberAccessExprContext):
+                target = expr_ctx.expression()
+                if isinstance(target, ZincParser.PrimaryExprContext):
+                    primary = target.primaryExpression()
+                    if primary and primary.getText() == "self":
+                        field_name = expr_ctx.IDENTIFIER().getText()
+                        return field_types.get(field_name)
+            return None
+
+        def find_params_in_expr(expr_ctx) -> list[str]:
+            """Find all parameter names used in an expression."""
+            found = []
+            def search(node):
+                if node is None:
+                    return
+                if isinstance(node, ZincParser.PrimaryExprContext):
+                    primary = node.primaryExpression()
+                    if primary and primary.IDENTIFIER():
+                        name = primary.IDENTIFIER().getText()
+                        if name in param_names:
+                            found.append(name)
+                if hasattr(node, "getChildCount"):
+                    for i in range(node.getChildCount()):
+                        child = node.getChild(i)
+                        if isinstance(child, ParserRuleContext):
+                            search(child)
+            search(expr_ctx)
+            return found
+
+        def walk(node):
+            if node is None:
+                return
+
+            # Check for return statements with struct instantiation
+            if isinstance(node, ZincParser.ReturnStatementContext):
+                if node.expression():
+                    expr = node.expression()
+                    # Check if returning struct instantiation
+                    if isinstance(expr, ZincParser.PrimaryExprContext):
+                        primary = expr.primaryExpression()
+                        if primary and primary.structInstantiation():
+                            inst = primary.structInstantiation()
+                            for field_init in inst.fieldInit():
+                                field_name = field_init.IDENTIFIER().getText()
+                                field_value = field_init.expression().getText()
+                                # If field value is a parameter name
+                                if field_value in param_names and field_name in field_types:
+                                    inferred[field_value] = field_types[field_name]
+
+            # Check for self.field = expr assignments
+            if isinstance(node, ZincParser.VariableAssignmentContext):
+                target = node.assignmentTarget()
+                if target.memberAccess():
+                    member = target.memberAccess()
+                    target_expr = member.expression()
+                    if isinstance(target_expr, ZincParser.PrimaryExprContext):
+                        primary = target_expr.primaryExpression()
+                        if primary and primary.getText() == "self":
+                            field_name = member.IDENTIFIER().getText()
+                            field_type = field_types.get(field_name)
+                            if field_type:
+                                # Find params used in the RHS expression
+                                rhs_expr = node.expression()
+                                params_in_rhs = find_params_in_expr(rhs_expr)
+                                for param_name in params_in_rhs:
+                                    if param_name not in inferred:
+                                        inferred[param_name] = field_type
+
+            # Check for binary expressions mixing self.field and params
+            if isinstance(node, (ZincParser.AdditiveExprContext, ZincParser.MultiplicativeExprContext)):
+                left = node.expression(0)
+                right = node.expression(1)
+                left_type = get_self_field_type(left)
+                right_type = get_self_field_type(right)
+                # If one side is a self.field, infer type for params on the other side
+                if left_type:
+                    params_in_right = find_params_in_expr(right)
+                    for param_name in params_in_right:
+                        if param_name not in inferred:
+                            inferred[param_name] = left_type
+                if right_type:
+                    params_in_left = find_params_in_expr(left)
+                    for param_name in params_in_left:
+                        if param_name not in inferred:
+                            inferred[param_name] = right_type
+
+            # Recurse
+            if hasattr(node, "getChildCount"):
+                for i in range(node.getChildCount()):
+                    child = node.getChild(i)
+                    if isinstance(child, ParserRuleContext):
+                        walk(child)
+
+        walk(block_ctx)
+
+        # Build result with inferred types
+        result = []
+        for name, type_ann, _ in params:
+            resolved = inferred.get(name)
+            result.append((name, type_ann, resolved))
+        return result
+
+    def _infer_return_type(self, block_ctx, struct_name: str, field_types: dict[str, str]) -> str | None:
+        """Infer return type from return statements."""
+
+        def get_expr_type(expr_ctx) -> str | None:
+            """Get type of an expression if we can infer it."""
+            if expr_ctx is None:
+                return None
+
+            # Struct instantiation
+            if isinstance(expr_ctx, ZincParser.PrimaryExprContext):
+                primary = expr_ctx.primaryExpression()
+                if primary and primary.structInstantiation():
+                    inst_name = primary.structInstantiation().IDENTIFIER().getText()
+                    if inst_name == struct_name:
+                        return "Self"
+                    return inst_name
+                if primary and primary.literal():
+                    try:
+                        literal_type = parse_literal(primary.literal().getText())
+                        return type_to_rust(literal_type)
+                    except ValueError:
+                        pass
+
+            # self.field access
+            if isinstance(expr_ctx, ZincParser.MemberAccessExprContext):
+                target_expr = expr_ctx.expression()
+                if isinstance(target_expr, ZincParser.PrimaryExprContext):
+                    primary = target_expr.primaryExpression()
+                    if primary and primary.getText() == "self":
+                        field_name = expr_ctx.IDENTIFIER().getText()
+                        return field_types.get(field_name)
+
+            # Binary expressions - infer from operands
+            if isinstance(expr_ctx, (ZincParser.AdditiveExprContext, ZincParser.MultiplicativeExprContext)):
+                left_type = get_expr_type(expr_ctx.expression(0))
+                right_type = get_expr_type(expr_ctx.expression(1))
+                # Return the first non-None type (both should be same for valid ops)
+                return left_type or right_type
+
+            # Parenthesized expression
+            if isinstance(expr_ctx, ZincParser.ParenExprContext):
+                return get_expr_type(expr_ctx.expression())
+
+            return None
+
+        def find_return_type(node) -> str | None:
+            if node is None:
+                return None
+
+            if isinstance(node, ZincParser.ReturnStatementContext):
+                if not node.expression():
+                    return None
+                return get_expr_type(node.expression())
+
+            # Recurse
+            if hasattr(node, "getChildCount"):
+                for i in range(node.getChildCount()):
+                    child = node.getChild(i)
+                    if isinstance(child, ParserRuleContext):
+                        result = find_return_type(child)
+                        if result:
+                            return result
+            return None
+
+        return find_return_type(block_ctx)
 
     def _next_block_name(self, prefix: str) -> str:
         """Generate unique block name like 'if_0', 'for_1'."""
