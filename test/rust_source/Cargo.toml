@@ -31,6 +31,86 @@ name = "const_test"
 path = "src/const_test.rs"
 
 [[bin]]
+name = "dynamic_typing_01_rapid_shadow_chain"
+path = "src/dynamic_typing/01_rapid_shadow_chain.rs"
+
+[[bin]]
+name = "dynamic_typing_02_shadow_in_nested_scopes"
+path = "src/dynamic_typing/02_shadow_in_nested_scopes.rs"
+
+[[bin]]
+name = "dynamic_typing_03_shadow_same_type_vs_different"
+path = "src/dynamic_typing/03_shadow_same_type_vs_different.rs"
+
+[[bin]]
+name = "dynamic_typing_04_shadow_with_expression"
+path = "src/dynamic_typing/04_shadow_with_expression.rs"
+
+[[bin]]
+name = "dynamic_typing_05_self_referential_shadow"
+path = "src/dynamic_typing/05_self_referential_shadow.rs"
+
+[[bin]]
+name = "dynamic_typing_06_deep_promotion_chain"
+path = "src/dynamic_typing/06_deep_promotion_chain.rs"
+
+[[bin]]
+name = "dynamic_typing_07_unsupported_promotion"
+path = "src/dynamic_typing/07_unsupported_promotion.rs"
+
+[[bin]]
+name = "dynamic_typing_08_boolean_in_arithmetic"
+path = "src/dynamic_typing/08_boolean_in_arithmetic.rs"
+
+[[bin]]
+name = "dynamic_typing_09_promotion_across_comparison"
+path = "src/dynamic_typing/09_promotion_across_comparison.rs"
+
+[[bin]]
+name = "dynamic_typing_10_mono_many_specializations"
+path = "src/dynamic_typing/10_mono_many_specializations.rs"
+
+[[bin]]
+name = "dynamic_typing_11_mono_recursive_generic"
+path = "src/dynamic_typing/11_mono_recursive_generic.rs"
+
+[[bin]]
+name = "dynamic_typing_12_mono_mutual_recursion"
+path = "src/dynamic_typing/12_mono_mutual_recursion.rs"
+
+[[bin]]
+name = "dynamic_typing_13_mono_unused_parameter"
+path = "src/dynamic_typing/13_mono_unused_parameter.rs"
+
+[[bin]]
+name = "dynamic_typing_14_empty_array_no_push"
+path = "src/dynamic_typing/14_empty_array_no_push.rs"
+
+[[bin]]
+name = "dynamic_typing_15_array_mixed_literals"
+path = "src/dynamic_typing/15_array_mixed_literals.rs"
+
+[[bin]]
+name = "dynamic_typing_16_array_shadow_element_type"
+path = "src/dynamic_typing/16_array_shadow_element_type.rs"
+
+[[bin]]
+name = "dynamic_typing_17_comparison_mixed_types"
+path = "src/dynamic_typing/17_comparison_mixed_types.rs"
+
+[[bin]]
+name = "dynamic_typing_18_logical_ops_on_non_bool"
+path = "src/dynamic_typing/18_logical_ops_on_non_bool.rs"
+
+[[bin]]
+name = "dynamic_typing_19_type_through_function"
+path = "src/dynamic_typing/19_type_through_function.rs"
+
+[[bin]]
+name = "dynamic_typing_20_conditional_type_inference"
+path = "src/dynamic_typing/20_conditional_type_inference.rs"
+
+[[bin]]
 name = "for_loop"
 path = "src/for_loop.rs"
 

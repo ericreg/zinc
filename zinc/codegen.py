@@ -397,6 +397,16 @@ class CodeGenVisitor(zincVisitor):
         left = self.visit(ctx.expression(0))
         op = ctx.getChild(1).getText()
         right = self.visit(ctx.expression(1))
+
+        # Handle type promotion: int + float -> cast int to f64
+        left_type = self._get_expr_type(ctx.expression(0))
+        right_type = self._get_expr_type(ctx.expression(1))
+
+        if left_type == BaseType.INTEGER and right_type == BaseType.FLOAT:
+            left = f"({left} as f64)"
+        elif left_type == BaseType.FLOAT and right_type == BaseType.INTEGER:
+            right = f"({right} as f64)"
+
         return f"({left} {op} {right})"
 
     def visitMultiplicativeExpr(self, ctx: ZincParser.MultiplicativeExprContext) -> str:
@@ -404,7 +414,32 @@ class CodeGenVisitor(zincVisitor):
         left = self.visit(ctx.expression(0))
         op = ctx.getChild(1).getText()
         right = self.visit(ctx.expression(1))
+
+        # Handle type promotion: int * float -> cast int to f64
+        left_type = self._get_expr_type(ctx.expression(0))
+        right_type = self._get_expr_type(ctx.expression(1))
+
+        if left_type == BaseType.INTEGER and right_type == BaseType.FLOAT:
+            left = f"({left} as f64)"
+        elif left_type == BaseType.FLOAT and right_type == BaseType.INTEGER:
+            right = f"({right} as f64)"
+
         return f"({left} {op} {right})"
+
+    def _get_expr_type(self, ctx) -> BaseType:
+        """Get the resolved type of an expression from the symbol table or atlas."""
+        # Special handling for function calls - look up return type from atlas
+        if isinstance(ctx, ZincParser.FunctionCallExprContext):
+            mangled = self._specialization_map.get(ctx.getSourceInterval())
+            if mangled and mangled in self.atlas.functions:
+                return self.atlas.functions[mangled].return_type
+
+        symbol = self.symbols.lookup_by_interval(
+            ctx.getSourceInterval(), self._current_function
+        )
+        if symbol:
+            return symbol.resolved_type
+        return BaseType.UNKNOWN
 
     def visitUnaryExpr(self, ctx: ZincParser.UnaryExprContext) -> str:
         """Visit unary expression."""
@@ -417,6 +452,16 @@ class CodeGenVisitor(zincVisitor):
         left = self.visit(ctx.expression(0))
         op = ctx.getChild(1).getText()
         right = self.visit(ctx.expression(1))
+
+        # Handle type promotion for comparisons: int < float -> cast int to f64
+        left_type = self._get_expr_type(ctx.expression(0))
+        right_type = self._get_expr_type(ctx.expression(1))
+
+        if left_type == BaseType.INTEGER and right_type == BaseType.FLOAT:
+            left = f"({left} as f64)"
+        elif left_type == BaseType.FLOAT and right_type == BaseType.INTEGER:
+            right = f"({right} as f64)"
+
         return f"({left} {op} {right})"
 
     def visitEqualityExpr(self, ctx: ZincParser.EqualityExprContext) -> str:
@@ -424,6 +469,16 @@ class CodeGenVisitor(zincVisitor):
         left = self.visit(ctx.expression(0))
         op = ctx.getChild(1).getText()
         right = self.visit(ctx.expression(1))
+
+        # Handle type promotion for equality: int == float -> cast int to f64
+        left_type = self._get_expr_type(ctx.expression(0))
+        right_type = self._get_expr_type(ctx.expression(1))
+
+        if left_type == BaseType.INTEGER and right_type == BaseType.FLOAT:
+            left = f"({left} as f64)"
+        elif left_type == BaseType.FLOAT and right_type == BaseType.INTEGER:
+            right = f"({right} as f64)"
+
         return f"({left} {op} {right})"
 
     def visitLogicalAndExpr(self, ctx: ZincParser.LogicalAndExprContext) -> str:
@@ -514,9 +569,37 @@ class CodeGenVisitor(zincVisitor):
         # Look up mangled name from specialization map
         mangled = self._specialization_map.get(ctx.getSourceInterval())
         if mangled:
+            # Process arguments for string literal conversion
+            args = self._process_function_args(mangled, args, arg_ctxs)
             return f"{mangled}({', '.join(args)})"
 
         return f"{callee}({', '.join(args)})"
+
+    def _process_function_args(
+        self,
+        mangled_name: str,
+        args: list[str],
+        arg_ctxs: list | None = None,
+    ) -> list[str]:
+        """Process function arguments: String conversion for string literals."""
+        func = self.atlas.functions.get(mangled_name)
+        if not func:
+            return args
+
+        processed = []
+        for i, arg in enumerate(args):
+            if i < len(func.arg_types):
+                param_type = func.arg_types[i]
+
+                # Convert string literal to String::from() for String parameters
+                if param_type == BaseType.STRING and arg.startswith('"'):
+                    processed.append(f"String::from({arg})")
+                else:
+                    processed.append(arg)
+            else:
+                processed.append(arg)
+
+        return processed
 
     def _process_method_args(
         self,
@@ -744,7 +827,9 @@ class CodeGenVisitor(zincVisitor):
         if ctx.assignmentTarget().IDENTIFIER():
             var_name = target
             identifier = ctx.assignmentTarget().IDENTIFIER()
-            symbol = self.symbols.lookup_by_interval(identifier.getSourceInterval())
+            symbol = self.symbols.lookup_by_interval(
+                identifier.getSourceInterval(), self._current_function
+            )
 
             if symbol is None:
                 # Fallback - shouldn't happen

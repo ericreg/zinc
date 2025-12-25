@@ -35,6 +35,7 @@ class Symbol:
     source_interval: tuple[int, int]  # ANTLR source interval (start, stop)
     is_mutated: bool = False  # True if variable needs 'mut' (reassigned or mutating method called)
     is_shadow: bool = False  # True if this shadows a previous binding of the same name
+    element_type: BaseType | None = None  # For arrays: type of elements
 
 
 class SymbolTable:
@@ -42,25 +43,40 @@ class SymbolTable:
 
     def __init__(self):
         self._symbols: list[Symbol] = []
-        self._by_interval: dict[str, Symbol] = {}  # "(start, stop)" -> Symbol
+        self._by_interval: dict[str, Symbol] = {}  # "scope:(start, stop)" -> Symbol
         self._scope_stack: list[dict[str, Symbol]] = [{}]  # Stack of id -> Symbol
         self._temp_counter: int = 0
         self._scope_path: list[str] = []  # e.g., ["main", "if_0"]
+        self._function_scope: str = ""  # Top-level function scope for interval keys
 
     @property
     def current_scope(self) -> str:
         """Return current scope path like 'main.if_0'."""
         return ".".join(self._scope_path) if self._scope_path else "global"
 
+    def _interval_key(self, interval: tuple[int, int]) -> str:
+        """Create a scoped key for interval lookup.
+
+        Includes function scope to distinguish same source intervals
+        in different specializations of the same generic function.
+        """
+        return f"{self._function_scope}:({interval[0]}, {interval[1]})"
+
     def enter_scope(self, name: str) -> None:
         """Enter a new scope (function, if block, for loop, etc.)."""
         self._scope_path.append(name)
         self._scope_stack.append({})
+        # Track function-level scope for interval keys
+        if len(self._scope_path) == 1:
+            self._function_scope = name
 
     def exit_scope(self) -> None:
         """Exit current scope."""
         self._scope_path.pop()
         self._scope_stack.pop()
+        # Clear function scope when exiting function level
+        if len(self._scope_path) == 0:
+            self._function_scope = ""
 
     def define(
         self,
@@ -85,7 +101,7 @@ class SymbolTable:
             is_shadow=is_shadow,
         )
         self._symbols.append(symbol)
-        self._by_interval[f"({interval[0]}, {interval[1]})"] = symbol
+        self._by_interval[self._interval_key(interval)] = symbol
         # Always update scope - this handles shadowing within same scope
         self._scope_stack[-1][id] = symbol
         return symbol
@@ -107,7 +123,7 @@ class SymbolTable:
             source_interval=interval,
         )
         self._symbols.append(symbol)
-        self._by_interval[f"({interval[0]}, {interval[1]})"] = symbol
+        self._by_interval[self._interval_key(interval)] = symbol
         return symbol
 
     def lookup_by_id(self, id: str) -> Symbol | None:
@@ -117,9 +133,19 @@ class SymbolTable:
                 return scope[id]
         return None
 
-    def lookup_by_interval(self, interval: tuple[int, int]) -> Symbol | None:
-        """Look up symbol by source interval."""
-        key = f"({interval[0]}, {interval[1]})"
+    def lookup_by_interval(
+        self, interval: tuple[int, int], function_scope: str | None = None
+    ) -> Symbol | None:
+        """Look up symbol by source interval.
+
+        Args:
+            interval: The (start, stop) source interval
+            function_scope: Optional function scope name (e.g., "add_i64_f64").
+                           If provided, looks up in that function's context.
+                           If None, uses the current function scope.
+        """
+        scope = function_scope if function_scope is not None else self._function_scope
+        key = f"{scope}:({interval[0]}, {interval[1]})"
         return self._by_interval.get(key)
 
     def all_symbols(self) -> list[Symbol]:
@@ -157,16 +183,15 @@ class SymbolTableVisitor(zincVisitor):
         for struct in self.atlas.structs.values():
             self._analyze_struct(struct)
 
-        # Process in reverse topological order (callers before callees)
-        # This ensures we see call sites and create specializations before
-        # processing the callee function
-        order = list(reversed(self.atlas.topological_order()))
+        # Two-phase processing to handle function return types correctly:
+        # Phase 1: Discover all specializations (process callers first to find call sites)
+        # Phase 2: Resolve all functions in proper order (callees first for return types)
+
         processed: set[str] = set()
 
-        # Keep processing until no new specializations are added
+        # Phase 1: Discovery - process in caller-first order to discover specializations
         while True:
             new_work = False
-            # Get current list of functions (may grow as we discover specializations)
             current_functions = list(self.atlas.functions.keys())
             for mangled_name in current_functions:
                 if mangled_name in processed:
@@ -178,6 +203,13 @@ class SymbolTableVisitor(zincVisitor):
 
             if not new_work:
                 break
+
+        # Phase 2: Re-resolve in callees-first order to get correct return types
+        # for function call expressions
+        order = self.atlas.topological_order()  # callees first
+        for mangled_name in order:
+            func = self.atlas.functions[mangled_name]
+            self._resolve_function(func)
 
         return self.symbols
 
@@ -541,6 +573,16 @@ class SymbolTableVisitor(zincVisitor):
 
         return find_return_type(block_ctx)
 
+    def _is_empty_array_literal(self, expr_ctx) -> bool:
+        """Check if an expression is an empty array literal []."""
+        if isinstance(expr_ctx, ZincParser.PrimaryExprContext):
+            primary = expr_ctx.primaryExpression()
+            if primary and primary.arrayLiteral():
+                arr_lit = primary.arrayLiteral()
+                # Empty if no expressions inside
+                return len(arr_lit.expression()) == 0
+        return False
+
     def _next_block_name(self, prefix: str) -> str:
         """Generate unique block name like 'if_0', 'for_1'."""
         count = self._block_counters.get(prefix, 0)
@@ -806,6 +848,15 @@ class SymbolTableVisitor(zincVisitor):
                         if is_mutating_method(var_symbol.resolved_type, method_name):
                             var_symbol.is_mutated = True
 
+                        # For push on arrays, track element type
+                        if (
+                            method_name == "push"
+                            and var_symbol.resolved_type == BaseType.ARRAY
+                            and arg_types
+                        ):
+                            if var_symbol.element_type is None:
+                                var_symbol.element_type = arg_types[0]
+
         # Create specialization for user-defined functions
         if isinstance(callee_ctx, ZincParser.PrimaryExprContext):
             primary = callee_ctx.primaryExpression()
@@ -814,13 +865,23 @@ class SymbolTableVisitor(zincVisitor):
                 if func_name not in ("print", "chan"):
                     # Look up function definition
                     func_def = self.atlas.function_defs.get(func_name)
-                    if func_def and arg_types:
+                    # Only create specialization if all arg types are known
+                    if func_def and arg_types and BaseType.UNKNOWN not in arg_types:
                         # Create specialization in Atlas (pass caller for call graph)
                         mangled = self.atlas.add_specialization(
                             func_name, arg_types, func_def, self._current_function
                         )
                         # Store mapping from call site to mangled name
                         self.specialization_map[ctx.getSourceInterval()] = mangled
+
+                        # If this specialization has already been processed, use its return type
+                        func_instance = self.atlas.functions.get(mangled)
+                        if func_instance and func_instance.return_type != BaseType.VOID:
+                            self.symbols.define_temp(
+                                resolved_type=func_instance.return_type,
+                                interval=ctx.getSourceInterval(),
+                            )
+                            return func_instance.return_type
 
                 func_symbol = self.symbols.lookup_by_id(func_name)
                 if func_symbol:
@@ -863,8 +924,11 @@ class SymbolTableVisitor(zincVisitor):
                     if isinstance(callee, ZincParser.PrimaryExprContext):
                         primary = callee.primaryExpression()
                         if primary and primary.IDENTIFIER() and primary.IDENTIFIER().getText() == "chan":
-                            # Create ChannelTypeInfo for this channel variable
-                            self._channel_infos[var_name] = ChannelTypeInfo(element_type=BaseType.UNKNOWN)
+                            # Only create new ChannelTypeInfo if it doesn't exist or has UNKNOWN type
+                            # This preserves type info learned from previous passes
+                            existing_chan = self._channel_infos.get(var_name)
+                            if existing_chan is None or existing_chan.element_type == BaseType.UNKNOWN:
+                                self._channel_infos[var_name] = ChannelTypeInfo(element_type=BaseType.UNKNOWN)
 
             if existing is None:
                 # First assignment - create new symbol
@@ -877,6 +941,20 @@ class SymbolTableVisitor(zincVisitor):
                 )
             elif existing.resolved_type != expr_type:
                 # Type change - create shadow symbol
+                self.symbols.define(
+                    id=var_name,
+                    kind=SymbolKind.VARIABLE,
+                    resolved_type=expr_type,
+                    interval=target.getSourceInterval(),
+                    is_shadow=True,
+                )
+            elif (
+                expr_type == BaseType.ARRAY
+                and existing.element_type is not None
+                and self._is_empty_array_literal(ctx.expression())
+            ):
+                # Reassigning empty array to existing array that has element type
+                # This is likely shadowing with a different element type
                 self.symbols.define(
                     id=var_name,
                     kind=SymbolKind.VARIABLE,
