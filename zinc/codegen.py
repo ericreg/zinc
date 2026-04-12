@@ -65,12 +65,12 @@ class CodeGenVisitor(zincVisitor):
         self,
         atlas: Atlas,
         symbols: SymbolTable,
-        specialization_map: dict[tuple[int, int], str] | None = None,
+        specialization_map: dict[tuple[str | None, tuple[int, int]], str] | None = None,
         channel_infos: dict[str, ChannelTypeInfo] | None = None,
     ):
         self.atlas = atlas
         self.symbols = symbols
-        self._specialization_map = specialization_map or {}
+        self._specialization_map = specialization_map or {}  # (caller, interval) -> mangled
         self._channel_infos = channel_infos or {}  # var_name -> ChannelTypeInfo
         self._uses_async = False
         self._current_function: str | None = None
@@ -298,9 +298,14 @@ class CodeGenVisitor(zincVisitor):
                 param_name = param_ctx.IDENTIFIER().getText()
                 if i < len(func.arg_types):
                     # Check if this is a channel parameter with type info
-                    if i in func.arg_channel_infos:
-                        chan_info = func.arg_channel_infos[i]
+                    if i in func.arg_channel_infos and func.arg_channel_infos[i]:
+                        # Use first channel info (all should have same element type)
+                        chan_info = func.arg_channel_infos[i][0]
                         type_str = chan_info.to_rust_sender()
+                    # Check if this is an array parameter with element type info
+                    elif i in func.arg_array_infos:
+                        arr_info = func.arg_array_infos[i]
+                        type_str = arr_info.to_rust_type()
                     else:
                         type_str = type_to_rust(func.arg_types[i])
                     params.append(f"{param_name}: {type_str}")
@@ -430,7 +435,8 @@ class CodeGenVisitor(zincVisitor):
         """Get the resolved type of an expression from the symbol table or atlas."""
         # Special handling for function calls - look up return type from atlas
         if isinstance(ctx, ZincParser.FunctionCallExprContext):
-            mangled = self._specialization_map.get(ctx.getSourceInterval())
+            key = (self._current_function, ctx.getSourceInterval())
+            mangled = self._specialization_map.get(key)
             if mangled and mangled in self.atlas.functions:
                 return self.atlas.functions[mangled].return_type
 
@@ -502,7 +508,21 @@ class CodeGenVisitor(zincVisitor):
         """Visit index access."""
         array = self.visit(ctx.expression(0))
         index = self.visit(ctx.expression(1))
+        index_ctx = ctx.expression(1)
+        # Cast non-literal integer indices to usize (Rust Vec indexing requires usize)
+        index_type = self._get_expr_type(index_ctx)
+        if index_type == BaseType.INTEGER and not self._is_integer_literal(index_ctx):
+            index = f"({index} as usize)"
         return f"{array}[{index}]"
+
+    def _is_integer_literal(self, ctx) -> bool:
+        """Return True if expression is a bare integer literal (e.g. 0, 1, 2)."""
+        if isinstance(ctx, ZincParser.PrimaryExprContext):
+            primary = ctx.primaryExpression()
+            if primary and primary.literal():
+                lit_text = primary.literal().getText()
+                return bool(lit_text) and not lit_text.startswith('"') and '.' not in lit_text
+        return False
 
     def visitRangeExpr(self, ctx: ZincParser.RangeExprContext) -> str:
         """Visit range expression."""
@@ -564,10 +584,15 @@ class CodeGenVisitor(zincVisitor):
                         struct = next((s for s in self.atlas.structs.values() if s.name == struct_name), None)
                         if struct:
                             args = self._process_method_args(struct, method_name, args, arg_ctxs)
-            return f"{callee}({', '.join(args)})"
+            result = f"{callee}({', '.join(args)})"
+            # len() returns usize in Rust but Zinc treats all integers as i64
+            if method_name == "len":
+                return f"({result} as i64)"
+            return result
 
-        # Look up mangled name from specialization map
-        mangled = self._specialization_map.get(ctx.getSourceInterval())
+        # Look up mangled name from specialization map (scoped by current function)
+        key = (self._current_function, ctx.getSourceInterval())
+        mangled = self._specialization_map.get(key)
         if mangled:
             # Process arguments for string literal conversion
             args = self._process_function_args(mangled, args, arg_ctxs)
@@ -581,7 +606,7 @@ class CodeGenVisitor(zincVisitor):
         args: list[str],
         arg_ctxs: list | None = None,
     ) -> list[str]:
-        """Process function arguments: String conversion for string literals."""
+        """Process function arguments: String conversion, array references."""
         func = self.atlas.functions.get(mangled_name)
         if not func:
             return args
@@ -594,6 +619,13 @@ class CodeGenVisitor(zincVisitor):
                 # Convert string literal to String::from() for String parameters
                 if param_type == BaseType.STRING and arg.startswith('"'):
                     processed.append(f"String::from({arg})")
+                # Pass arrays by reference
+                elif param_type == BaseType.ARRAY and i in func.arg_array_infos:
+                    arr_info = func.arg_array_infos[i]
+                    if arr_info.is_mutated:
+                        processed.append(f"&mut {arg}")
+                    else:
+                        processed.append(f"&{arg}")
                 else:
                     processed.append(arg)
             else:
@@ -861,13 +893,16 @@ class CodeGenVisitor(zincVisitor):
             keyword = "if" if i == 0 else "} else if"
             lines.append(f"{keyword} {cond} {{")
             for stmt in body_stmts:
-                lines.append(f"    {stmt}")
+                # Handle multi-line statements (like nested if/while)
+                for line in stmt.split("\n"):
+                    lines.append(f"    {line}")
 
         if len(blocks) > len(expressions):
             lines.append("} else {")
             body_stmts = self._generate_block(blocks[-1])
             for stmt in body_stmts:
-                lines.append(f"    {stmt}")
+                for line in stmt.split("\n"):
+                    lines.append(f"    {line}")
 
         lines.append("}")
         return "\n".join(lines)
@@ -880,7 +915,9 @@ class CodeGenVisitor(zincVisitor):
 
         lines = [f"for {var_name} in {iterable} {{"]
         for stmt in body_stmts:
-            lines.append(f"    {stmt}")
+            # Handle multi-line statements (like nested if/while)
+            for line in stmt.split("\n"):
+                lines.append(f"    {line}")
         lines.append("}")
         return "\n".join(lines)
 
@@ -891,7 +928,9 @@ class CodeGenVisitor(zincVisitor):
 
         lines = [f"while {cond} {{"]
         for stmt in body_stmts:
-            lines.append(f"    {stmt}")
+            # Handle multi-line statements (like nested if/while)
+            for line in stmt.split("\n"):
+                lines.append(f"    {line}")
         lines.append("}")
         return "\n".join(lines)
 
@@ -901,7 +940,9 @@ class CodeGenVisitor(zincVisitor):
 
         lines = ["loop {"]
         for stmt in body_stmts:
-            lines.append(f"    {stmt}")
+            # Handle multi-line statements (like nested if/while)
+            for line in stmt.split("\n"):
+                lines.append(f"    {line}")
         lines.append("}")
         return "\n".join(lines)
 
@@ -909,6 +950,12 @@ class CodeGenVisitor(zincVisitor):
         """Visit return statement."""
         if ctx.expression():
             value = self.visit(ctx.expression())
+            # Cast integer return values to f64 when function return type is float
+            func = self.atlas.functions.get(self._current_function)
+            if func and func.return_type == BaseType.FLOAT:
+                expr_type = self._get_expr_type(ctx.expression())
+                if expr_type == BaseType.INTEGER:
+                    value = f"({value} as f64)"
             return f"return {value};"
         return "return;"
 
@@ -939,8 +986,9 @@ class CodeGenVisitor(zincVisitor):
                             arg_code = f"{var_name}_tx"
                 args.append(arg_code)
 
-        # Look up mangled name from specialization map
-        mangled = self._specialization_map.get(ctx.getSourceInterval())
+        # Look up mangled name from specialization map (scoped by current function)
+        key = (self._current_function, ctx.getSourceInterval())
+        mangled = self._specialization_map.get(key)
         if mangled:
             call = f"{mangled}({', '.join(args)})"
         else:

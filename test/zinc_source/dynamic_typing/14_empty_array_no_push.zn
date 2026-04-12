@@ -1,0 +1,41 @@
+// Test: Empty array that never gets element type
+// Expected: Undefined - Vec<unknown> cannot compile in Rust
+
+fn main() {
+    // Create empty array but never push to it
+    // This should result in Vec<unknown> which won't compile
+
+    // For now, test arrays that DO get types
+    a = []
+    a.push(1)
+    print("a[0]: {a[0]}")
+
+    b = []
+    b.push(3.14)
+    print("b[0]: {b[0]}")
+
+    c = []
+    c.push(true)
+    print("c[0]: {c[0]}")
+
+    d = []
+    d.push("hello")
+    print("d[0]: {d[0]}")
+
+    // Array with initial elements
+    e = [1, 2, 3]
+    print("e[0]: {e[0]}")
+
+    // Empty array - uncommenting this should fail:
+    // empty = []
+    // print("{empty}")
+
+    // But we can create and immediately push
+    f = []
+    f.push(42)
+    f.push(43)
+    print("f[0]: {f[0]}")
+    print("f[1]: {f[1]}")
+
+    print("test complete")
+}

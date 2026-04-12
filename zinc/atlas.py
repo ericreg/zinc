@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from antlr4 import ParserRuleContext
 from sortedcontainers import SortedDict, SortedSet
 
-from zinc.ast.types import BaseType, type_to_rust, ChannelTypeInfo
+from zinc.ast.types import BaseType, type_to_rust, ChannelTypeInfo, ArrayTypeInfo
 from zinc.parser.zincVisitor import zincVisitor
 from zinc.parser.zincParser import zincParser as ZincParser
 
@@ -19,8 +19,10 @@ class FunctionInstance:
     arg_types: list[BaseType]  # Concrete argument types
     return_type: BaseType = field(default=BaseType.VOID)  # Inferred return type
     is_async: bool = False  # True if called via spawn (becomes async fn)
-    # Rich type info for channel arguments (arg_index -> ChannelTypeInfo)
-    arg_channel_infos: dict[int, ChannelTypeInfo] = field(default_factory=dict)
+    # Rich type info for channel arguments (arg_index -> list of ChannelTypeInfos from all call sites)
+    arg_channel_infos: dict[int, list[ChannelTypeInfo]] = field(default_factory=dict)
+    # Rich type info for array arguments (arg_index -> ArrayTypeInfo)
+    arg_array_infos: dict[int, ArrayTypeInfo] = field(default_factory=dict)
 
 
 @dataclass
@@ -140,19 +142,21 @@ class Atlas:
         arg_types: list[BaseType],
         ctx: ParserRuleContext,
         caller_mangled: str | None = None,
+        arg_array_infos: dict[int, ArrayTypeInfo] | None = None,
     ) -> str:
         """Create a new function specialization. Returns mangled name.
 
         If caller_mangled is provided, updates the call graph to record that
         caller_mangled calls this specialization.
         """
-        mangled = self._mangle_name(name, arg_types)
+        mangled = self._mangle_name(name, arg_types, arg_array_infos)
         if mangled not in self.functions:
             self.functions[mangled] = FunctionInstance(
                 name=name,
                 mangled_name=mangled,
                 ctx=ctx,
                 arg_types=list(arg_types),  # Copy to avoid mutation
+                arg_array_infos=arg_array_infos or {},
             )
             # Initialize call graph entry for the new specialization
             self.calls[mangled] = SortedSet()
@@ -163,11 +167,26 @@ class Atlas:
 
         return mangled
 
-    def _mangle_name(self, name: str, arg_types: list[BaseType]) -> str:
-        """Generate mangled name like 'add_i64_i64'."""
+    def _mangle_name(
+        self,
+        name: str,
+        arg_types: list[BaseType],
+        arg_array_infos: dict[int, ArrayTypeInfo] | None = None,
+    ) -> str:
+        """Generate mangled name like 'add_i64_i64' or 'find_Vec_i64_i64'."""
         if not arg_types:
             return name
-        type_suffix = "_".join(type_to_rust(t) for t in arg_types)
+
+        type_parts = []
+        for i, t in enumerate(arg_types):
+            if t == BaseType.ARRAY and arg_array_infos and i in arg_array_infos:
+                # Include element type for arrays
+                elem = type_to_rust(arg_array_infos[i].element_type)
+                type_parts.append(f"Vec_{elem}")
+            else:
+                type_parts.append(type_to_rust(t))
+
+        type_suffix = "_".join(type_parts)
         return f"{name}_{type_suffix}"
 
     def topological_order(self) -> list[str]:

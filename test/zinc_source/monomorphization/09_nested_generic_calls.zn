@@ -1,0 +1,38 @@
+// Test: Nested generic function calls f(g(h(x)))
+// Each level creates its own specialization based on inner result type
+// Expected: Creates specializations for inner, middle, outer at each type
+
+fn inner(x) {
+    return x + 1
+}
+
+fn middle(x) {
+    // Calls inner twice with x, adds results
+    return inner(x) + inner(x)
+}
+
+fn outer(x) {
+    // Calls middle with x, multiplies by 2
+    return middle(x) * 2
+}
+
+fn main() {
+    // All int: outer_i64 -> middle_i64 -> inner_i64
+    a = outer(5)
+    print("outer(5): {a}")  // ((5+1) + (5+1)) * 2 = 12 * 2 = 24
+
+    // All float: outer_f64 -> middle_f64 -> inner_f64
+    b = outer(2.5)
+    print("outer(2.5): {b}")  // ((2.5+1) + (2.5+1)) * 2 = 7 * 2 = 14
+
+    // Direct inner calls
+    c = inner(10)
+    print("inner(10): {c}")  // 11
+
+    d = inner(0.5)
+    print("inner(0.5): {d}")  // 1.5
+
+    // Direct middle call
+    e = middle(3)
+    print("middle(3): {e}")  // (3+1) + (3+1) = 8
+}

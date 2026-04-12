@@ -1,0 +1,6 @@
+classify(-5): -1
+classify(0): 0
+classify(5): 1
+classify(50): 2
+classify(100): 3
+classify(999): 3

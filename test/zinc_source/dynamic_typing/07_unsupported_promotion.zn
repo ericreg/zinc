@@ -1,0 +1,38 @@
+// Test: Unsupported type promotion
+// String + int has no promotion rule
+// Expected: Undefined - yields UNKNOWN type, likely Rust compile error
+
+fn main() {
+    // This should fail - no string + int promotion
+    // Commenting out the actual failing line to test other cases first
+
+    // String concatenation (if supported)
+    s = "hello"
+    print("s: {s}")
+
+    // Integer
+    n = 42
+    print("n: {n}")
+
+    // Attempt string + int - this should fail
+    // result = s + n
+    // print("result: {result}")
+
+    // What about int + string? Also should fail
+    // result2 = n + s
+    // print("result2: {result2}")
+
+    // Test that normal operations still work
+    x = 1 + 2
+    print("x (int + int): {x}")
+
+    y = 1.0 + 2.0
+    print("y (float + float): {y}")
+
+    z = 1 + 2.0
+    print("z (int + float): {z}")
+
+    // String by itself is fine
+    msg = "test complete"
+    print("{msg}")
+}

@@ -1,0 +1,7 @@
+h(1): 1
+h(1.0): 1
+h(true): true
+h(s): s
+g(42): 42, g(3.14): 3.14
+f(99): 99, f(0.5): 0.5
+f(false): false, f(direct): direct

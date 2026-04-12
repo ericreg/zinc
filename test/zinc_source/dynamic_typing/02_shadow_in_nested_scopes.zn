@@ -1,0 +1,45 @@
+// Test: Type shadowing in nested scopes
+// Shadow variable in if/else blocks with different types
+// Expected: Ambiguous - tests how scopes interact with shadowing
+
+fn main() {
+    // Outer scope - integer
+    x = 10
+    print("outer before: {x}")
+
+    flag = true
+
+    if flag {
+        // Inner scope - shadow to string
+        x = "inside if"
+        print("inside if: {x}")
+    }
+
+    // After block - what type is x?
+    print("after if: {x}")
+
+    // Try shadowing in else branch
+    y = 20
+    print("y before: {y}")
+
+    if false {
+        y = "never executed"
+    } else {
+        y = 3.14
+        print("in else: {y}")
+    }
+
+    print("after else: {y}")
+
+    // Nested if-else with different types in each branch
+    z = 1
+    if true {
+        if false {
+            z = "nested"
+        } else {
+            z = 2.5
+            print("nested else: {z}")
+        }
+    }
+    print("after nested: {z}")
+}

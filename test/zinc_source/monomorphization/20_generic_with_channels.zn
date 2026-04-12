@@ -1,0 +1,33 @@
+// Test: Generic function with channel parameter
+// Channel type should be propagated through function specialization
+// Expected: sender specialized for channel element type
+
+fn sender(ch, val) {
+    ch <- val
+}
+
+fn double_sender(ch, val) {
+    ch <- val
+    ch <- val
+}
+
+fn main() {
+    // Integer channel
+    int_ch = chan()
+    spawn sender(int_ch, 42)
+    x = <- int_ch
+    print("received int: {x}")
+
+    // Double sender with integer
+    int_ch2 = chan()
+    spawn double_sender(int_ch2, 100)
+    y1 = <- int_ch2
+    y2 = <- int_ch2
+    print("double received: {y1}, {y2}")
+
+    // Another int channel to verify reuse
+    int_ch3 = chan()
+    spawn sender(int_ch3, 999)
+    z = <- int_ch3
+    print("received another int: {z}")
+}

@@ -1,0 +1,35 @@
+fn main() {
+    let mut arr = vec![];
+    arr.push(1);
+    arr.push(2);
+    arr.push(3);
+    println!("int arr[0]: {}", arr[0]);
+    println!("int arr[1]: {}", arr[1]);
+    println!("int arr[2]: {}", arr[2]);
+    let mut arr = vec![];
+    arr.push(1.1);
+    arr.push(2.2);
+    arr.push(3.3);
+    println!("float arr[0]: {}", arr[0]);
+    println!("float arr[1]: {}", arr[1]);
+    println!("float arr[2]: {}", arr[2]);
+    let mut arr = vec![];
+    arr.push(true);
+    arr.push(false);
+    println!("bool arr[0]: {}", arr[0]);
+    println!("bool arr[1]: {}", arr[1]);
+    let mut arr = vec![];
+    arr.push("hello");
+    arr.push("world");
+    println!("string arr[0]: {}", arr[0]);
+    println!("string arr[1]: {}", arr[1]);
+    let mut nums = vec![1, 2, 3];
+    let decimals = vec![1.5, 2.5];
+    let flags = vec![true, false, true, false];
+    println!("nums[0]: {}", nums[0]);
+    println!("decimals[1]: {}", decimals[1]);
+    println!("flags[2]: {}", flags[2]);
+    nums = vec![100, 200];
+    println!("new nums[0]: {}", nums[0]);
+    println!("decimals still: {}", decimals[0]);
+}

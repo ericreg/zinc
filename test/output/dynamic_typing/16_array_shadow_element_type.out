@@ -1,0 +1,15 @@
+int arr[0]: 1
+int arr[1]: 2
+int arr[2]: 3
+float arr[0]: 1.1
+float arr[1]: 2.2
+float arr[2]: 3.3
+bool arr[0]: true
+bool arr[1]: false
+string arr[0]: hello
+string arr[1]: world
+nums[0]: 1
+decimals[1]: 2.5
+flags[2]: true
+new nums[0]: 100
+decimals still: 1.5

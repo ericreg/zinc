@@ -1,0 +1,34 @@
+// Test: Many call sites with identical types
+// All should map to the same single specialization
+// Expected: Single inc_i64 reused for all 10+ calls
+
+fn inc(x) {
+    return x + 1
+}
+
+fn main() {
+    a = inc(1)
+    b = inc(2)
+    c = inc(3)
+    d = inc(4)
+    e = inc(5)
+    f = inc(6)
+    g = inc(7)
+    h = inc(8)
+    i = inc(9)
+    j = inc(10)
+
+    // Sum all results
+    sum = a + b + c + d + e + f + g + h + i + j
+    print("sum of inc(1) to inc(10): {sum}")  // 2+3+4+5+6+7+8+9+10+11 = 65
+
+    // Even more calls
+    k = inc(100)
+    l = inc(200)
+    m = inc(300)
+    print("k={k}, l={l}, m={m}")
+
+    // Call in expressions
+    n = inc(inc(inc(0)))
+    print("inc(inc(inc(0))): {n}")  // 3
+}

@@ -1,0 +1,63 @@
+// Test: Logical operators on non-boolean values
+// Expected: Undefined - operands should be bool
+
+fn main() {
+    // Valid boolean operations
+    a = true && true
+    print("true && true: {a}")
+
+    b = true && false
+    print("true && false: {b}")
+
+    c = false || true
+    print("false || true: {c}")
+
+    d = false || false
+    print("false || false: {d}")
+
+    e = !true
+    print("!true: {e}")
+
+    f = !false
+    print("!false: {f}")
+
+    // Using 'and', 'or', 'not' keywords
+    g = true and true
+    print("true and true: {g}")
+
+    h = false or true
+    print("false or true: {h}")
+
+    i = !false
+    print("not false (using !): {i}")
+
+    // Complex boolean expressions
+    j = (true && false) || (true && true)
+    print("(true && false) || (true && true): {j}")
+
+    k = !(true && false)
+    print("!(true && false): {k}")
+
+    // Comparison results in logical ops
+    l = (1 > 0) && (2 > 1)
+    print("(1 > 0) && (2 > 1): {l}")
+
+    m = (1 < 0) || (2 > 1)
+    print("(1 < 0) || (2 > 1): {m}")
+
+    // Non-boolean in logical ops - should fail
+    // Uncomment to test:
+    // bad1 = 1 && 2
+    // print("1 && 2: {bad1}")
+
+    // bad2 = "hello" || "world"
+    // print("hello || world: {bad2}")
+
+    // bad3 = 0 && true
+    // print("0 && true: {bad3}")
+
+    // bad4 = !1
+    // print("!1: {bad4}")
+
+    print("test complete")
+}

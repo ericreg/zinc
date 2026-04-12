@@ -1,0 +1,25 @@
+// Test: Deep recursion with same type throughout
+// Fibonacci function creates single specialization that calls itself
+// Expected: Valid - single fib_i64 specialization
+
+fn fib(n) {
+    if n <= 1 {
+        return n
+    }
+    return fib(n - 1) + fib(n - 2)
+}
+
+fn main() {
+    result = fib(10)
+    print("fib(10): {result}")
+
+    // Additional calls with same type
+    f0 = fib(0)
+    print("fib(0): {f0}")
+
+    f1 = fib(1)
+    print("fib(1): {f1}")
+
+    f5 = fib(5)
+    print("fib(5): {f5}")
+}

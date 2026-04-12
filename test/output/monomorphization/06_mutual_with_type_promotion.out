@@ -1,0 +1,3 @@
+even_sum(10, 0): 30
+even_sum(10, 0.0): 30
+odd_sum(5, 0): 6

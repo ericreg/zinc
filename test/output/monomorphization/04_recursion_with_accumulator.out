@@ -1,0 +1,3 @@
+sum_with_acc(10, 0): 55
+sum_with_acc(5, 0.0): 15
+sum_with_acc(3, 100): 106

@@ -1,0 +1,41 @@
+// Test: Mix same-type mutations with type-changing shadows
+// Same type = `let mut x` with reassignment
+// Different type = `let x` (new shadow)
+// Expected: Valid - correct mut vs shadow distinction
+
+fn main() {
+    // Same type mutations (should use mut)
+    a = 1
+    a = 2
+    a = 3
+    print("a (int mutated): {a}")
+
+    // Type change (should create shadow)
+    a = "now string"
+    print("a (shadowed to string): {a}")
+
+    // Same type mutation of string
+    a = "still string"
+    a = "another string"
+    print("a (string mutated): {a}")
+
+    // Type change again
+    a = 99.9
+    print("a (shadowed to float): {a}")
+
+    // Interleaved pattern
+    b = 1
+    print("b: {b}")
+    b = 2        // same type mutation
+    print("b: {b}")
+    b = 2.0      // type shadow
+    print("b: {b}")
+    b = 3.0      // same type mutation
+    print("b: {b}")
+    b = true     // type shadow
+    print("b: {b}")
+    b = false    // same type mutation
+    print("b: {b}")
+    b = "end"    // type shadow
+    print("b: {b}")
+}

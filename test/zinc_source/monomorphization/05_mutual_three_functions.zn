@@ -1,0 +1,29 @@
+// Test: Three-way mutual recursion (ping -> pong -> pang -> ping)
+// Tests topological sort with three-function cycle
+// Expected: Valid - all three specialized, cycle handled correctly
+
+fn ping(n) {
+    print("ping: {n}")
+    if n <= 0 {
+        return 0
+    }
+    return pong(n - 1)
+}
+
+fn pong(n) {
+    print("pong: {n}")
+    return pang(n)
+}
+
+fn pang(n) {
+    print("pang: {n}")
+    if n <= 0 {
+        return 0
+    }
+    return ping(n - 1)
+}
+
+fn main() {
+    result = ping(5)
+    print("final result: {result}")
+}

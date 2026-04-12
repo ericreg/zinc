@@ -1,0 +1,14 @@
+x initial: 1
+x after x + x + 0.5: 2.5
+y initial: 2
+y after y * y: 4
+y after y + y + y: 12
+z initial (int): 10
+z after z / 3.0 (float): 3.3333333333333335
+z after z * z: 11.111111111111112
+a: 5
+a: 6
+a: 3
+a: 6
+b: 3, c: 4
+b after b + c + 0.1: 7.1

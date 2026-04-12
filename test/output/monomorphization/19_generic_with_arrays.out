@@ -1,0 +1,6 @@
+first(ints): 1
+first(floats): 1
+last(ints): 5
+last(floats): 3
+sum_array(ints): 15
+sum_array(floats): 6

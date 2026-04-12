@@ -1,0 +1,35 @@
+// Test: Shadow using complex expressions
+// Expression result type determines shadow
+// Expected: Valid - expression result is float, shadows int
+
+fn main() {
+    // Integer shadowed by int+float expression = float
+    x = 1
+    print("x (int): {x}")
+    x = x + 0.5
+    print("x (now float): {x}")
+
+    // Chain of promotions
+    y = 10
+    print("y (int): {y}")
+    y = y * 2.0
+    print("y (float after *2.0): {y}")
+    y = y + 5
+    print("y (float + int = float): {y}")
+
+    // Expression with multiple operations
+    z = 100
+    print("z (int): {z}")
+    z = (z + 1) * 0.1
+    print("z (complex expr): {z}")
+
+    // Arithmetic that stays same type
+    w = 5
+    w = w + 3
+    w = w * 2
+    print("w (int arithmetic): {w}")
+
+    // Then shadow to different type
+    w = w / 2.0
+    print("w (now float): {w}")
+}

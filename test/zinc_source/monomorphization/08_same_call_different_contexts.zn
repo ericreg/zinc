@@ -1,0 +1,34 @@
+// Test: Same function called from multiple contexts (loop, outside loop)
+// All calls with same types should reuse the same specialization
+// Expected: Single double_i64 specialization used everywhere
+
+fn double(x) {
+    return x + x
+}
+
+fn main() {
+    // Call before loop
+    a = double(5)
+    print("before loop: {a}")
+
+    // Calls inside loop
+    i = 0
+    while i < 3 {
+        b = double(i)
+        print("in loop {i}: {b}")
+        i = i + 1
+    }
+
+    // Call after loop
+    c = double(100)
+    print("after loop: {c}")
+
+    // Nested in if
+    if true {
+        d = double(42)
+        print("in if: {d}")
+    }
+
+    // Total should be 10 + 0 + 2 + 4 + 200 + 84 = 300
+    print("a={a}, c={c}")
+}

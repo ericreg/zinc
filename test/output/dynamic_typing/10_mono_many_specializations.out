@@ -1,0 +1,12 @@
+identity(int): 1
+identity(float): 3.14
+identity(bool): true
+identity(string): hello
+add(int, int): 3
+add(float, float): 3
+add(int, float): 3
+add(float, int): 3
+process(int, int, int): 6
+process(float, float, float): 6
+process(int, float, int): 6
+add(10, 0.5): 10.5

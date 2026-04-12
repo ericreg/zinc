@@ -1,0 +1,6 @@
+wrapper(1, 2): 3
+wrapper(1.0, 2.0): 3
+wrapper(1, 2.0): 3
+double_via_add(5): 10
+double_via_add(2.5): 5
+wrapper(10, 20) + 0.5: 30.5

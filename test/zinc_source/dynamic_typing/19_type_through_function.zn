@@ -1,0 +1,65 @@
+// Test: Type flow through function calls
+// Pass variable through identity function, then shadow original
+// Expected: Valid - function call preserves type
+
+fn identity(x) {
+    return x
+}
+
+fn double(x) {
+    return x + x
+}
+
+fn negate(x) {
+    return -x
+}
+
+fn main() {
+    // Pass int through identity
+    a = 10
+    b = identity(a)
+    print("a: {a}, identity(a): {b}")
+
+    // Shadow original, verify copy unchanged
+    a = "shadowed"
+    print("a (shadowed): {a}, b (still int): {b}")
+
+    // Pass float through function
+    c = 3.14
+    d = identity(c)
+    c = 999
+    print("c (shadowed to int): {c}, d (still float): {d}")
+
+    // Double preserves type
+    e = 5
+    f = double(e)
+    print("double(5): {f}")
+
+    g = 2.5
+    h = double(g)
+    print("double(2.5): {h}")
+
+    // Chain function calls - use intermediate variables
+    i1 = identity(42)
+    i2 = identity(i1)
+    i = identity(i2)
+    print("triple identity(42): {i}")
+
+    // Function result used in expression that changes type
+    j = identity(10) + 0.5
+    print("identity(10) + 0.5: {j}")
+
+    // Negate preserves type
+    k = negate(5)
+    print("negate(5): {k}")
+
+    l = negate(3.14)
+    print("negate(3.14): {l}")
+
+    // Complex: function call, shadow, function call
+    m = 100
+    n = double(m)
+    m = "string now"
+    o = identity(n)
+    print("m: {m}, n: {n}, o: {o}")
+}

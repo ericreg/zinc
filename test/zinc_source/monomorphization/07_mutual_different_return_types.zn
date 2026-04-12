@@ -1,0 +1,27 @@
+// Test: Mutual recursion where functions want different return types
+// This is a tricky edge case - each function returns what the OTHER returns
+// Expected: May require type unification or produce type errors
+
+fn count_down_int(n) {
+    print("int: {n}")
+    if n <= 0 {
+        return 0
+    }
+    return count_down_float(n - 1)
+}
+
+fn count_down_float(n) {
+    print("float: {n}")
+    if n <= 0 {
+        return 0.0
+    }
+    return count_down_int(n - 1)
+}
+
+fn main() {
+    // This creates an interesting situation:
+    // count_down_int calls count_down_float which returns float
+    // but count_down_int is supposed to return its callee's result
+    result = count_down_int(4)
+    print("result: {result}")
+}

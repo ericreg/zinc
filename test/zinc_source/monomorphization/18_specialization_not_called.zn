@@ -1,0 +1,41 @@
+// Test: Multiple call sites discovered in single pass
+// Specialization is created on first call, reused for subsequent calls
+// Expected: Valid - all call sites map to same specialization
+
+fn maybe(x) {
+    return x
+}
+
+fn main() {
+    // First call site - creates maybe_i64
+    a = maybe(1)
+    print("first call: {a}")
+
+    // Some other code between calls
+    temp = 100
+    temp = temp + 1
+    print("temp: {temp}")
+
+    // Second call site - reuses maybe_i64
+    b = maybe(2)
+    print("second call: {b}")
+
+    // Third call site
+    c = maybe(3)
+    print("third call: {c}")
+
+    // Many more calls later
+    print("more calls:")
+    d = maybe(4)
+    e = maybe(5)
+    f = maybe(6)
+    print("d={d}, e={e}, f={f}")
+
+    // Different type creates new specialization
+    g = maybe("string")
+    print("string call: {g}")
+
+    // Back to int reuses original
+    h = maybe(100)
+    print("back to int: {h}")
+}

@@ -1,0 +1,46 @@
+// Test: Return statement inside deeply nested blocks
+// Return type inference should find returns in nested if/while blocks
+// Expected: Valid - return type inferred from nested return
+
+fn find_value(arr, target) {
+    i = 0
+    while i < arr.len() {
+        if arr[i] == target {
+            return i
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+fn sum_until(arr, limit) {
+    total = 0
+    i = 0
+    while i < arr.len() {
+        if total + arr[i] > limit {
+            return total
+        }
+        total = total + arr[i]
+        i = i + 1
+    }
+    return total
+}
+
+fn main() {
+    nums = [10, 20, 30, 40, 50]
+
+    // Find existing value
+    idx1 = find_value(nums, 30)
+    print("find 30: {idx1}")
+
+    // Find non-existing value
+    idx2 = find_value(nums, 99)
+    print("find 99: {idx2}")
+
+    // Sum with limit
+    sum1 = sum_until(nums, 50)
+    print("sum until 50: {sum1}")  // 10 + 20 = 30, then 30+30=60 > 50
+
+    sum2 = sum_until(nums, 1000)
+    print("sum until 1000: {sum2}")  // 10+20+30+40+50 = 150
+}

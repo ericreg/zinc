@@ -1,0 +1,14 @@
+maybe_return_int(true): 42
+maybe_return_int(false): 0
+maybe_return_float(true): 3.14
+maybe_return_float(false): 0
+abs_value(-5): 5
+abs_value(5): 5
+abs_value(-3.14): 3.14
+max_val(10, 20): 20
+max_val(3.14, 2.71): 3.14
+x after if: 42
+y unchanged: 1
+z after nested if: 100
+5 > 3 is true
+test complete

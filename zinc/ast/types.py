@@ -120,14 +120,20 @@ class ArrayTypeInfo:
     """Type information for arrays."""
 
     element_type: BaseType = BaseType.UNKNOWN
-    is_vector: bool = False  # True if .push() was called
+    is_mutated: bool = False  # True if array is modified (push, pop, etc.)
 
-    def to_rust_type(self) -> str:
-        """Generate Rust type string."""
+    def to_rust_type(self, as_reference: bool = True) -> str:
+        """Generate Rust type string (always Vec in Zinc).
+
+        Args:
+            as_reference: If True, generate &Vec<T> or &mut Vec<T> for parameters
+        """
         elem = type_to_rust(self.element_type)
-        if self.is_vector:
-            return f"Vec<{elem}>"
-        return f"[{elem}]"
+        if as_reference:
+            if self.is_mutated:
+                return f"&mut Vec<{elem}>"
+            return f"&Vec<{elem}>"
+        return f"Vec<{elem}>"
 
 
 # Registry of mutating methods by type

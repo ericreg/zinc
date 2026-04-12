@@ -1,0 +1,93 @@
+// Test: Conditional expressions and type inference
+// Expected: Tests how types are inferred in different conditional branches
+
+fn maybe_return_int(flag) {
+    if flag {
+        return 42
+    }
+    return 0
+}
+
+fn maybe_return_float(flag) {
+    if flag {
+        return 3.14
+    }
+    return 0.0
+}
+
+fn abs_value(x) {
+    if x < 0 {
+        return -x
+    }
+    return x
+}
+
+fn max_val(a, b) {
+    if a > b {
+        return a
+    }
+    return b
+}
+
+fn main() {
+    // Conditional returns same type in both branches
+    a = maybe_return_int(true)
+    print("maybe_return_int(true): {a}")
+
+    b = maybe_return_int(false)
+    print("maybe_return_int(false): {b}")
+
+    c = maybe_return_float(true)
+    print("maybe_return_float(true): {c}")
+
+    d = maybe_return_float(false)
+    print("maybe_return_float(false): {d}")
+
+    // abs_value works for both int and float
+    e = abs_value(-5)
+    print("abs_value(-5): {e}")
+
+    f = abs_value(5)
+    print("abs_value(5): {f}")
+
+    g = abs_value(-3.14)
+    print("abs_value(-3.14): {g}")
+
+    // max_val with same types
+    h = max_val(10, 20)
+    print("max_val(10, 20): {h}")
+
+    i = max_val(3.14, 2.71)
+    print("max_val(3.14, 2.71): {i}")
+
+    // Variable assignment in conditional branches
+    x = 0
+    if true {
+        x = 42
+    }
+    print("x after if: {x}")
+
+    // Shadow in one branch
+    y = 1
+    if false {
+        y = "never executed"
+    }
+    print("y unchanged: {y}")
+
+    // Nested conditionals
+    z = 0
+    if true {
+        if true {
+            z = 100
+        }
+    }
+    print("z after nested if: {z}")
+
+    // Conditional with expression
+    flag = 5 > 3
+    if flag {
+        print("5 > 3 is true")
+    }
+
+    print("test complete")
+}

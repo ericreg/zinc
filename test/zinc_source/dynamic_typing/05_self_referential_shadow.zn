@@ -1,0 +1,44 @@
+// Test: Self-referential shadow assignment
+// Use the variable being shadowed in its own new assignment
+// Expected: Potentially undefined - which `x` is used in RHS?
+
+fn main() {
+    // Basic self-reference with type promotion
+    x = 1
+    print("x initial: {x}")
+    x = x + x + 0.5
+    print("x after x + x + 0.5: {x}")
+
+    // Multiple self-references
+    y = 2
+    print("y initial: {y}")
+    y = y * y
+    print("y after y * y: {y}")
+    y = y + y + y
+    print("y after y + y + y: {y}")
+
+    // Self-reference that changes type
+    z = 10
+    print("z initial (int): {z}")
+    z = z / 3.0
+    print("z after z / 3.0 (float): {z}")
+    z = z * z
+    print("z after z * z: {z}")
+
+    // Complex self-reference chain
+    a = 5
+    print("a: {a}")
+    a = a + 1
+    print("a: {a}")
+    a = a * 0.5
+    print("a: {a}")
+    a = a + a
+    print("a: {a}")
+
+    // Self-reference with different variable on RHS too
+    b = 3
+    c = 4
+    print("b: {b}, c: {c}")
+    b = b + c + 0.1
+    print("b after b + c + 0.1: {b}")
+}

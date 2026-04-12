@@ -1,0 +1,14 @@
+true && true: true
+true && false: false
+false || true: true
+false || false: false
+!true: false
+!false: true
+true and true: true
+false or true: true
+not false (using !): true
+(true && false) || (true && true): true
+!(true && false): true
+(1 > 0) && (2 > 1): true
+(1 < 0) || (2 > 1): true
+test complete

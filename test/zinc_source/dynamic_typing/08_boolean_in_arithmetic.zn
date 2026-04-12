@@ -1,0 +1,42 @@
+// Test: Boolean in arithmetic context
+// true + 1 or false * 2.0 - Boolean in arithmetic
+// Expected: Undefined - no promotion rule, UNKNOWN type
+
+fn main() {
+    // Booleans by themselves are fine
+    t = true
+    f = false
+    print("t: {t}")
+    print("f: {f}")
+
+    // Boolean operations are fine
+    and_result = t && f
+    print("t && f: {and_result}")
+
+    or_result = t || f
+    print("t || f: {or_result}")
+
+    not_result = !t
+    print("!t: {not_result}")
+
+    // Integer arithmetic is fine
+    n = 1 + 1
+    print("1 + 1: {n}")
+
+    // Float arithmetic is fine
+    m = 2.0 * 3.0
+    print("2.0 * 3.0: {m}")
+
+    // These should fail - boolean in arithmetic context
+    // Uncomment to test:
+    // bad1 = true + 1
+    // print("true + 1: {bad1}")
+
+    // bad2 = false * 2.0
+    // print("false * 2.0: {bad2}")
+
+    // bad3 = 1 - false
+    // print("1 - false: {bad3}")
+
+    print("test complete")
+}

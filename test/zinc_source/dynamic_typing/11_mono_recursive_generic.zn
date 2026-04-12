@@ -1,0 +1,48 @@
+// Test: Recursive function with different types at each level
+// Expected: Potentially undefined - recursive specialization
+
+fn countdown(n) {
+    if n <= 0 {
+        print("done")
+        return 0
+    }
+    print("n: {n}")
+    return countdown(n - 1)
+}
+
+fn sum_to(n) {
+    if n <= 0 {
+        return 0
+    }
+    return n + sum_to(n - 1)
+}
+
+fn factorial(n) {
+    if n <= 1 {
+        return 1
+    }
+    return n * factorial(n - 1)
+}
+
+fn main() {
+    // Simple recursive countdown with int
+    result1 = countdown(5)
+    print("countdown result: {result1}")
+
+    // Sum using recursion
+    result2 = sum_to(10)
+    print("sum_to(10): {result2}")
+
+    // Factorial
+    result3 = factorial(5)
+    print("factorial(5): {result3}")
+
+    // What if we call with float? Type changes through recursion
+    // This could create type mismatch issues
+    // result4 = countdown(5.0)
+    // print("countdown(5.0): {result4}")
+
+    // Recursive with type that stays consistent
+    result5 = sum_to(5)
+    print("sum_to(5): {result5}")
+}

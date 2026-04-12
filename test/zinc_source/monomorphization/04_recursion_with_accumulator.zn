@@ -1,0 +1,24 @@
+// Test: Recursive function with accumulator of different type
+// Same function called with different accumulator types creates different specializations
+// Expected: sum_with_acc_i64_i64 and sum_with_acc_i64_f64
+
+fn sum_with_acc(n, acc) {
+    if n <= 0 {
+        return acc
+    }
+    return sum_with_acc(n - 1, acc + n)
+}
+
+fn main() {
+    // Integer accumulator
+    x = sum_with_acc(10, 0)
+    print("sum_with_acc(10, 0): {x}")
+
+    // Float accumulator - different specialization
+    y = sum_with_acc(5, 0.0)
+    print("sum_with_acc(5, 0.0): {y}")
+
+    // Another int call - reuses first specialization
+    z = sum_with_acc(3, 100)
+    print("sum_with_acc(3, 100): {z}")
+}

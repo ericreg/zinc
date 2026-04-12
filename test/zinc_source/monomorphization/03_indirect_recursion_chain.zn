@@ -1,0 +1,26 @@
+// Test: Indirect recursion through three functions (A -> B -> C -> A)
+// Tests circular call graph handling in topological sort
+// Expected: Valid - all three functions specialized, cycle handled
+
+fn func_a(n) {
+    if n <= 0 {
+        return n
+    }
+    print("a: {n}")
+    return func_b(n - 1)
+}
+
+fn func_b(n) {
+    print("b: {n}")
+    return func_c(n)
+}
+
+fn func_c(n) {
+    print("c: {n}")
+    return func_a(n - 1)
+}
+
+fn main() {
+    result = func_a(5)
+    print("result: {result}")
+}

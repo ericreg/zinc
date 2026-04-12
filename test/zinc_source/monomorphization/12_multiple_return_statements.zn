@@ -1,0 +1,39 @@
+// Test: Function with multiple return statements (all same type)
+// First return statement's type should determine function return type
+// Expected: Valid - classify_i64 returns i64 from any branch
+
+fn classify(n) {
+    if n < 0 {
+        return -1
+    }
+    if n == 0 {
+        return 0
+    }
+    if n < 10 {
+        return 1
+    }
+    if n < 100 {
+        return 2
+    }
+    return 3
+}
+
+fn main() {
+    a = classify(-5)
+    print("classify(-5): {a}")
+
+    b = classify(0)
+    print("classify(0): {b}")
+
+    c = classify(5)
+    print("classify(5): {c}")
+
+    d = classify(50)
+    print("classify(50): {d}")
+
+    e = classify(100)
+    print("classify(100): {e}")
+
+    f = classify(999)
+    print("classify(999): {f}")
+}

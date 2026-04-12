@@ -5,7 +5,7 @@ from enum import Enum, auto
 
 from antlr4 import ParserRuleContext
 
-from zinc.ast.types import BaseType, TypeInfo, parse_literal, is_mutating_method, type_to_rust, ChannelTypeInfo
+from zinc.ast.types import BaseType, TypeInfo, parse_literal, is_mutating_method, type_to_rust, ChannelTypeInfo, ArrayTypeInfo
 from zinc.parser.zincVisitor import zincVisitor
 from zinc.parser.zincParser import zincParser as ZincParser
 from zinc.atlas import Atlas, FunctionInstance, ConstInstance, StructFieldInfo, StructMethodInfo
@@ -162,10 +162,13 @@ class SymbolTableVisitor(zincVisitor):
         self._block_counters: dict[str, int] = {}  # For unique block names
         self._current_function: str | None = None
         self._current_return_type: BaseType = BaseType.VOID  # Track return type during resolution
-        # Maps call site interval -> mangled name for CodeGen to use
-        self.specialization_map: dict[tuple[int, int], str] = {}
+        # Maps (caller_function, call_site_interval) -> mangled name for CodeGen to use
+        # Scoped by caller function to handle different specializations of the same generic
+        self.specialization_map: dict[tuple[str | None, tuple[int, int]], str] = {}
         # Track channel variables and their type info (var_name -> ChannelTypeInfo)
         self._channel_infos: dict[str, ChannelTypeInfo] = {}
+        # Track all caller channel infos for function parameters (param_name -> list of ChannelTypeInfos)
+        self._channel_param_all_infos: dict[str, list[ChannelTypeInfo]] = {}
 
     def resolve(self) -> SymbolTable:
         """Main entry point - resolve types for all reachable code.
@@ -611,23 +614,35 @@ class SymbolTableVisitor(zincVisitor):
 
         # Define parameters with types from func.arg_types
         ctx = func.ctx
+        # Track parameter names for mutation detection
+        param_names: list[str] = []
         if hasattr(ctx, "parameterList") and ctx.parameterList():
             for i, param_ctx in enumerate(ctx.parameterList().parameter()):
                 param_name = param_ctx.IDENTIFIER().getText()
+                param_names.append(param_name)
                 # Use arg type from specialization if available
                 if i < len(func.arg_types):
                     param_type = func.arg_types[i]
                 else:
                     param_type = BaseType.UNKNOWN
-                self.symbols.define(
+                param_symbol = self.symbols.define(
                     id=param_name,
                     kind=SymbolKind.PARAMETER,
                     resolved_type=param_type,
                     interval=param_ctx.getSourceInterval(),
                 )
                 # Track channel parameters for element type inference
+                # Store the list of all caller channels for this parameter
                 if param_type == BaseType.CHANNEL and i in func.arg_channel_infos:
-                    self._channel_infos[param_name] = func.arg_channel_infos[i]
+                    # Use first one as primary reference, but store all for updating
+                    all_chan_infos = func.arg_channel_infos[i]
+                    if all_chan_infos:
+                        self._channel_infos[param_name] = all_chan_infos[0]
+                        # Store full list for updating all callers when element type is inferred
+                        self._channel_param_all_infos[param_name] = all_chan_infos
+                # Track array parameters for element type
+                if param_type == BaseType.ARRAY and i in func.arg_array_infos:
+                    param_symbol.element_type = func.arg_array_infos[i].element_type
 
         # Visit function body (skip parameter list since we handled it)
         if hasattr(ctx, "block"):
@@ -635,6 +650,13 @@ class SymbolTableVisitor(zincVisitor):
 
         # Store the inferred return type
         func.return_type = self._current_return_type
+
+        # Update array parameter mutation info
+        for i, param_name in enumerate(param_names):
+            if i in func.arg_array_infos:
+                param_symbol = self.symbols.lookup_by_id(param_name)
+                if param_symbol and param_symbol.is_mutated:
+                    func.arg_array_infos[i].is_mutated = True
 
         self.symbols.exit_scope()
         self._current_function = None
@@ -781,24 +803,44 @@ class SymbolTableVisitor(zincVisitor):
         return BaseType.BOOLEAN
 
     def visitArrayLiteral(self, ctx: ZincParser.ArrayLiteralContext) -> BaseType:
-        """Visit array literal."""
+        """Visit array literal and infer element type from first element."""
+        element_type = None
         for expr_ctx in ctx.expression():
-            self.visit(expr_ctx)
-        self.symbols.define_temp(
+            expr_type = self.visit(expr_ctx)
+            if element_type is None:
+                element_type = expr_type
+        symbol = self.symbols.define_temp(
             resolved_type=BaseType.ARRAY,
             interval=ctx.getSourceInterval(),
         )
+        # Track element type from the first element
+        if element_type is not None:
+            symbol.element_type = element_type
         return BaseType.ARRAY
 
     def visitIndexAccessExpr(self, ctx: ZincParser.IndexAccessExprContext) -> BaseType:
-        """Visit index access."""
-        self.visit(ctx.expression(0))
+        """Visit index access and return element type if array."""
+        arr_type = self.visit(ctx.expression(0))
         self.visit(ctx.expression(1))
+
+        # Try to get element type from the array
+        element_type = BaseType.UNKNOWN
+        if arr_type == BaseType.ARRAY:
+            arr_ctx = ctx.expression(0)
+            # Look up the array symbol to get element type
+            if isinstance(arr_ctx, ZincParser.PrimaryExprContext):
+                primary = arr_ctx.primaryExpression()
+                if primary and primary.IDENTIFIER():
+                    arr_name = primary.IDENTIFIER().getText()
+                    arr_symbol = self.symbols.lookup_by_id(arr_name)
+                    if arr_symbol and arr_symbol.element_type:
+                        element_type = arr_symbol.element_type
+
         self.symbols.define_temp(
-            resolved_type=BaseType.UNKNOWN,
+            resolved_type=element_type,
             interval=ctx.getSourceInterval(),
         )
-        return BaseType.UNKNOWN
+        return element_type
 
     def visitRangeExpr(self, ctx: ZincParser.RangeExprContext) -> BaseType:
         """Visit range expression."""
@@ -823,12 +865,25 @@ class SymbolTableVisitor(zincVisitor):
         """Visit function call expression and create specialization if needed."""
         self.visit(ctx.expression())
 
-        # Collect argument types
+        # Collect argument types and array info
         arg_types: list[BaseType] = []
+        arg_array_infos: dict[int, ArrayTypeInfo] = {}
         if ctx.argumentList():
-            for arg_expr in ctx.argumentList().expression():
+            for i, arg_expr in enumerate(ctx.argumentList().expression()):
                 arg_type = self.visit(arg_expr)
                 arg_types.append(arg_type)
+
+                # Track array element types for array arguments
+                if arg_type == BaseType.ARRAY:
+                    if isinstance(arg_expr, ZincParser.PrimaryExprContext):
+                        primary = arg_expr.primaryExpression()
+                        if primary and primary.IDENTIFIER():
+                            arr_var = primary.IDENTIFIER().getText()
+                            arr_symbol = self.symbols.lookup_by_id(arr_var)
+                            if arr_symbol and arr_symbol.element_type:
+                                arg_array_infos[i] = ArrayTypeInfo(
+                                    element_type=arr_symbol.element_type
+                                )
 
         callee_ctx = ctx.expression()
 
@@ -836,6 +891,14 @@ class SymbolTableVisitor(zincVisitor):
         if isinstance(callee_ctx, ZincParser.MemberAccessExprContext):
             method_name = callee_ctx.IDENTIFIER().getText()
             receiver_ctx = callee_ctx.expression()
+
+            # len() always returns an integer (usize in Rust, i64 in Zinc)
+            if method_name == "len":
+                self.symbols.define_temp(
+                    resolved_type=BaseType.INTEGER,
+                    interval=ctx.getSourceInterval(),
+                )
+                return BaseType.INTEGER
 
             # Get the receiver variable name if it's a simple identifier
             if isinstance(receiver_ctx, ZincParser.PrimaryExprContext):
@@ -869,10 +932,16 @@ class SymbolTableVisitor(zincVisitor):
                     if func_def and arg_types and BaseType.UNKNOWN not in arg_types:
                         # Create specialization in Atlas (pass caller for call graph)
                         mangled = self.atlas.add_specialization(
-                            func_name, arg_types, func_def, self._current_function
+                            func_name,
+                            arg_types,
+                            func_def,
+                            self._current_function,
+                            arg_array_infos,
                         )
-                        # Store mapping from call site to mangled name
-                        self.specialization_map[ctx.getSourceInterval()] = mangled
+                        # Store mapping from (caller, call site) to mangled name
+                        # Scoped by caller so different specializations get correct callees
+                        key = (self._current_function, ctx.getSourceInterval())
+                        self.specialization_map[key] = mangled
 
                         # If this specialization has already been processed, use its return type
                         func_instance = self.atlas.functions.get(mangled)
@@ -928,17 +997,30 @@ class SymbolTableVisitor(zincVisitor):
                             # This preserves type info learned from previous passes
                             existing_chan = self._channel_infos.get(var_name)
                             if existing_chan is None or existing_chan.element_type == BaseType.UNKNOWN:
-                                self._channel_infos[var_name] = ChannelTypeInfo(element_type=BaseType.UNKNOWN)
+                                new_info = ChannelTypeInfo(element_type=BaseType.UNKNOWN)
+                                self._channel_infos[var_name] = new_info
+
+            # Get element type from expression if it's an array
+            expr_element_type = None
+            if expr_type == BaseType.ARRAY:
+                expr_symbol = self.symbols.lookup_by_interval(
+                    ctx.expression().getSourceInterval(), self._current_function
+                )
+                if expr_symbol and expr_symbol.element_type:
+                    expr_element_type = expr_symbol.element_type
 
             if existing is None:
                 # First assignment - create new symbol
-                self.symbols.define(
+                new_sym = self.symbols.define(
                     id=var_name,
                     kind=SymbolKind.VARIABLE,
                     resolved_type=expr_type,
                     interval=target.getSourceInterval(),
                     is_shadow=False,
                 )
+                # Propagate array element type
+                if expr_element_type:
+                    new_sym.element_type = expr_element_type
             elif existing.resolved_type != expr_type:
                 # Type change - create shadow symbol
                 self.symbols.define(
@@ -980,9 +1062,12 @@ class SymbolTableVisitor(zincVisitor):
         """Visit return statement and track return type."""
         if ctx.expression():
             return_type = self.visit(ctx.expression())
-            # Track the return type (first return statement wins)
             if self._current_return_type == BaseType.VOID:
                 self._current_return_type = return_type
+            elif return_type != BaseType.UNKNOWN and return_type != self._current_return_type:
+                # Promote int+float -> float when return paths disagree
+                if {self._current_return_type, return_type} == {BaseType.INTEGER, BaseType.FLOAT}:
+                    self._current_return_type = BaseType.FLOAT
 
     def visitIfStatement(self, ctx: ZincParser.IfStatementContext) -> None:
         """Visit if/else statement."""
@@ -1077,12 +1162,17 @@ class SymbolTableVisitor(zincVisitor):
                         mangled = self.atlas.add_specialization(
                             func_name, arg_types, func_def, self._current_function
                         )
-                        # Store mapping from spawn site to mangled name
-                        self.specialization_map[ctx.getSourceInterval()] = mangled
+                        # Store mapping from (caller, spawn site) to mangled name
+                        key = (self._current_function, ctx.getSourceInterval())
+                        self.specialization_map[key] = mangled
                         # Mark the function as async since it's being spawned
                         self.atlas.functions[mangled].is_async = True
                         # Propagate channel type info to the function instance
-                        self.atlas.functions[mangled].arg_channel_infos = arg_channel_infos
+                        # Append to existing list so all call sites' channels get updated
+                        for idx, chan_info in arg_channel_infos.items():
+                            if idx not in self.atlas.functions[mangled].arg_channel_infos:
+                                self.atlas.functions[mangled].arg_channel_infos[idx] = []
+                            self.atlas.functions[mangled].arg_channel_infos[idx].append(chan_info)
 
     def visitChannelSendStatement(self, ctx: ZincParser.ChannelSendStatementContext) -> None:
         """Visit channel send statement and infer channel element type."""
@@ -1091,7 +1181,13 @@ class SymbolTableVisitor(zincVisitor):
         value_type = self.visit(ctx.expression())
 
         # Update channel info with inferred element type
-        if channel_name in self._channel_infos:
+        # If this is a function parameter, update ALL caller's channel infos
+        if channel_name in self._channel_param_all_infos:
+            all_infos = self._channel_param_all_infos[channel_name]
+            for chan_info in all_infos:
+                if chan_info.element_type == BaseType.UNKNOWN:
+                    chan_info.element_type = value_type
+        elif channel_name in self._channel_infos:
             chan_info = self._channel_infos[channel_name]
             if chan_info.element_type == BaseType.UNKNOWN:
                 chan_info.element_type = value_type

@@ -1,0 +1,49 @@
+// Test: Rapid type shadowing chain
+// Shadow same variable through all types multiple times
+// Expected: Valid - each shadow creates new `let` binding
+
+fn main() {
+    // Start with integer
+    x = 1
+    print("int: {x}")
+
+    // Shadow to float
+    x = 3.14
+    print("float: {x}")
+
+    // Shadow to string
+    x = "hello"
+    print("string: {x}")
+
+    // Shadow to boolean
+    x = true
+    print("bool: {x}")
+
+    // Shadow back to integer
+    x = 42
+    print("int: {x}")
+
+    // Shadow to float again
+    x = 2.718
+    print("float: {x}")
+
+    // Shadow to string again
+    x = "world"
+    print("string: {x}")
+
+    // Shadow to boolean again
+    x = false
+    print("bool: {x}")
+
+    // Shadow to integer again
+    x = 100
+    print("int: {x}")
+
+    // Shadow to float one more time
+    x = 0.5
+    print("float: {x}")
+
+    // Final shadow to string
+    x = "done"
+    print("string: {x}")
+}

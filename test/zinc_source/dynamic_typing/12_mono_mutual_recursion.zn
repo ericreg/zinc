@@ -1,0 +1,56 @@
+// Test: Mutual recursion with generic functions
+// Two generic functions calling each other
+// Expected: Potentially undefined - circular specialization
+
+fn is_even(n) {
+    if n == 0 {
+        return true
+    }
+    return is_odd(n - 1)
+}
+
+fn is_odd(n) {
+    if n == 0 {
+        return false
+    }
+    return is_even(n - 1)
+}
+
+fn ping(n) {
+    print("ping: {n}")
+    if n <= 0 {
+        return n
+    }
+    return pong(n - 1)
+}
+
+fn pong(n) {
+    print("pong: {n}")
+    if n <= 0 {
+        return n
+    }
+    return ping(n - 1)
+}
+
+fn main() {
+    // Test is_even/is_odd mutual recursion
+    a = is_even(4)
+    print("is_even(4): {a}")
+
+    b = is_even(5)
+    print("is_even(5): {b}")
+
+    c = is_odd(3)
+    print("is_odd(3): {c}")
+
+    d = is_odd(4)
+    print("is_odd(4): {d}")
+
+    // Test ping/pong
+    e = ping(3)
+    print("ping(3) result: {e}")
+
+    // Start from pong
+    f = pong(2)
+    print("pong(2) result: {f}")
+}

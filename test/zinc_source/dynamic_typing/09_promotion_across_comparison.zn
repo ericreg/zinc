@@ -1,0 +1,47 @@
+// Test: Type promotion in comparison context
+// Float result compared to int
+// Expected: Valid - comparison works, result is bool
+
+fn main() {
+    // Float compared to int
+    a = (1 + 2.0) > 3
+    print("(1 + 2.0) > 3: {a}")
+
+    // Int compared to float
+    b = 5 < 4.5
+    print("5 < 4.5: {b}")
+
+    // Equality with promotion
+    c = 3.0 == 3
+    print("3.0 == 3: {c}")
+
+    // Complex expression comparison
+    d = (10 / 2.0) >= 5
+    print("(10 / 2.0) >= 5: {d}")
+
+    // Chained comparisons (if supported) or separate
+    x = 1.5
+    e = x > 1
+    print("1.5 > 1: {e}")
+
+    f = x < 2
+    print("1.5 < 2: {f}")
+
+    // Comparison result used in logic
+    g = (1 + 0.5) > 1 && (2 + 0.5) > 2
+    print("both comparisons true: {g}")
+
+    // Inequality
+    h = 2.5 != 2
+    print("2.5 != 2: {h}")
+
+    i = 2.0 != 2
+    print("2.0 != 2: {i}")
+
+    // Edge cases
+    j = 0.0 == 0
+    print("0.0 == 0: {j}")
+
+    k = -1 < 0.0
+    print("-1 < 0.0: {k}")
+}

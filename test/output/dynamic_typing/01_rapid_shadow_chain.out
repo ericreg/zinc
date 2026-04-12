@@ -1,0 +1,11 @@
+int: 1
+float: 3.14
+string: hello
+bool: true
+int: 42
+float: 2.718
+string: world
+bool: false
+int: 100
+float: 0.5
+string: done

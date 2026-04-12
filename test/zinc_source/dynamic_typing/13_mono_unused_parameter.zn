@@ -1,0 +1,55 @@
+// Test: Generic function with unused parameter
+// Can type be inferred for unused params?
+// Expected: Ambiguous - unused param remains UNKNOWN
+
+fn first(a, b) {
+    return a
+}
+
+fn second(a, b) {
+    return b
+}
+
+fn ignore_middle(a, b, c) {
+    return a + c
+}
+
+fn constant(x) {
+    return 42
+}
+
+fn main() {
+    // first - b is unused
+    a = first(1, 2)
+    print("first(1, 2): {a}")
+
+    b = first("hello", 999)
+    print("first(hello, 999): {b}")
+
+    c = first(3.14, true)
+    print("first(3.14, true): {c}")
+
+    // second - a is unused
+    d = second(100, "world")
+    print("second(100, world): {d}")
+
+    e = second(true, 42)
+    print("second(true, 42): {e}")
+
+    // ignore_middle - b is unused in computation
+    f = ignore_middle(1, "ignored", 2)
+    print("ignore_middle(1, ignored, 2): {f}")
+
+    g = ignore_middle(1.0, 999, 2.0)
+    print("ignore_middle(1.0, 999, 2.0): {g}")
+
+    // constant - parameter completely ignored
+    h = constant(1)
+    print("constant(1): {h}")
+
+    i = constant("anything")
+    print("constant(anything): {i}")
+
+    j = constant(true)
+    print("constant(true): {j}")
+}

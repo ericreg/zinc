@@ -1,0 +1,21 @@
+// Test: Recursive call with type promotion in argument
+// x * 0.5 promotes int to float, but this creates a DIFFERENT specialization
+// Expected: Creates process_i64 and process_f64, each calling itself
+
+fn process(x) {
+    if x < 1.0 {
+        return x
+    }
+    // x * 0.5 = float, so this calls process_f64 (not same specialization!)
+    return process(x * 0.5)
+}
+
+fn main() {
+    // Start with int - creates process_i64
+    result1 = process(10)
+    print("process(10): {result1}")
+
+    // Start with float - creates process_f64
+    result2 = process(10.0)
+    print("process(10.0): {result2}")
+}

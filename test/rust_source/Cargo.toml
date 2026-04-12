@@ -127,6 +127,86 @@ name = "monomorphization"
 path = "src/monomorphization.rs"
 
 [[bin]]
+name = "monomorphization_01_deep_recursion_same_type"
+path = "src/monomorphization/01_deep_recursion_same_type.rs"
+
+[[bin]]
+name = "monomorphization_02_recursion_type_change_attempt"
+path = "src/monomorphization/02_recursion_type_change_attempt.rs"
+
+[[bin]]
+name = "monomorphization_03_indirect_recursion_chain"
+path = "src/monomorphization/03_indirect_recursion_chain.rs"
+
+[[bin]]
+name = "monomorphization_04_recursion_with_accumulator"
+path = "src/monomorphization/04_recursion_with_accumulator.rs"
+
+[[bin]]
+name = "monomorphization_05_mutual_three_functions"
+path = "src/monomorphization/05_mutual_three_functions.rs"
+
+[[bin]]
+name = "monomorphization_06_mutual_with_type_promotion"
+path = "src/monomorphization/06_mutual_with_type_promotion.rs"
+
+[[bin]]
+name = "monomorphization_07_mutual_different_return_types"
+path = "src/monomorphization/07_mutual_different_return_types.rs"
+
+[[bin]]
+name = "monomorphization_08_same_call_different_contexts"
+path = "src/monomorphization/08_same_call_different_contexts.rs"
+
+[[bin]]
+name = "monomorphization_09_nested_generic_calls"
+path = "src/monomorphization/09_nested_generic_calls.rs"
+
+[[bin]]
+name = "monomorphization_10_generic_in_conditional"
+path = "src/monomorphization/10_generic_in_conditional.rs"
+
+[[bin]]
+name = "monomorphization_11_call_with_expression_result"
+path = "src/monomorphization/11_call_with_expression_result.rs"
+
+[[bin]]
+name = "monomorphization_12_multiple_return_statements"
+path = "src/monomorphization/12_multiple_return_statements.rs"
+
+[[bin]]
+name = "monomorphization_13_return_in_nested_block"
+path = "src/monomorphization/13_return_in_nested_block.rs"
+
+[[bin]]
+name = "monomorphization_14_return_function_call"
+path = "src/monomorphization/14_return_function_call.rs"
+
+[[bin]]
+name = "monomorphization_15_return_chain"
+path = "src/monomorphization/15_return_chain.rs"
+
+[[bin]]
+name = "monomorphization_16_many_call_sites_same_types"
+path = "src/monomorphization/16_many_call_sites_same_types.rs"
+
+[[bin]]
+name = "monomorphization_17_combinatorial_explosion"
+path = "src/monomorphization/17_combinatorial_explosion.rs"
+
+[[bin]]
+name = "monomorphization_18_specialization_not_called"
+path = "src/monomorphization/18_specialization_not_called.rs"
+
+[[bin]]
+name = "monomorphization_19_generic_with_arrays"
+path = "src/monomorphization/19_generic_with_arrays.rs"
+
+[[bin]]
+name = "monomorphization_20_generic_with_channels"
+path = "src/monomorphization/20_generic_with_channels.rs"
+
+[[bin]]
 name = "non_deterministic_spawn"
 path = "src/non_deterministic/spawn.rs"
 

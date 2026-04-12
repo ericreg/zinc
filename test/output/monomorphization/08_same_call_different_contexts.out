@@ -1,0 +1,7 @@
+before loop: 10
+in loop 0: 0
+in loop 1: 2
+in loop 2: 4
+after loop: 200
+in if: 84
+a=10, c=200

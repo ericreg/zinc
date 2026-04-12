@@ -1,0 +1,4 @@
+find 30: 2
+find 99: -1
+sum until 50: 30
+sum until 1000: 150

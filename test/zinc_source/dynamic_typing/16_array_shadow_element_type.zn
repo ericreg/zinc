@@ -1,0 +1,51 @@
+// Test: Array shadowing with different element types
+// Push int to one array, shadow, push float to new array
+// Expected: Valid - two separate arrays with different types
+
+fn main() {
+    // First array with ints
+    arr = []
+    arr.push(1)
+    arr.push(2)
+    arr.push(3)
+    print("int arr[0]: {arr[0]}")
+    print("int arr[1]: {arr[1]}")
+    print("int arr[2]: {arr[2]}")
+
+    // Shadow arr with new array of floats
+    arr = []
+    arr.push(1.1)
+    arr.push(2.2)
+    arr.push(3.3)
+    print("float arr[0]: {arr[0]}")
+    print("float arr[1]: {arr[1]}")
+    print("float arr[2]: {arr[2]}")
+
+    // Shadow again with booleans
+    arr = []
+    arr.push(true)
+    arr.push(false)
+    print("bool arr[0]: {arr[0]}")
+    print("bool arr[1]: {arr[1]}")
+
+    // Shadow with strings
+    arr = []
+    arr.push("hello")
+    arr.push("world")
+    print("string arr[0]: {arr[0]}")
+    print("string arr[1]: {arr[1]}")
+
+    // Multiple array variables with different types
+    nums = [1, 2, 3]
+    decimals = [1.5, 2.5]
+    flags = [true, false, true, false]
+
+    print("nums[0]: {nums[0]}")
+    print("decimals[1]: {decimals[1]}")
+    print("flags[2]: {flags[2]}")
+
+    // Shadow one but not others
+    nums = [100, 200]
+    print("new nums[0]: {nums[0]}")
+    print("decimals still: {decimals[0]}")
+}

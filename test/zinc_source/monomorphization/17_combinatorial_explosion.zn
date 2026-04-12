@@ -1,0 +1,46 @@
+// Test: Combinatorial explosion of specializations
+// 3 chained functions x 4 types = 12 total specializations
+// Expected: Valid - system handles many specializations
+
+fn f(x) {
+    return x
+}
+
+fn g(x) {
+    return f(x)
+}
+
+fn h(x) {
+    return g(x)
+}
+
+fn main() {
+    // Integer chain
+    a1 = h(1)
+    print("h(1): {a1}")
+
+    // Float chain
+    a2 = h(1.0)
+    print("h(1.0): {a2}")
+
+    // Bool chain
+    a3 = h(true)
+    print("h(true): {a3}")
+
+    // String chain
+    a4 = h("s")
+    print("h(s): {a4}")
+
+    // Direct g calls (creates more specializations)
+    b1 = g(42)
+    b2 = g(3.14)
+    print("g(42): {b1}, g(3.14): {b2}")
+
+    // Direct f calls
+    c1 = f(99)
+    c2 = f(0.5)
+    c3 = f(false)
+    c4 = f("direct")
+    print("f(99): {c1}, f(0.5): {c2}")
+    print("f(false): {c3}, f(direct): {c4}")
+}

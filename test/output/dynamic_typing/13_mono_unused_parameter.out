@@ -1,0 +1,10 @@
+first(1, 2): 1
+first(hello, 999): hello
+first(3.14, true): 3.14
+second(100, world): world
+second(true, 42): 42
+ignore_middle(1, ignored, 2): 3
+ignore_middle(1.0, 999, 2.0): 3
+constant(1): 42
+constant(anything): 42
+constant(true): 42

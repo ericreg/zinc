@@ -1,0 +1,10 @@
+a: 10, identity(a): 10
+a (shadowed): shadowed, b (still int): 10
+c (shadowed to int): 999, d (still float): 3.14
+double(5): 10
+double(2.5): 5
+triple identity(42): 42
+identity(10) + 0.5: 10.5
+negate(5): -5
+negate(3.14): -3.14
+m: string now, n: 200, o: 200

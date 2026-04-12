@@ -1,0 +1,33 @@
+// Test: Mutual recursion with different accumulator types
+// even_sum and odd_sum call each other with both int and float accumulators
+// Expected: Creates four specializations (2 functions x 2 acc types)
+
+fn even_sum(n, acc) {
+    if n <= 0 {
+        return acc
+    }
+    // Add n to accumulator (only at even positions)
+    return odd_sum(n - 1, acc + n)
+}
+
+fn odd_sum(n, acc) {
+    if n <= 0 {
+        return acc
+    }
+    // Skip adding at odd positions
+    return even_sum(n - 1, acc)
+}
+
+fn main() {
+    // Integer accumulator variant
+    x = even_sum(10, 0)
+    print("even_sum(10, 0): {x}")
+
+    // Float accumulator variant - creates different specialization pair
+    y = even_sum(10, 0.0)
+    print("even_sum(10, 0.0): {y}")
+
+    // Verify same value (since logic is the same)
+    z = odd_sum(5, 0)
+    print("odd_sum(5, 0): {z}")
+}

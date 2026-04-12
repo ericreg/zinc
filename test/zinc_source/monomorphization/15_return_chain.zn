@@ -1,0 +1,48 @@
+// Test: Deep chain of return type dependencies
+// Each level returns result of calling the next level
+// Expected: Return types flow from l1 up through l5
+
+fn l1(x) {
+    return x
+}
+
+fn l2(x) {
+    return l1(x)
+}
+
+fn l3(x) {
+    return l2(x)
+}
+
+fn l4(x) {
+    return l3(x)
+}
+
+fn l5(x) {
+    return l4(x)
+}
+
+fn main() {
+    // Integer chain: l5_i64 -> l4_i64 -> l3_i64 -> l2_i64 -> l1_i64
+    a = l5(42)
+    print("l5(42): {a}")
+
+    // Float chain: l5_f64 -> l4_f64 -> l3_f64 -> l2_f64 -> l1_f64
+    b = l5(3.14)
+    print("l5(3.14): {b}")
+
+    // String chain: l5_String -> l4_String -> l3_String -> l2_String -> l1_String
+    c = l5("chain")
+    print("l5(chain): {c}")
+
+    // Bool chain
+    d = l5(true)
+    print("l5(true): {d}")
+
+    // Partial chain tests
+    e = l3(100)
+    print("l3(100): {e}")
+
+    f = l2(0.5)
+    print("l2(0.5): {f}")
+}

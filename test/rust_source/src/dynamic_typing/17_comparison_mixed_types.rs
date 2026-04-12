@@ -1,0 +1,31 @@
+fn main() {
+    let a = (1 == 1);
+    println!("1 == 1: {}", a);
+    let b = (1 != 2);
+    println!("1 != 2: {}", b);
+    let c = (1 < 2);
+    println!("1 < 2: {}", c);
+    let d = (2 > 1);
+    println!("2 > 1: {}", d);
+    let e = (1 <= 1);
+    println!("1 <= 1: {}", e);
+    let f = (2 >= 1);
+    println!("2 >= 1: {}", f);
+    let g = (1.0 == 1.0);
+    println!("1.0 == 1.0: {}", g);
+    let h = (1.5 > 1.0);
+    println!("1.5 > 1.0: {}", h);
+    let i = (0.5 < 1.0);
+    println!("0.5 < 1.0: {}", i);
+    let j = (true == true);
+    println!("true == true: {}", j);
+    let k = (true != false);
+    println!("true != false: {}", k);
+    let l = ("a" == "a");
+    println!("a == a: {}", l);
+    let m = ("a" != "b");
+    println!("a != b: {}", m);
+    let n = (((5 > 3)) && ((2 < 4)));
+    println!("(5 > 3) && (2 < 4): {}", n);
+    println!("test complete");
+}

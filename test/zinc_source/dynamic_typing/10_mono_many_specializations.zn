@@ -1,0 +1,57 @@
+// Test: Many specializations of same function
+// Call same function with 5+ different type combinations
+// Expected: Valid - creates 5+ specialized functions
+
+fn identity(x) {
+    return x
+}
+
+fn add(a, b) {
+    return a + b
+}
+
+fn process(x, y, z) {
+    return x + y + z
+}
+
+fn main() {
+    // identity with different types
+    a = identity(1)
+    print("identity(int): {a}")
+
+    b = identity(3.14)
+    print("identity(float): {b}")
+
+    c = identity(true)
+    print("identity(bool): {c}")
+
+    d = identity("hello")
+    print("identity(string): {d}")
+
+    // add with different type combinations
+    e = add(1, 2)
+    print("add(int, int): {e}")
+
+    f = add(1.0, 2.0)
+    print("add(float, float): {f}")
+
+    g = add(1, 2.0)
+    print("add(int, float): {g}")
+
+    h = add(1.0, 2)
+    print("add(float, int): {h}")
+
+    // process with three arguments of different types
+    i = process(1, 2, 3)
+    print("process(int, int, int): {i}")
+
+    j = process(1.0, 2.0, 3.0)
+    print("process(float, float, float): {j}")
+
+    k = process(1, 2.0, 3)
+    print("process(int, float, int): {k}")
+
+    // Verify type promotion in polymorphic function
+    l = add(10, 0.5)
+    print("add(10, 0.5): {l}")
+}

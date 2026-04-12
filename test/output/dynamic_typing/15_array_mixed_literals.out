@@ -1,0 +1,12 @@
+ints[0]: 1
+ints[4]: 5
+floats[0]: 1
+floats[2]: 3
+bools[0]: true
+bools[1]: false
+strings[0]: a
+first_int: 1, 2, 3
+first_float: 1, 2, 3
+single_int[0]: 42
+single_float[0]: 3.14
+test complete

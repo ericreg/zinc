@@ -1,0 +1,33 @@
+// Test: Function call where argument is an expression that triggers type promotion
+// The expression's result type determines which specialization is used
+// Expected: process_f64 when expression involves float, process_i64 otherwise
+
+fn process(x) {
+    return x * 2
+}
+
+fn main() {
+    a = 10
+    b = 3.5
+
+    // int + float = float, so this calls process_f64
+    result1 = process(a + b)
+    print("process(a + b): {result1}")  // (10 + 3.5) * 2 = 27
+
+    // int * int = int, so this calls process_i64
+    result2 = process(a * 2)
+    print("process(a * 2): {result2}")  // 20 * 2 = 40
+
+    // int + float = float
+    result3 = process(a + 0.0)
+    print("process(a + 0.0): {result3}")  // 10.0 * 2 = 20
+
+    // Nested expression
+    result4 = process((a + 5) * 2)
+    print("process((a + 5) * 2): {result4}")  // 30 * 2 = 60
+
+    // Subexpression with promotion
+    c = 2
+    result5 = process(a / c + 0.5)
+    print("process(a / c + 0.5): {result5}")  // (5 + 0.5) * 2 = 11
+}

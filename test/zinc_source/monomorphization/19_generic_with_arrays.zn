@@ -1,0 +1,50 @@
+// Test: Generic functions with array parameters
+// Array element type should be tracked for specialization
+// Expected: Different specializations for int arrays vs float arrays
+
+fn first(arr) {
+    return arr[0]
+}
+
+fn last(arr) {
+    return arr[arr.len() - 1]
+}
+
+fn sum_array(arr) {
+    total = arr[0]
+    i = 1
+    while i < arr.len() {
+        total = total + arr[i]
+        i = i + 1
+    }
+    return total
+}
+
+fn main() {
+    ints = [1, 2, 3, 4, 5]
+    floats = [1.0, 2.0, 3.0]
+
+    // first with int array
+    a = first(ints)
+    print("first(ints): {a}")
+
+    // first with float array
+    b = first(floats)
+    print("first(floats): {b}")
+
+    // last with int array
+    c = last(ints)
+    print("last(ints): {c}")
+
+    // last with float array
+    d = last(floats)
+    print("last(floats): {d}")
+
+    // sum_array with int array
+    e = sum_array(ints)
+    print("sum_array(ints): {e}")
+
+    // sum_array with float array
+    f = sum_array(floats)
+    print("sum_array(floats): {f}")
+}

@@ -1,0 +1,8 @@
+t: true
+f: false
+t && f: false
+t || f: true
+!t: false
+1 + 1: 2
+2.0 * 3.0: 6
+test complete

@@ -27,6 +27,7 @@ dependencies = [
   "structlog>=24.1.0",
   "colorama==0.4.6",
   "sortedcontainers==2.4.0",
+  "pytest>=8.1.1",
 ]
 
 # Installs all testing dependencies needed when pytest runs. Do NOT put
@@ -68,30 +69,37 @@ py-modules = ["__init__"]
 include = ["zinc*"]
 
 
-[tool.black]
-line-length = 120
-target-version = ['py313']
-
 [tool.isort]
 combine_as_imports = true
 line_length = 60
 profile = "black"
 
-# Pytest configuration
-# https://docs.pytest.org/en/stable/customize.html#pyproject-toml
-[tool.pytest.ini_options]
-addopts = [
-  "--cache-clear",
-  "--cov-report=term",
-  "--cov=zinc",
-  "--durations=0",
-  #"--isort",
-  "--verbose",
-  # "--numprocesses=auto", # multiprocessing
-  "--cov-report=xml",
-  # "--disable-warnings", # disable warnings
-  # "--pylint-rcfile=.pylintrc", # uncomment to enable pylint during unit tests
-  # "--pylint",
-  "-x", # stop tests after first failure
+
+[tool.ruff]
+line-length = 140
+src = ["dcs_simulation_engine", "tests"]
+exclude = [
+  "analysis/*", # analysis folder
+  "**/*.ipynb", # all notebooks
 ]
+
+[tool.ruff.lint]
+exclude = [
+  "*.ipynb", # all notebooks
+  "analysis_notebooks/*" # specific folder
+]
+select = [
+  "D", # docstring rules
+  "E", # pycodestyle rules
+  "F", # pyflakes rules
+  "I" # import rules
+]
+
+[tool.ruff.lint.isort]
+case-sensitive = true
+default-section = "first-party"
+
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
 

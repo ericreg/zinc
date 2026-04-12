@@ -1,0 +1,9 @@
+x (int): 1
+x (now float): 1.5
+y (int): 10
+y (float after *2.0): 20
+y (float + int = float): 25
+z (int): 100
+z (complex expr): 10.100000000000001
+w (int arithmetic): 16
+w (now float): 8

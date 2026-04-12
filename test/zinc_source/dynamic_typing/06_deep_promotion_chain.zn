@@ -1,0 +1,41 @@
+// Test: Deep type promotion chain
+// Nested promotions across parentheses
+// Expected: Valid - all promote to float
+
+fn main() {
+    // Simple nested promotion
+    a = ((1 + 2.0) + 3) + 4.0
+    print("a: {a}")
+
+    // Left-heavy nesting
+    b = (((1 + 0.5) + 2) + 3) + 4
+    print("b: {b}")
+
+    // Right-heavy nesting
+    c = 1 + (2 + (3 + (4 + 0.5)))
+    print("c: {c}")
+
+    // Mixed multiplication and addition
+    d = (1 * 2.0) + (3 * 4)
+    print("d: {d}")
+
+    // Deep multiplication chain
+    e = ((2 * 3.0) * 4) * 5
+    print("e: {e}")
+
+    // Mixed operators with promotion
+    f = (10 / 2.0) + (8 - 3)
+    print("f: {f}")
+
+    // Complex expression with all operators
+    g = ((1 + 2) * 3.0 - 4) / 2
+    print("g: {g}")
+
+    // Verify integer arithmetic stays integer
+    h = ((1 + 2) * 3) + 4
+    print("h (should be int): {h}")
+
+    // Then promote it
+    i = h + 0.1
+    print("i (promoted from h): {i}")
+}

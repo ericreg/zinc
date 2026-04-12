@@ -1,0 +1,35 @@
+// Test: Different specializations in if/else branches
+// Both branches should be compiled even if only one executes
+// Expected: Creates identity_i64, identity_f64, identity_String
+
+fn identity(x) {
+    return x
+}
+
+fn main() {
+    cond = true
+
+    if cond {
+        a = identity(42)
+        print("int branch: {a}")
+    } else {
+        b = identity(3.14)
+        print("float branch: {b}")
+    }
+
+    // String variant always executes
+    c = identity("hello")
+    print("string: {c}")
+
+    // Bool variant
+    d = identity(false)
+    print("bool: {d}")
+
+    // Another conditional with nested calls
+    if !cond {
+        e = identity(999)
+        print("never reached: {e}")
+    }
+
+    print("test complete")
+}

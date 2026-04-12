@@ -1,0 +1,11 @@
+a (int mutated): 3
+a (shadowed to string): now string
+a (string mutated): another string
+a (shadowed to float): 99.9
+b: 1
+b: 2
+b: 2
+b: 3
+b: true
+b: false
+b: end

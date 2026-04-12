@@ -1,0 +1,31 @@
+fn main() {
+    let x = 1;
+    println!("x initial: {}", x);
+    let x = (((x + x) as f64) + 0.5);
+    println!("x after x + x + 0.5: {}", x);
+    let mut y = 2;
+    println!("y initial: {}", y);
+    y = (y * y);
+    println!("y after y * y: {}", y);
+    y = ((y + y) + y);
+    println!("y after y + y + y: {}", y);
+    let z = 10;
+    println!("z initial (int): {}", z);
+    let mut z = ((z as f64) / 3.0);
+    println!("z after z / 3.0 (float): {}", z);
+    z = (z * z);
+    println!("z after z * z: {}", z);
+    let mut a = 5;
+    println!("a: {}", a);
+    a = (a + 1);
+    println!("a: {}", a);
+    let mut a = ((a as f64) * 0.5);
+    println!("a: {}", a);
+    a = (a + a);
+    println!("a: {}", a);
+    let b = 3;
+    let c = 4;
+    println!("b: {}, c: {}", b, c);
+    let b = (((b + c) as f64) + 0.1);
+    println!("b after b + c + 0.1: {}", b);
+}

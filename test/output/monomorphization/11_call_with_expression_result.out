@@ -1,0 +1,5 @@
+process(a + b): 27
+process(a * 2): 40
+process(a + 0.0): 20
+process((a + 5) * 2): 60
+process(a / c + 0.5): 11

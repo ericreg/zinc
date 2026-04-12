@@ -1,0 +1,6 @@
+int: 4
+float: 3
+int: 2
+float: 1
+int: 0
+result: 0

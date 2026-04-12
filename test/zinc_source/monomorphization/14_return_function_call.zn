@@ -1,0 +1,41 @@
+// Test: Return type depends on called function's return type
+// wrapper's return type must match add's return type
+// Expected: wrapper specializations match add specializations
+
+fn add(a, b) {
+    return a + b
+}
+
+fn wrapper(x, y) {
+    return add(x, y)
+}
+
+fn double_via_add(x) {
+    return add(x, x)
+}
+
+fn main() {
+    // Int wrapper -> int add
+    a = wrapper(1, 2)
+    print("wrapper(1, 2): {a}")
+
+    // Float wrapper -> float add
+    b = wrapper(1.0, 2.0)
+    print("wrapper(1.0, 2.0): {b}")
+
+    // Mixed wrapper -> promoted add (int + float = float)
+    c = wrapper(1, 2.0)
+    print("wrapper(1, 2.0): {c}")
+
+    // double_via_add with int
+    d = double_via_add(5)
+    print("double_via_add(5): {d}")
+
+    // double_via_add with float
+    e = double_via_add(2.5)
+    print("double_via_add(2.5): {e}")
+
+    // Chain: wrapper calls add, result used in expression
+    f = wrapper(10, 20) + 0.5
+    print("wrapper(10, 20) + 0.5: {f}")
+}

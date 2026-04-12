@@ -1,0 +1,6 @@
+s: hello
+n: 42
+x (int + int): 3
+y (float + float): 3
+z (int + float): 3
+test complete
