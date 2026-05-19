@@ -6,7 +6,7 @@
 		"dockerfile": "Dockerfile"
 	},
 	// Bind mount your host source into the container
-	"workspaceMount": "source=${localWorkspaceFolder},target=/code/${localWorkspaceFolderBasename},type=bind,consistency=cached",
+	// "workspaceMount": "source=${localWorkspaceFolder},target=/workspace/${localWorkspaceFolderBasename},type=bind,consistency=cached",
 	"mounts": [
 		// mount the uv cache to speed up installs and avoid re-downloading dependencies every time the container is rebuilt
 		// keep in mind that the container os may be different from the host os, so we can't use the cache at $HOME/.cache/uv

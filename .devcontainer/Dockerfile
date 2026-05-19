@@ -6,6 +6,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/code \
+    NVM_DIR=/usr/local/nvm \
+    NVM_SYMLINK_CURRENT=true \
     UV_LINK_MODE=copy \
     UV_PROJECT_ENVIRONMENT=/opt/venv \
     PATH="/opt/venv/bin:${PATH}" 
@@ -28,7 +30,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     zsh \
     && rm -rf /var/lib/apt/lists/*
 
-
 # Download ANTLR artifacts
 RUN cd /usr/local/lib && \
     curl -O https://www.antlr.org/download/antlr-4.13.2-complete.jar
@@ -42,7 +43,8 @@ RUN echo 'export CLASSPATH=".:/usr/local/lib/antlr-4.13.2-complete.jar:$CLASSPAT
 
 # Rust configuration
 ENV PATH="/root/.cargo/bin:${PATH}"
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path \
+    && rustup set profile minimal
 
 # make zsh the default shell
 RUN chsh -s $(which zsh)
@@ -67,6 +69,12 @@ RUN apt-get update \
     && apt-get upgrade -y \
     && rm -rf /var/lib/apt/lists/*
 
+# Install Node.js via nvm so the version can be managed consistently inside
+# the dev container.
+RUN mkdir -p "${NVM_DIR}" \
+    && bash -lc 'curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | PROFILE=/dev/null bash' \
+    && bash -lc '. "${NVM_DIR}/nvm.sh" && nvm install --lts && nvm alias default "lts/*" && nvm use default'
+
 # Create the project virtualenv so it survives the workspace bind
 # mount used by the dev container. The actual `uv sync` happens after the repo
 # is mounted by devcontainer.json.
@@ -82,8 +90,6 @@ RUN mkdir -p /root/.codex \
     'approval_policy = "never"' \
     'sandbox_mode = "danger-full-access"' \
     > /root/.codex/config.toml
-
-WORKDIR /code
 
 # set the ~/.zshrc file 
 COPY zshrc /root/.zshrc 
