@@ -321,10 +321,9 @@ Zinc uses a 3-pass compiler:
 - [x] String interpolation
 - [x] Constants
 - [x] Structs/objects with methods
-- [ ] Constant folding
-- [ ] While loops
-- [ ] Maps
-- [ ] Sets
+- [x] While loops
+- [x] Maps
+- [x] Sets
 - [ ] Error handling
 - [ ] Modules and imports
 - [ ] A ton of tests
@@ -338,28 +337,10 @@ Zinc uses a 3-pass compiler:
 docker run -it -v /Users/eric/code/zinc/zinc/parser:/workspace zinc-dev /regen
 ```
 
+If you use the vscode devcontainer, you may just run the `regen` command directly in the terminal.
+
 ### Running Tests
 
 ```sh
-python -m pytest test/test_compile.py
-```
-
-## Project Structure
-
-```
-zinc/
-├── zinc/                    # Compiler package
-│   ├── parser/              # ANTLR4 generated parser
-│   │   └── zinc.g4          # Grammar definition
-│   ├── ast/                 # AST node definitions
-│   │   └── types.py         # Type system
-│   ├── main.py              # CLI entry point
-│   ├── atlas.py             # Pass 1: Reachability analysis
-│   ├── symbols.py           # Pass 2: Symbol resolution
-│   └── codegen.py           # Pass 3: Rust code generation
-├── test/
-│   ├── zinc_source/         # Test programs (.zn files)
-│   ├── rust_source/         # Expected Rust output
-│   └── output/              # Expected execution output
-└── README.md
+uv run pytest -v
 ```
