@@ -84,6 +84,11 @@ class zincVisitor(ParseTreeVisitor):
         return self.visitChildren(ctx)
 
 
+    # Visit a parse tree produced by zincParser#tupleType.
+    def visitTupleType(self, ctx:zincParser.TupleTypeContext):
+        return self.visitChildren(ctx)
+
+
     # Visit a parse tree produced by zincParser#variableAssignment.
     def visitVariableAssignment(self, ctx:zincParser.VariableAssignmentContext):
         return self.visitChildren(ctx)
@@ -91,6 +96,11 @@ class zincVisitor(ParseTreeVisitor):
 
     # Visit a parse tree produced by zincParser#assignmentTarget.
     def visitAssignmentTarget(self, ctx:zincParser.AssignmentTargetContext):
+        return self.visitChildren(ctx)
+
+
+    # Visit a parse tree produced by zincParser#tupleAssignmentTarget.
+    def visitTupleAssignmentTarget(self, ctx:zincParser.TupleAssignmentTargetContext):
         return self.visitChildren(ctx)
 
 
@@ -106,6 +116,11 @@ class zincVisitor(ParseTreeVisitor):
 
     # Visit a parse tree produced by zincParser#forStatement.
     def visitForStatement(self, ctx:zincParser.ForStatementContext):
+        return self.visitChildren(ctx)
+
+
+    # Visit a parse tree produced by zincParser#forBinding.
+    def visitForBinding(self, ctx:zincParser.ForBindingContext):
         return self.visitChildren(ctx)
 
 
@@ -286,6 +301,21 @@ class zincVisitor(ParseTreeVisitor):
 
     # Visit a parse tree produced by zincParser#arrayLiteral.
     def visitArrayLiteral(self, ctx:zincParser.ArrayLiteralContext):
+        return self.visitChildren(ctx)
+
+
+    # Visit a parse tree produced by zincParser#tupleLiteral.
+    def visitTupleLiteral(self, ctx:zincParser.TupleLiteralContext):
+        return self.visitChildren(ctx)
+
+
+    # Visit a parse tree produced by zincParser#collectionLiteral.
+    def visitCollectionLiteral(self, ctx:zincParser.CollectionLiteralContext):
+        return self.visitChildren(ctx)
+
+
+    # Visit a parse tree produced by zincParser#dictEntry.
+    def visitDictEntry(self, ctx:zincParser.DictEntryContext):
         return self.visitChildren(ctx)
 
 

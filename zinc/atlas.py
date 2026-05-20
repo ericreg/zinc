@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from antlr4 import ParserRuleContext
 from sortedcontainers import SortedDict, SortedSet
 
-from zinc.ast.types import BaseType, type_to_rust, ChannelTypeInfo, ArrayTypeInfo
+from zinc.ast.types import BaseType, type_to_rust, ChannelTypeInfo, ArrayTypeInfo, DictTypeInfo, SetTypeInfo, TupleTypeInfo
 from zinc.parser.zincVisitor import zincVisitor
 from zinc.parser.zincParser import zincParser as ZincParser
 
@@ -23,6 +23,16 @@ class FunctionInstance:
     arg_channel_infos: dict[int, list[ChannelTypeInfo]] = field(default_factory=dict)
     # Rich type info for array arguments (arg_index -> ArrayTypeInfo)
     arg_array_infos: dict[int, ArrayTypeInfo] = field(default_factory=dict)
+    # Rich type info for dict arguments (arg_index -> DictTypeInfo)
+    arg_dict_infos: dict[int, DictTypeInfo] = field(default_factory=dict)
+    # Rich type info for set arguments (arg_index -> SetTypeInfo)
+    arg_set_infos: dict[int, SetTypeInfo] = field(default_factory=dict)
+    # Rich type info for tuple arguments (arg_index -> TupleTypeInfo)
+    arg_tuple_infos: dict[int, TupleTypeInfo] = field(default_factory=dict)
+    # Rich type info for collection return values
+    return_dict_info: DictTypeInfo | None = None
+    return_set_info: SetTypeInfo | None = None
+    return_tuple_info: TupleTypeInfo | None = None
 
 
 @dataclass
@@ -143,13 +153,23 @@ class Atlas:
         ctx: ParserRuleContext,
         caller_mangled: str | None = None,
         arg_array_infos: dict[int, ArrayTypeInfo] | None = None,
+        arg_dict_infos: dict[int, DictTypeInfo] | None = None,
+        arg_set_infos: dict[int, SetTypeInfo] | None = None,
+        arg_tuple_infos: dict[int, TupleTypeInfo] | None = None,
     ) -> str:
         """Create a new function specialization. Returns mangled name.
 
         If caller_mangled is provided, updates the call graph to record that
         caller_mangled calls this specialization.
         """
-        mangled = self._mangle_name(name, arg_types, arg_array_infos)
+        mangled = self._mangle_name(
+            name,
+            arg_types,
+            arg_array_infos,
+            arg_dict_infos,
+            arg_set_infos,
+            arg_tuple_infos,
+        )
         if mangled not in self.functions:
             self.functions[mangled] = FunctionInstance(
                 name=name,
@@ -157,6 +177,9 @@ class Atlas:
                 ctx=ctx,
                 arg_types=list(arg_types),  # Copy to avoid mutation
                 arg_array_infos=arg_array_infos or {},
+                arg_dict_infos=arg_dict_infos or {},
+                arg_set_infos=arg_set_infos or {},
+                arg_tuple_infos=arg_tuple_infos or {},
             )
             # Initialize call graph entry for the new specialization
             self.calls[mangled] = SortedSet()
@@ -172,6 +195,9 @@ class Atlas:
         name: str,
         arg_types: list[BaseType],
         arg_array_infos: dict[int, ArrayTypeInfo] | None = None,
+        arg_dict_infos: dict[int, DictTypeInfo] | None = None,
+        arg_set_infos: dict[int, SetTypeInfo] | None = None,
+        arg_tuple_infos: dict[int, TupleTypeInfo] | None = None,
     ) -> str:
         """Generate mangled name like 'add_i64_i64' or 'find_Vec_i64_i64'."""
         if not arg_types:
@@ -183,6 +209,12 @@ class Atlas:
                 # Include element type for arrays
                 elem = type_to_rust(arg_array_infos[i].element_type)
                 type_parts.append(f"Vec_{elem}")
+            elif t == BaseType.DICT and arg_dict_infos and i in arg_dict_infos:
+                type_parts.append(arg_dict_infos[i].to_rust_type_suffix())
+            elif t == BaseType.SET and arg_set_infos and i in arg_set_infos:
+                type_parts.append(arg_set_infos[i].to_rust_type_suffix())
+            elif t == BaseType.TUPLE and arg_tuple_infos and i in arg_tuple_infos:
+                type_parts.append(arg_tuple_infos[i].to_rust_type_suffix())
             else:
                 type_parts.append(type_to_rust(t))
 
@@ -347,8 +379,8 @@ class AtlasBuilder(zincVisitor):
                 primary = callee_ctx.primaryExpression()
                 if primary and primary.IDENTIFIER():
                     func_name = primary.IDENTIFIER().getText()
-                    # Skip builtins like print, chan
-                    if func_name not in ("print", "chan"):
+                    # Skip builtins like print, chan, and collection constructors
+                    if func_name not in ("print", "chan", "dict", "sortdict", "set", "sortset"):
                         self._calls[self._current_function].add(func_name)
 
             # Method call on struct type (static method)
@@ -365,7 +397,7 @@ class AtlasBuilder(zincVisitor):
                 primary = expr.primaryExpression()
                 if primary and primary.IDENTIFIER():
                     func_name = primary.IDENTIFIER().getText()
-                    if func_name not in ("print", "chan") and self._current_function:
+                    if func_name not in ("print", "chan", "dict", "sortdict", "set", "sortset") and self._current_function:
                         self._calls[self._current_function].add(func_name)
 
         # Check for struct instantiation

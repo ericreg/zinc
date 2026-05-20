@@ -1,0 +1,9 @@
+fn sum_pair(pair) {
+    return pair[0] + pair[1]
+}
+
+fn main() {
+    pair = (10, 20)
+    total = sum_pair(pair)
+    print("{total}")
+}

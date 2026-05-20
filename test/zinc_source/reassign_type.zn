@@ -9,8 +9,8 @@ fn main() {
 
     x = 2.17
     print("x: {x}")
-    x = 3.14
 
+    x = 3.14
     print("x: {x}")
 
     x = "hello"

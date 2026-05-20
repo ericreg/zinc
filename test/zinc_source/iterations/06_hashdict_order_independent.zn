@@ -1,0 +1,15 @@
+fn main() {
+    scores = dict()
+    scores["a"] = 1
+    scores["b"] = 2
+
+    total = 0
+    seen = 0
+    for key, value in scores {
+        total = total + value
+        seen = seen + 1
+    }
+
+    print("{total}")
+    print("{seen}")
+}

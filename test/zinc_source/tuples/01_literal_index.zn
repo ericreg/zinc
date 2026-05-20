@@ -1,0 +1,7 @@
+fn main() {
+    pair = (7, "seven")
+    first = pair[0]
+    second = pair[1]
+    print("{first}")
+    print("{second}")
+}

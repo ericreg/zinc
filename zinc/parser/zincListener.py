@@ -143,6 +143,15 @@ class zincListener(ParseTreeListener):
         pass
 
 
+    # Enter a parse tree produced by zincParser#tupleType.
+    def enterTupleType(self, ctx:zincParser.TupleTypeContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#tupleType.
+    def exitTupleType(self, ctx:zincParser.TupleTypeContext):
+        pass
+
+
     # Enter a parse tree produced by zincParser#variableAssignment.
     def enterVariableAssignment(self, ctx:zincParser.VariableAssignmentContext):
         pass
@@ -158,6 +167,15 @@ class zincListener(ParseTreeListener):
 
     # Exit a parse tree produced by zincParser#assignmentTarget.
     def exitAssignmentTarget(self, ctx:zincParser.AssignmentTargetContext):
+        pass
+
+
+    # Enter a parse tree produced by zincParser#tupleAssignmentTarget.
+    def enterTupleAssignmentTarget(self, ctx:zincParser.TupleAssignmentTargetContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#tupleAssignmentTarget.
+    def exitTupleAssignmentTarget(self, ctx:zincParser.TupleAssignmentTargetContext):
         pass
 
 
@@ -185,6 +203,15 @@ class zincListener(ParseTreeListener):
 
     # Exit a parse tree produced by zincParser#forStatement.
     def exitForStatement(self, ctx:zincParser.ForStatementContext):
+        pass
+
+
+    # Enter a parse tree produced by zincParser#forBinding.
+    def enterForBinding(self, ctx:zincParser.ForBindingContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#forBinding.
+    def exitForBinding(self, ctx:zincParser.ForBindingContext):
         pass
 
 
@@ -509,6 +536,33 @@ class zincListener(ParseTreeListener):
 
     # Exit a parse tree produced by zincParser#arrayLiteral.
     def exitArrayLiteral(self, ctx:zincParser.ArrayLiteralContext):
+        pass
+
+
+    # Enter a parse tree produced by zincParser#tupleLiteral.
+    def enterTupleLiteral(self, ctx:zincParser.TupleLiteralContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#tupleLiteral.
+    def exitTupleLiteral(self, ctx:zincParser.TupleLiteralContext):
+        pass
+
+
+    # Enter a parse tree produced by zincParser#collectionLiteral.
+    def enterCollectionLiteral(self, ctx:zincParser.CollectionLiteralContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#collectionLiteral.
+    def exitCollectionLiteral(self, ctx:zincParser.CollectionLiteralContext):
+        pass
+
+
+    # Enter a parse tree produced by zincParser#dictEntry.
+    def enterDictEntry(self, ctx:zincParser.DictEntryContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#dictEntry.
+    def exitDictEntry(self, ctx:zincParser.DictEntryContext):
         pass
 
 

@@ -27,6 +27,34 @@ name = "channels"
 path = "src/channels.rs"
 
 [[bin]]
+name = "collections_01_dict_literal"
+path = "src/collections/01_dict_literal.rs"
+
+[[bin]]
+name = "collections_02_dict_empty_methods"
+path = "src/collections/02_dict_empty_methods.rs"
+
+[[bin]]
+name = "collections_03_set_literal_methods"
+path = "src/collections/03_set_literal_methods.rs"
+
+[[bin]]
+name = "collections_04_set_empty_methods"
+path = "src/collections/04_set_empty_methods.rs"
+
+[[bin]]
+name = "collections_05_sorted_collections"
+path = "src/collections/05_sorted_collections.rs"
+
+[[bin]]
+name = "collections_06_collection_parameters"
+path = "src/collections/06_collection_parameters.rs"
+
+[[bin]]
+name = "collections_07_collection_returns"
+path = "src/collections/07_collection_returns.rs"
+
+[[bin]]
 name = "const_test"
 path = "src/const_test.rs"
 
@@ -121,6 +149,30 @@ path = "src/functions.rs"
 [[bin]]
 name = "if_else"
 path = "src/if_else.rs"
+
+[[bin]]
+name = "iterations_01_sortdict_keys_values"
+path = "src/iterations/01_sortdict_keys_values.rs"
+
+[[bin]]
+name = "iterations_02_dict_bare_items_destructure"
+path = "src/iterations/02_dict_bare_items_destructure.rs"
+
+[[bin]]
+name = "iterations_03_dict_items_parenthesized"
+path = "src/iterations/03_dict_items_parenthesized.rs"
+
+[[bin]]
+name = "iterations_04_dict_items_tuple_binding"
+path = "src/iterations/04_dict_items_tuple_binding.rs"
+
+[[bin]]
+name = "iterations_05_dict_loop_locals_are_copies"
+path = "src/iterations/05_dict_loop_locals_are_copies.rs"
+
+[[bin]]
+name = "iterations_06_hashdict_order_independent"
+path = "src/iterations/06_hashdict_order_independent.rs"
 
 [[bin]]
 name = "monomorphization"
@@ -245,6 +297,30 @@ path = "src/structs/07_string_conversion.rs"
 [[bin]]
 name = "structs_08_integration"
 path = "src/structs/08_integration.rs"
+
+[[bin]]
+name = "tuples_01_literal_index"
+path = "src/tuples/01_literal_index.rs"
+
+[[bin]]
+name = "tuples_02_single_vs_paren"
+path = "src/tuples/02_single_vs_paren.rs"
+
+[[bin]]
+name = "tuples_03_destructuring"
+path = "src/tuples/03_destructuring.rs"
+
+[[bin]]
+name = "tuples_04_function_arg"
+path = "src/tuples/04_function_arg.rs"
+
+[[bin]]
+name = "tuples_05_function_return"
+path = "src/tuples/05_function_return.rs"
+
+[[bin]]
+name = "tuples_06_nested_index"
+path = "src/tuples/06_nested_index.rs"
 
 [[bin]]
 name = "variable_assignment"

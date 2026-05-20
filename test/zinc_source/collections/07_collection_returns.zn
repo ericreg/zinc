@@ -1,0 +1,17 @@
+fn make_scores(seed) {
+    return {"made": seed, "bonus": 1.5}
+}
+
+fn make_values(seed) {
+    return {seed, 4}
+}
+
+fn main() {
+    scores = make_scores(2)
+    bonus = scores.get("bonus")
+    print("{bonus}")
+
+    values = make_values(5)
+    has_four = values.contains(4)
+    print("{has_four}")
+}

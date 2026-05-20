@@ -1,0 +1,9 @@
+fn main() {
+    a, b = (2, 3)
+    print("{a}")
+    print("{b}")
+
+    (name, score) = ("ada", 9)
+    print("{name}")
+    print("{score}")
+}

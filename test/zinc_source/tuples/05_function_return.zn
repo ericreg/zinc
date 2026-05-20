@@ -1,0 +1,9 @@
+fn make_pair(seed) {
+    return (seed, seed + 1)
+}
+
+fn main() {
+    left, right = make_pair(4)
+    print("{left}")
+    print("{right}")
+}

@@ -1,0 +1,12 @@
+fn main() {
+    values = set()
+    values.push(1)
+    values.insert(2)
+
+    has_two = values.contains(2)
+    print("{has_two}")
+
+    values.clear()
+    is_empty = values.is_empty()
+    print("{is_empty}")
+}

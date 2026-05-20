@@ -1,0 +1,12 @@
+fn main() {
+    scores = sortdict()
+    scores["b"] = 2
+    scores["a"] = 1
+
+    for item in scores.items() {
+        key = item[0]
+        value = item[1]
+        print("{key}")
+        print("{value}")
+    }
+}

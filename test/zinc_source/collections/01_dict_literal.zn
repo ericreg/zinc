@@ -1,0 +1,10 @@
+fn main() {
+    scores = {"a": 1, "b": 2.5}
+    first = scores["a"]
+    second = scores.get("b")
+    count = scores.len()
+
+    print("{first}")
+    print("{second}")
+    print("{count}")
+}

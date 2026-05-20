@@ -1,0 +1,8 @@
+fn main() {
+    nested = (1, (2, 3))
+    inner = nested[1]
+    first = inner[0]
+    second = nested[1][1]
+    print("{first}")
+    print("{second}")
+}

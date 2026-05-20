@@ -2,6 +2,7 @@ fn tx(x, send_x) {
     send_x <- x
 }
 
+
 fn main() {
 
     // create channel
@@ -9,7 +10,7 @@ fn main() {
 
     // send data on the channel from a spawned task
     spawn tx(42, x_chan)
-     
+
     // receive data from the channel
     x = <- x_chan
     print("{x}")

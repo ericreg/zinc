@@ -12,6 +12,7 @@ from zinc.parser.zincLexer import zincLexer as ZincLexer
 from zinc.parser.zincParser import zincParser as ZincParser
 from zinc.struct_logging import configure_logging, get_logger
 from zinc.atlas import AtlasBuilder
+from zinc.exceptions import ZincTypeError
 from zinc.symbols import SymbolTableVisitor
 from zinc.codegen import CodeGenVisitor
 
@@ -181,6 +182,40 @@ def build_cargo_project() -> None:
     )
     if result.returncode != 0:
         raise RuntimeError(f"Cargo build failed:\n{result.stderr}")
+
+
+@pytest.mark.parametrize(
+    ("source", "message"),
+    [
+        ("fn main(){ a = {} }", "ambiguous"),
+        ("fn main(){ a = {1.0, 2.0} }", "set element cannot be a float"),
+        ("fn main(){ a = {1.0: \"x\"} }", "dict key cannot be a float"),
+        ("fn main(){ a = dict() }", "cannot infer type"),
+        ("fn main(){ a = set()\n b = a.insert(1) }", "mutating collection methods"),
+    ],
+)
+def test_collection_compile_errors(source: str, message: str) -> None:
+    """Invalid collection programs fail during Zinc type resolution."""
+    with pytest.raises(ZincTypeError, match=message):
+        compile_zinc(source)
+
+
+@pytest.mark.parametrize(
+    ("source", "message"),
+    [
+        ("fn main(){ pair = (1, 2)\n bad = pair[2] }", "tuple index out of bounds"),
+        ("fn main(){ pair = (1, 2)\n idx = 0\n bad = pair[idx] }", "tuple index must be an integer literal"),
+        ("fn main(){ a, b = (1, 2, 3) }", "tuple destructuring arity mismatch"),
+        (
+            'fn main(){ d = sortdict()\n d["a"] = 1\n for key, value in d { d["b"] = 2 } }',
+            "cannot mutate dict during iteration",
+        ),
+    ],
+)
+def test_tuple_iteration_compile_errors(source: str, message: str) -> None:
+    """Invalid tuple and dict iteration programs fail during Zinc type resolution."""
+    with pytest.raises(ZincTypeError, match=message):
+        compile_zinc(source)
 
 
 @pytest.mark.parametrize("test_path", get_test_cases())

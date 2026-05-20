@@ -7,7 +7,7 @@ from zinc.parser.zincVisitor import zincVisitor
 from zinc.parser.zincParser import zincParser as ZincParser
 from zinc.atlas import Atlas, FunctionInstance, StructInstance, ConstInstance, StructFieldInfo, StructMethodInfo
 from zinc.symbols import SymbolTable, SymbolKind
-from zinc.ast.types import BaseType, type_to_rust, ChannelTypeInfo
+from zinc.ast.types import BaseType, type_to_rust, ChannelTypeInfo, DictTypeInfo, SetTypeInfo, TupleTypeInfo
 
 
 @dataclass
@@ -83,6 +83,9 @@ class CodeGenVisitor(zincVisitor):
         self._current_struct_fields: dict[str, StructFieldInfo] | None = None
         # Track variables that hold compile-time literal values
         self._literal_vars: set[str] = set()
+        self._expected_dict_info: DictTypeInfo | None = None
+        self._expected_set_info: SetTypeInfo | None = None
+        self._expected_tuple_info: TupleTypeInfo | None = None
 
     def generate(self) -> RustProgram:
         """Main entry point - generate Rust code for all reachable code."""
@@ -203,6 +206,14 @@ class CodeGenVisitor(zincVisitor):
         imports = []
         if self._uses_async:
             imports.append("use tokio;")
+        collections: set[str] = set()
+        for symbol in self.symbols.all_symbols():
+            if symbol.dict_info:
+                collections.add(symbol.dict_info.rust_container())
+            if symbol.set_info:
+                collections.add(symbol.set_info.rust_container())
+        if collections:
+            imports.append(f"use std::collections::{{{', '.join(sorted(collections))}}};")
         return imports
 
     def _generate_const(self, const: ConstInstance) -> str:
@@ -306,6 +317,15 @@ class CodeGenVisitor(zincVisitor):
                     elif i in func.arg_array_infos:
                         arr_info = func.arg_array_infos[i]
                         type_str = arr_info.to_rust_type()
+                    elif i in func.arg_dict_infos:
+                        dict_info = func.arg_dict_infos[i]
+                        type_str = dict_info.to_rust_type()
+                    elif i in func.arg_set_infos:
+                        set_info = func.arg_set_infos[i]
+                        type_str = set_info.to_rust_type()
+                    elif i in func.arg_tuple_infos:
+                        tuple_info = func.arg_tuple_infos[i]
+                        type_str = tuple_info.to_rust_type()
                     else:
                         type_str = type_to_rust(func.arg_types[i])
                     params.append(f"{param_name}: {type_str}")
@@ -317,7 +337,14 @@ class CodeGenVisitor(zincVisitor):
 
         # Build return type suffix if not void
         if func.return_type != BaseType.VOID:
-            return_type_str = f" -> {type_to_rust(func.return_type)}"
+            if func.return_type == BaseType.DICT and func.return_dict_info:
+                return_type_str = f" -> {func.return_dict_info.to_rust_type(as_reference=False)}"
+            elif func.return_type == BaseType.SET and func.return_set_info:
+                return_type_str = f" -> {func.return_set_info.to_rust_type(as_reference=False)}"
+            elif func.return_type == BaseType.TUPLE and func.return_tuple_info:
+                return_type_str = f" -> {func.return_tuple_info.to_rust_type()}"
+            else:
+                return_type_str = f" -> {type_to_rust(func.return_type)}"
         else:
             return_type_str = ""
 
@@ -381,6 +408,10 @@ class CodeGenVisitor(zincVisitor):
             return ctx.IDENTIFIER().getText()
         if ctx.arrayLiteral():
             return self.visit(ctx.arrayLiteral())
+        if ctx.collectionLiteral():
+            return self.visit(ctx.collectionLiteral())
+        if ctx.tupleLiteral():
+            return self.visit(ctx.tupleLiteral())
         if ctx.structInstantiation():
             return self.visit(ctx.structInstantiation())
         if ctx.getText() == "self":
@@ -396,6 +427,18 @@ class CodeGenVisitor(zincVisitor):
     def visitParenExpr(self, ctx: ZincParser.ParenExprContext) -> str:
         """Visit parenthesized expression."""
         return f"({self.visit(ctx.expression())})"
+
+    def visitTupleLiteral(self, ctx: ZincParser.TupleLiteralContext) -> str:
+        """Visit tuple literal."""
+        info = self._expected_tuple_info or self._get_tuple_info(ctx) or TupleTypeInfo()
+        elements = []
+        for i, expr_ctx in enumerate(ctx.expression()):
+            value = self.visit(expr_ctx)
+            target_type = info.element_types[i] if i < len(info.element_types) else self._get_expr_type(expr_ctx)
+            elements.append(self._coerce_owned(value, target_type, expr_ctx))
+        if len(elements) == 1:
+            return f"({elements[0]},)"
+        return f"({', '.join(elements)})"
 
     def visitAdditiveExpr(self, ctx: ZincParser.AdditiveExprContext) -> str:
         """Visit addition/subtraction expression."""
@@ -446,6 +489,70 @@ class CodeGenVisitor(zincVisitor):
         if symbol:
             return symbol.resolved_type
         return BaseType.UNKNOWN
+
+    def _get_expr_symbol(self, ctx):
+        """Get the resolved symbol for an expression-like context."""
+        return self.symbols.lookup_by_interval(
+            ctx.getSourceInterval(), self._current_function
+        )
+
+    def _get_dict_info(self, ctx) -> DictTypeInfo | None:
+        """Get dict metadata for an expression."""
+        symbol = self._get_expr_symbol(ctx)
+        if symbol and symbol.dict_info:
+            return symbol.dict_info
+        return None
+
+    def _get_set_info(self, ctx) -> SetTypeInfo | None:
+        """Get set metadata for an expression."""
+        symbol = self._get_expr_symbol(ctx)
+        if symbol and symbol.set_info:
+            return symbol.set_info
+        return None
+
+    def _get_tuple_info(self, ctx) -> TupleTypeInfo | None:
+        """Get tuple metadata for an expression."""
+        symbol = self._get_expr_symbol(ctx)
+        if symbol and symbol.tuple_info:
+            return symbol.tuple_info
+        return None
+
+    def _coerce_owned(self, value: str, target_type: BaseType, value_ctx=None) -> str:
+        """Convert a rendered value into the owned Rust type used inside collections."""
+        if target_type == BaseType.STRING:
+            if value.startswith('"'):
+                return f"String::from({value})"
+            return f"{value}.to_string()"
+        if target_type == BaseType.FLOAT and value_ctx is not None:
+            if self._get_expr_type(value_ctx) == BaseType.INTEGER:
+                return f"({value} as f64)"
+        return value
+
+    def _borrow_lookup_key(self, value: str, key_type: BaseType) -> str:
+        """Render a borrowed lookup key for map/set lookup-style methods."""
+        if key_type == BaseType.STRING:
+            if value.startswith('"'):
+                return value
+            return f"{value}.as_ref()"
+        return f"&{value}"
+
+    def _integer_literal_value(self, ctx) -> int | None:
+        """Return an integer literal value for tuple indexes, if statically known."""
+        if isinstance(ctx, ZincParser.PrimaryExprContext):
+            primary = ctx.primaryExpression()
+            if primary and primary.literal() and primary.literal().INTEGER():
+                return int(primary.literal().getText(), 0)
+        return None
+
+    def _binding_names(self, ctx) -> list[str]:
+        """Return identifier names from a binding/destructuring context."""
+        return [token.getText() for token in ctx.getTokens(ZincParser.IDENTIFIER)]
+
+    def _render_tuple_pattern(self, names: list[str]) -> str:
+        """Render a Rust tuple pattern."""
+        if len(names) == 1:
+            return f"({names[0]},)"
+        return f"({', '.join(names)})"
 
     def visitUnaryExpr(self, ctx: ZincParser.UnaryExprContext) -> str:
         """Visit unary expression."""
@@ -504,16 +611,46 @@ class CodeGenVisitor(zincVisitor):
         elements = [self.visit(expr) for expr in ctx.expression()]
         return f"vec![{', '.join(elements)}]"
 
+    def visitCollectionLiteral(self, ctx: ZincParser.CollectionLiteralContext) -> str:
+        """Visit dict/set literal."""
+        if ctx.dictEntry():
+            info = self._expected_dict_info or self._get_dict_info(ctx) or DictTypeInfo()
+            entries = []
+            for entry_ctx in ctx.dictEntry():
+                key_ctx = entry_ctx.expression(0)
+                value_ctx = entry_ctx.expression(1)
+                key = self._coerce_owned(self.visit(key_ctx), info.key_type, key_ctx)
+                value = self._coerce_owned(self.visit(value_ctx), info.value_type, value_ctx)
+                entries.append(f"({key}, {value})")
+            return f"{info.rust_container()}::from([{', '.join(entries)}])"
+
+        info = self._expected_set_info or self._get_set_info(ctx) or SetTypeInfo()
+        elements = []
+        for expr_ctx in ctx.expression():
+            elem = self._coerce_owned(self.visit(expr_ctx), info.element_type, expr_ctx)
+            elements.append(elem)
+        return f"{info.rust_container()}::from([{', '.join(elements)}])"
+
     def visitIndexAccessExpr(self, ctx: ZincParser.IndexAccessExprContext) -> str:
         """Visit index access."""
-        array = self.visit(ctx.expression(0))
+        collection_type = self._get_expr_type(ctx.expression(0))
+        collection = self.visit(ctx.expression(0))
         index = self.visit(ctx.expression(1))
+        if collection_type == BaseType.DICT:
+            info = self._get_dict_info(ctx.expression(0)) or DictTypeInfo()
+            key = self._borrow_lookup_key(index, info.key_type)
+            return f"{collection}.get({key}).unwrap().clone()"
+        if collection_type == BaseType.TUPLE:
+            tuple_index = self._integer_literal_value(ctx.expression(1))
+            if tuple_index is not None:
+                return f"{collection}.{tuple_index}"
+
         index_ctx = ctx.expression(1)
         # Cast non-literal integer indices to usize (Rust Vec indexing requires usize)
         index_type = self._get_expr_type(index_ctx)
         if index_type == BaseType.INTEGER and not self._is_integer_literal(index_ctx):
             index = f"({index} as usize)"
-        return f"{array}[{index}]"
+        return f"{collection}[{index}]"
 
     def _is_integer_literal(self, ctx) -> bool:
         """Return True if expression is a bare integer literal (e.g. 0, 1, 2)."""
@@ -562,6 +699,23 @@ class CodeGenVisitor(zincVisitor):
         if callee == "print":
             return self._render_print_call(args)
 
+        if callee in {"dict", "sortdict"}:
+            info = self._expected_dict_info or self._get_dict_info(ctx) or DictTypeInfo(kind=callee)
+            collection_type = info.rust_container()
+            if info.key_type != BaseType.UNKNOWN and info.value_type != BaseType.UNKNOWN:
+                key = type_to_rust(info.key_type)
+                value = type_to_rust(info.value_type)
+                return f"{collection_type}::<{key}, {value}>::new()"
+            return f"{collection_type}::new()"
+
+        if callee in {"set", "sortset"}:
+            info = self._expected_set_info or self._get_set_info(ctx) or SetTypeInfo(kind=callee)
+            collection_type = info.rust_container()
+            if info.element_type != BaseType.UNKNOWN:
+                elem = type_to_rust(info.element_type)
+                return f"{collection_type}::<{elem}>::new()"
+            return f"{collection_type}::new()"
+
         # Static method call (StructName::method)
         if "::" in callee:
             struct_name, method_name = callee.split("::")
@@ -575,6 +729,48 @@ class CodeGenVisitor(zincVisitor):
             # Check if this is an instance method on a struct variable
             target_ctx = callee_ctx.expression()
             method_name = callee_ctx.IDENTIFIER().getText()
+            receiver_type = self._get_expr_type(target_ctx)
+            if receiver_type == BaseType.DICT:
+                target = self.visit(target_ctx)
+                info = self._get_dict_info(target_ctx) or DictTypeInfo()
+                if method_name == "len":
+                    return f"({target}.len() as i64)"
+                if method_name == "is_empty":
+                    return f"{target}.is_empty()"
+                if method_name == "clear":
+                    return f"{target}.clear()"
+                if method_name == "keys":
+                    return f"{target}.keys().cloned().collect::<Vec<_>>()"
+                if method_name == "values":
+                    return f"{target}.values().cloned().collect::<Vec<_>>()"
+                if method_name == "items":
+                    return f"{target}.iter().map(|(k, v)| (k.clone(), v.clone())).collect::<Vec<_>>()"
+                if method_name == "insert" and len(args) == 2:
+                    key = self._coerce_owned(args[0], info.key_type, arg_ctxs[0] if arg_ctxs else None)
+                    value = self._coerce_owned(args[1], info.value_type, arg_ctxs[1] if arg_ctxs else None)
+                    return f"{target}.insert({key}, {value})"
+                if method_name in {"get", "contains_key", "remove"} and len(args) == 1:
+                    key = self._borrow_lookup_key(args[0], info.key_type)
+                    if method_name == "get":
+                        return f"{target}.get({key}).unwrap().clone()"
+                    return f"{target}.{method_name}({key})"
+
+            if receiver_type == BaseType.SET:
+                target = self.visit(target_ctx)
+                info = self._get_set_info(target_ctx) or SetTypeInfo()
+                if method_name == "len":
+                    return f"({target}.len() as i64)"
+                if method_name == "is_empty":
+                    return f"{target}.is_empty()"
+                if method_name == "clear":
+                    return f"{target}.clear()"
+                if method_name in {"push", "insert"} and len(args) == 1:
+                    elem = self._coerce_owned(args[0], info.element_type, arg_ctxs[0] if arg_ctxs else None)
+                    return f"{target}.insert({elem})"
+                if method_name in {"contains", "remove"} and len(args) == 1:
+                    elem = self._borrow_lookup_key(args[0], info.element_type)
+                    return f"{target}.{method_name}({elem})"
+
             if isinstance(target_ctx, ZincParser.PrimaryExprContext):
                 primary = target_ctx.primaryExpression()
                 if primary and primary.IDENTIFIER():
@@ -623,6 +819,18 @@ class CodeGenVisitor(zincVisitor):
                 elif param_type == BaseType.ARRAY and i in func.arg_array_infos:
                     arr_info = func.arg_array_infos[i]
                     if arr_info.is_mutated:
+                        processed.append(f"&mut {arg}")
+                    else:
+                        processed.append(f"&{arg}")
+                elif param_type == BaseType.DICT and i in func.arg_dict_infos:
+                    dict_info = func.arg_dict_infos[i]
+                    if dict_info.is_mutated:
+                        processed.append(f"&mut {arg}")
+                    else:
+                        processed.append(f"&{arg}")
+                elif param_type == BaseType.SET and i in func.arg_set_infos:
+                    set_info = func.arg_set_infos[i]
+                    if set_info.is_mutated:
                         processed.append(f"&mut {arg}")
                     else:
                         processed.append(f"&{arg}")
@@ -834,6 +1042,7 @@ class CodeGenVisitor(zincVisitor):
     def visitVariableAssignment(self, ctx: ZincParser.VariableAssignmentContext) -> str:
         """Visit variable assignment with shadowing support."""
         target = ctx.assignmentTarget().getText()
+        target_ctx = ctx.assignmentTarget()
 
         # Check if this is a chan() call - generate tuple destructuring
         expr = ctx.expression()
@@ -854,14 +1063,65 @@ class CodeGenVisitor(zincVisitor):
                         self._declared_vars.add(var_name)
                         return f"let ({var_name}_tx, mut {var_name}_rx) = tokio::sync::mpsc::unbounded_channel();"
 
-        value = self.visit(expr)
-
-        if ctx.assignmentTarget().IDENTIFIER():
-            var_name = target
-            identifier = ctx.assignmentTarget().IDENTIFIER()
-            symbol = self.symbols.lookup_by_interval(
-                identifier.getSourceInterval(), self._current_function
+        target_symbol = None
+        if target_ctx.IDENTIFIER():
+            target_symbol = self.symbols.lookup_by_interval(
+                target_ctx.IDENTIFIER().getSourceInterval(), self._current_function
             )
+
+        previous_dict_info = self._expected_dict_info
+        previous_set_info = self._expected_set_info
+        previous_tuple_info = self._expected_tuple_info
+        if target_symbol and target_symbol.dict_info:
+            self._expected_dict_info = target_symbol.dict_info
+        if target_symbol and target_symbol.set_info:
+            self._expected_set_info = target_symbol.set_info
+        if target_symbol and target_symbol.tuple_info:
+            self._expected_tuple_info = target_symbol.tuple_info
+        try:
+            value = self.visit(expr)
+        finally:
+            self._expected_dict_info = previous_dict_info
+            self._expected_set_info = previous_set_info
+            self._expected_tuple_info = previous_tuple_info
+
+        if target_ctx.tupleAssignmentTarget():
+            names = self._binding_names(target_ctx.tupleAssignmentTarget())
+            target_symbols = [
+                self.symbols.lookup_by_interval(token.getSourceInterval(), self._current_function)
+                for token in target_ctx.tupleAssignmentTarget().getTokens(ZincParser.IDENTIFIER)
+            ]
+            needs_declaration = any(
+                symbol is None or symbol.is_shadow or symbol.id not in self._declared_vars
+                for symbol in target_symbols
+            )
+            pattern_names = []
+            for name, symbol in zip(names, target_symbols, strict=False):
+                if needs_declaration and symbol and symbol.is_mutated:
+                    pattern_names.append(f"mut {name}")
+                else:
+                    pattern_names.append(name)
+                if needs_declaration:
+                    self._declared_vars.add(name)
+            pattern = self._render_tuple_pattern(pattern_names)
+            if needs_declaration:
+                return f"let {pattern} = {value};"
+            return f"{pattern} = {value};"
+
+        if target_ctx.indexAccess():
+            index_access = target_ctx.indexAccess()
+            collection_type = self._get_expr_type(index_access.expression(0))
+            if collection_type == BaseType.DICT:
+                info = self._get_dict_info(index_access.expression(0)) or DictTypeInfo()
+                collection = self.visit(index_access.expression(0))
+                key_ctx = index_access.expression(1)
+                key = self._coerce_owned(self.visit(key_ctx), info.key_type, key_ctx)
+                coerced_value = self._coerce_owned(value, info.value_type, expr)
+                return f"{collection}.insert({key}, {coerced_value});"
+
+        if target_ctx.IDENTIFIER():
+            var_name = target
+            symbol = target_symbol
 
             if symbol is None:
                 # Fallback - shouldn't happen
@@ -907,10 +1167,39 @@ class CodeGenVisitor(zincVisitor):
         lines.append("}")
         return "\n".join(lines)
 
+    def _render_for_iterable(self, expr_ctx) -> str:
+        """Render an iterable expression for a for loop without consuming named collections."""
+        expr_type = self._get_expr_type(expr_ctx)
+
+        if expr_type == BaseType.DICT:
+            target = self.visit(expr_ctx)
+            return f"{target}.iter().map(|(k, v)| (k.clone(), v.clone()))"
+
+        if isinstance(expr_ctx, ZincParser.FunctionCallExprContext):
+            callee = expr_ctx.expression()
+            if isinstance(callee, ZincParser.MemberAccessExprContext):
+                receiver_type = self._get_expr_type(callee.expression())
+                method_name = callee.IDENTIFIER().getText()
+                if receiver_type == BaseType.DICT and method_name in {"keys", "values", "items"}:
+                    target = self.visit(callee.expression())
+                    if method_name == "keys":
+                        return f"{target}.keys().cloned()"
+                    if method_name == "values":
+                        return f"{target}.values().cloned()"
+                    return f"{target}.iter().map(|(k, v)| (k.clone(), v.clone()))"
+
+        rendered = self.visit(expr_ctx)
+        if expr_type in {BaseType.ARRAY, BaseType.SET}:
+            return f"{rendered}.iter().cloned()"
+        return rendered
+
     def visitForStatement(self, ctx: ZincParser.ForStatementContext) -> str:
         """Visit for loop."""
-        var_name = ctx.IDENTIFIER().getText()
-        iterable = self.visit(ctx.expression())
+        binding = ctx.forBinding()
+        binding_ctx = binding.tupleAssignmentTarget() or binding
+        names = self._binding_names(binding_ctx)
+        var_name = names[0] if len(names) == 1 else self._render_tuple_pattern(names)
+        iterable = self._render_for_iterable(ctx.expression())
         body_stmts = self._generate_block(ctx.block())
 
         lines = [f"for {var_name} in {iterable} {{"]
@@ -949,9 +1238,23 @@ class CodeGenVisitor(zincVisitor):
     def visitReturnStatement(self, ctx: ZincParser.ReturnStatementContext) -> str:
         """Visit return statement."""
         if ctx.expression():
-            value = self.visit(ctx.expression())
-            # Cast integer return values to f64 when function return type is float
             func = self.atlas.functions.get(self._current_function)
+            previous_dict_info = self._expected_dict_info
+            previous_set_info = self._expected_set_info
+            previous_tuple_info = self._expected_tuple_info
+            if func and func.return_dict_info:
+                self._expected_dict_info = func.return_dict_info
+            if func and func.return_set_info:
+                self._expected_set_info = func.return_set_info
+            if func and func.return_tuple_info:
+                self._expected_tuple_info = func.return_tuple_info
+            try:
+                value = self.visit(ctx.expression())
+            finally:
+                self._expected_dict_info = previous_dict_info
+                self._expected_set_info = previous_set_info
+                self._expected_tuple_info = previous_tuple_info
+            # Cast integer return values to f64 when function return type is float
             if func and func.return_type == BaseType.FLOAT:
                 expr_type = self._get_expr_type(ctx.expression())
                 if expr_type == BaseType.INTEGER:

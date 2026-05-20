@@ -1,0 +1,18 @@
+fn main() {
+    scores = dict()
+    scores["left"] = 10
+    scores.insert("right", 20)
+
+    right = scores.get("right")
+    has_left = scores.contains_key("left")
+    print("{right}")
+    print("{has_left}")
+
+    scores.remove("left")
+    after_remove = scores.len()
+    print("{after_remove}")
+
+    scores.clear()
+    is_empty = scores.is_empty()
+    print("{is_empty}")
+}

@@ -5,7 +5,20 @@ from enum import Enum, auto
 
 from antlr4 import ParserRuleContext
 
-from zinc.ast.types import BaseType, TypeInfo, parse_literal, is_mutating_method, type_to_rust, ChannelTypeInfo, ArrayTypeInfo
+from zinc.ast.types import (
+    BaseType,
+    TypeInfo,
+    parse_literal,
+    is_mutating_method,
+    type_to_rust,
+    promote_numeric,
+    ChannelTypeInfo,
+    ArrayTypeInfo,
+    DictTypeInfo,
+    SetTypeInfo,
+    TupleTypeInfo,
+)
+from zinc.exceptions import ZincTypeError
 from zinc.parser.zincVisitor import zincVisitor
 from zinc.parser.zincParser import zincParser as ZincParser
 from zinc.atlas import Atlas, FunctionInstance, ConstInstance, StructFieldInfo, StructMethodInfo
@@ -36,6 +49,9 @@ class Symbol:
     is_mutated: bool = False  # True if variable needs 'mut' (reassigned or mutating method called)
     is_shadow: bool = False  # True if this shadows a previous binding of the same name
     element_type: BaseType | None = None  # For arrays: type of elements
+    dict_info: DictTypeInfo | None = None
+    set_info: SetTypeInfo | None = None
+    tuple_info: TupleTypeInfo | None = None
 
 
 class SymbolTable:
@@ -162,6 +178,9 @@ class SymbolTableVisitor(zincVisitor):
         self._block_counters: dict[str, int] = {}  # For unique block names
         self._current_function: str | None = None
         self._current_return_type: BaseType = BaseType.VOID  # Track return type during resolution
+        self._current_return_dict_info: DictTypeInfo | None = None
+        self._current_return_set_info: SetTypeInfo | None = None
+        self._current_return_tuple_info: TupleTypeInfo | None = None
         # Maps (caller_function, call_site_interval) -> mangled name for CodeGen to use
         # Scoped by caller function to handle different specializations of the same generic
         self.specialization_map: dict[tuple[str | None, tuple[int, int]], str] = {}
@@ -169,6 +188,7 @@ class SymbolTableVisitor(zincVisitor):
         self._channel_infos: dict[str, ChannelTypeInfo] = {}
         # Track all caller channel infos for function parameters (param_name -> list of ChannelTypeInfos)
         self._channel_param_all_infos: dict[str, list[ChannelTypeInfo]] = {}
+        self._iterating_dict_stack: list[set[str]] = []
 
     def resolve(self) -> SymbolTable:
         """Main entry point - resolve types for all reachable code.
@@ -230,6 +250,18 @@ class SymbolTableVisitor(zincVisitor):
             resolved_type=BaseType.CHANNEL,
             interval=(-1, -1),
         )
+        for name, base_type in (
+            ("dict", BaseType.DICT),
+            ("sortdict", BaseType.DICT),
+            ("set", BaseType.SET),
+            ("sortset", BaseType.SET),
+        ):
+            self.symbols.define(
+                id=name,
+                kind=SymbolKind.BUILTIN,
+                resolved_type=base_type,
+                interval=(-1, -1),
+            )
 
     def _analyze_struct(self, struct) -> None:
         """Analyze a struct declaration and populate fields/methods."""
@@ -586,6 +618,169 @@ class SymbolTableVisitor(zincVisitor):
                 return len(arr_lit.expression()) == 0
         return False
 
+    def _copy_dict_info(self, info: DictTypeInfo | None) -> DictTypeInfo | None:
+        """Copy dict metadata so symbols do not accidentally share construction state."""
+        if info is None:
+            return None
+        return DictTypeInfo(
+            key_type=info.key_type,
+            value_type=info.value_type,
+            kind=info.kind,
+            is_mutated=info.is_mutated,
+        )
+
+    def _copy_set_info(self, info: SetTypeInfo | None) -> SetTypeInfo | None:
+        """Copy set metadata so symbols do not accidentally share construction state."""
+        if info is None:
+            return None
+        return SetTypeInfo(
+            element_type=info.element_type,
+            kind=info.kind,
+            is_mutated=info.is_mutated,
+        )
+
+    def _copy_tuple_info(self, info: TupleTypeInfo | None) -> TupleTypeInfo | None:
+        """Copy tuple metadata recursively."""
+        if info is None:
+            return None
+        return TupleTypeInfo(
+            element_types=list(info.element_types),
+            element_tuple_infos={
+                i: copied
+                for i, nested in info.element_tuple_infos.items()
+                if (copied := self._copy_tuple_info(nested)) is not None
+            },
+        )
+
+    def _merge_key_type(self, current: BaseType, incoming: BaseType, label: str) -> BaseType:
+        """Merge dict key or set element types, rejecting floats for Rust container keys."""
+        if incoming == BaseType.FLOAT:
+            raise ZincTypeError(f"{label} cannot be a float in v1")
+        if current == BaseType.UNKNOWN:
+            return incoming
+        if incoming == BaseType.UNKNOWN or incoming == current:
+            return current
+        raise ZincTypeError(f"mixed {label} types are not supported")
+
+    def _merge_value_type(self, current: BaseType, incoming: BaseType, label: str) -> BaseType:
+        """Merge value types with int/float promotion."""
+        merged = promote_numeric(current, incoming)
+        if merged == BaseType.UNKNOWN and current != BaseType.UNKNOWN and incoming != BaseType.UNKNOWN:
+            raise ZincTypeError(f"mixed {label} types are not supported")
+        return merged
+
+    def _merge_dict_info(self, current: DictTypeInfo | None, incoming: DictTypeInfo | None) -> DictTypeInfo | None:
+        """Merge dict metadata from multiple sources."""
+        if incoming is None:
+            return current
+        if current is None:
+            return self._copy_dict_info(incoming)
+        if current.kind != incoming.kind:
+            raise ZincTypeError("function return paths use different dict kinds")
+        current.key_type = self._merge_key_type(current.key_type, incoming.key_type, "dict key")
+        current.value_type = self._merge_value_type(current.value_type, incoming.value_type, "dict value")
+        return current
+
+    def _merge_set_info(self, current: SetTypeInfo | None, incoming: SetTypeInfo | None) -> SetTypeInfo | None:
+        """Merge set metadata from multiple sources."""
+        if incoming is None:
+            return current
+        if current is None:
+            return self._copy_set_info(incoming)
+        if current.kind != incoming.kind:
+            raise ZincTypeError("function return paths use different set kinds")
+        current.element_type = self._merge_key_type(current.element_type, incoming.element_type, "set element")
+        return current
+
+    def _merge_tuple_info(self, current: TupleTypeInfo | None, incoming: TupleTypeInfo | None) -> TupleTypeInfo | None:
+        """Merge tuple metadata from multiple return paths."""
+        if incoming is None:
+            return current
+        if current is None:
+            return self._copy_tuple_info(incoming)
+        if len(current.element_types) != len(incoming.element_types):
+            raise ZincTypeError("tuple return paths use different arities")
+        for i, incoming_type in enumerate(incoming.element_types):
+            current_type = current.element_types[i]
+            if current_type == BaseType.TUPLE or incoming_type == BaseType.TUPLE:
+                if current_type != BaseType.TUPLE or incoming_type != BaseType.TUPLE:
+                    raise ZincTypeError("tuple return paths use incompatible element types")
+                current.element_tuple_infos[i] = self._merge_tuple_info(
+                    current.element_tuple_infos.get(i),
+                    incoming.element_tuple_infos.get(i),
+                ) or TupleTypeInfo()
+                continue
+            merged = promote_numeric(current_type, incoming_type)
+            if merged == BaseType.UNKNOWN and current_type != BaseType.UNKNOWN and incoming_type != BaseType.UNKNOWN:
+                raise ZincTypeError("tuple return paths use incompatible element types")
+            current.element_types[i] = merged
+        return current
+
+    def _tuple_info_from_dict_info(self, info: DictTypeInfo) -> TupleTypeInfo:
+        """Build the item tuple type for dict iteration."""
+        return TupleTypeInfo(element_types=[info.key_type, info.value_type])
+
+    def _binding_tokens(self, ctx) -> list:
+        """Return identifier tokens from a binding/destructuring context."""
+        return list(ctx.getTokens(ZincParser.IDENTIFIER))
+
+    def _integer_literal_value(self, ctx) -> int | None:
+        """Return an integer literal value for tuple indexes, if statically known."""
+        if isinstance(ctx, ZincParser.PrimaryExprContext):
+            primary = ctx.primaryExpression()
+            if primary and primary.literal() and primary.literal().INTEGER():
+                return int(primary.literal().getText(), 0)
+        return None
+
+    def _expr_symbol(self, ctx) -> Symbol | None:
+        """Look up the symbol for an expression in the current function."""
+        return self.symbols.lookup_by_interval(
+            ctx.getSourceInterval(), self._current_function
+        )
+
+    def _iterated_dict_name(self, expr_ctx) -> str | None:
+        """Return the dict variable name if an expression iterates a dict."""
+        if isinstance(expr_ctx, ZincParser.PrimaryExprContext):
+            primary = expr_ctx.primaryExpression()
+            if primary and primary.IDENTIFIER():
+                name = primary.IDENTIFIER().getText()
+                symbol = self.symbols.lookup_by_id(name)
+                if symbol and symbol.resolved_type == BaseType.DICT:
+                    return name
+
+        if isinstance(expr_ctx, ZincParser.FunctionCallExprContext):
+            callee = expr_ctx.expression()
+            if isinstance(callee, ZincParser.MemberAccessExprContext):
+                method_name = callee.IDENTIFIER().getText()
+                if method_name in {"keys", "values", "items"}:
+                    receiver = callee.expression()
+                    if isinstance(receiver, ZincParser.PrimaryExprContext):
+                        primary = receiver.primaryExpression()
+                        if primary and primary.IDENTIFIER():
+                            name = primary.IDENTIFIER().getText()
+                            symbol = self.symbols.lookup_by_id(name)
+                            if symbol and symbol.resolved_type == BaseType.DICT:
+                                return name
+        return None
+
+    def _is_iterating_dict(self, name: str) -> bool:
+        """Check whether a dict variable is currently being iterated."""
+        return any(name in frame for frame in self._iterating_dict_stack)
+
+    def _function_call_name(self, expr_ctx) -> str | None:
+        """Return the simple callee name for calls like dict()."""
+        if isinstance(expr_ctx, ZincParser.FunctionCallExprContext):
+            callee = expr_ctx.expression()
+            if isinstance(callee, ZincParser.PrimaryExprContext):
+                primary = callee.primaryExpression()
+                if primary and primary.IDENTIFIER():
+                    return primary.IDENTIFIER().getText()
+        return None
+
+    def _is_empty_collection_constructor(self, expr_ctx) -> bool:
+        """Check if an expression is dict/set/sortdict/sortset()."""
+        return self._function_call_name(expr_ctx) in {"dict", "sortdict", "set", "sortset"}
+
     def _next_block_name(self, prefix: str) -> str:
         """Generate unique block name like 'if_0', 'for_1'."""
         count = self._block_counters.get(prefix, 0)
@@ -608,6 +803,9 @@ class SymbolTableVisitor(zincVisitor):
         self._block_counters.clear()
         self._current_function = func.mangled_name
         self._current_return_type = BaseType.VOID  # Reset for this function
+        self._current_return_dict_info = None
+        self._current_return_set_info = None
+        self._current_return_tuple_info = None
 
         # Use mangled name for scope so symbols are per-specialization
         self.symbols.enter_scope(func.mangled_name)
@@ -643,13 +841,24 @@ class SymbolTableVisitor(zincVisitor):
                 # Track array parameters for element type
                 if param_type == BaseType.ARRAY and i in func.arg_array_infos:
                     param_symbol.element_type = func.arg_array_infos[i].element_type
+                if param_type == BaseType.DICT and i in func.arg_dict_infos:
+                    param_symbol.dict_info = self._copy_dict_info(func.arg_dict_infos[i])
+                if param_type == BaseType.SET and i in func.arg_set_infos:
+                    param_symbol.set_info = self._copy_set_info(func.arg_set_infos[i])
+                if param_type == BaseType.TUPLE and i in func.arg_tuple_infos:
+                    param_symbol.tuple_info = self._copy_tuple_info(func.arg_tuple_infos[i])
 
         # Visit function body (skip parameter list since we handled it)
         if hasattr(ctx, "block"):
             self.visit(ctx.block())
 
+        self._validate_resolved_collections(func.mangled_name)
+
         # Store the inferred return type
         func.return_type = self._current_return_type
+        func.return_dict_info = self._copy_dict_info(self._current_return_dict_info)
+        func.return_set_info = self._copy_set_info(self._current_return_set_info)
+        func.return_tuple_info = self._copy_tuple_info(self._current_return_tuple_info)
 
         # Update array parameter mutation info
         for i, param_name in enumerate(param_names):
@@ -657,9 +866,37 @@ class SymbolTableVisitor(zincVisitor):
                 param_symbol = self.symbols.lookup_by_id(param_name)
                 if param_symbol and param_symbol.is_mutated:
                     func.arg_array_infos[i].is_mutated = True
+            if i in func.arg_dict_infos:
+                param_symbol = self.symbols.lookup_by_id(param_name)
+                if param_symbol and param_symbol.is_mutated:
+                    func.arg_dict_infos[i].is_mutated = True
+            if i in func.arg_set_infos:
+                param_symbol = self.symbols.lookup_by_id(param_name)
+                if param_symbol and param_symbol.is_mutated:
+                    func.arg_set_infos[i].is_mutated = True
 
         self.symbols.exit_scope()
         self._current_function = None
+
+    def _validate_resolved_collections(self, function_scope: str) -> None:
+        """Reject empty collection types that were never constrained."""
+        prefix = f"{function_scope}."
+        for symbol in self.symbols.all_symbols():
+            if symbol.kind not in {SymbolKind.VARIABLE, SymbolKind.PARAMETER}:
+                continue
+            if not symbol.unique_name.startswith(prefix):
+                continue
+            if symbol.dict_info and (
+                symbol.dict_info.key_type == BaseType.UNKNOWN
+                or symbol.dict_info.value_type == BaseType.UNKNOWN
+            ):
+                raise ZincTypeError(
+                    f"cannot infer type for empty {symbol.dict_info.kind} '{symbol.id}'"
+                )
+            if symbol.set_info and symbol.set_info.element_type == BaseType.UNKNOWN:
+                raise ZincTypeError(
+                    f"cannot infer type for empty {symbol.set_info.kind} '{symbol.id}'"
+                )
 
     def visitLiteral(self, ctx: ZincParser.LiteralContext) -> BaseType:
         """Visit a literal and create a symbol for it."""
@@ -681,10 +918,14 @@ class SymbolTableVisitor(zincVisitor):
             name = ctx.IDENTIFIER().getText()
             symbol = self.symbols.lookup_by_id(name)
             if symbol:
-                self.symbols.define_temp(
+                temp = self.symbols.define_temp(
                     resolved_type=symbol.resolved_type,
                     interval=ctx.getSourceInterval(),
                 )
+                temp.element_type = symbol.element_type
+                temp.dict_info = symbol.dict_info
+                temp.set_info = symbol.set_info
+                temp.tuple_info = symbol.tuple_info
                 return symbol.resolved_type
             self.symbols.define_temp(
                 resolved_type=BaseType.UNKNOWN,
@@ -694,6 +935,12 @@ class SymbolTableVisitor(zincVisitor):
 
         if ctx.arrayLiteral():
             return self.visit(ctx.arrayLiteral())
+
+        if ctx.collectionLiteral():
+            return self.visit(ctx.collectionLiteral())
+
+        if ctx.tupleLiteral():
+            return self.visit(ctx.tupleLiteral())
 
         if ctx.structInstantiation():
             return self.visit(ctx.structInstantiation())
@@ -718,11 +965,36 @@ class SymbolTableVisitor(zincVisitor):
     def visitParenExpr(self, ctx: ZincParser.ParenExprContext) -> BaseType:
         """Handle parenthesized expressions."""
         inner_type = self.visit(ctx.expression())
+        inner_symbol = self._expr_symbol(ctx.expression())
         self.symbols.define_temp(
             resolved_type=inner_type,
             interval=ctx.getSourceInterval(),
-        )
+        ).tuple_info = self._copy_tuple_info(inner_symbol.tuple_info) if inner_symbol else None
         return inner_type
+
+    def visitTupleLiteral(self, ctx: ZincParser.TupleLiteralContext) -> BaseType:
+        """Visit tuple literal and infer element types."""
+        element_types: list[BaseType] = []
+        element_tuple_infos: dict[int, TupleTypeInfo] = {}
+        for i, expr_ctx in enumerate(ctx.expression()):
+            element_type = self.visit(expr_ctx)
+            element_types.append(element_type)
+            if element_type == BaseType.TUPLE:
+                expr_symbol = self._expr_symbol(expr_ctx)
+                if expr_symbol and expr_symbol.tuple_info:
+                    copied = self._copy_tuple_info(expr_symbol.tuple_info)
+                    if copied:
+                        element_tuple_infos[i] = copied
+
+        symbol = self.symbols.define_temp(
+            resolved_type=BaseType.TUPLE,
+            interval=ctx.getSourceInterval(),
+        )
+        symbol.tuple_info = TupleTypeInfo(
+            element_types=element_types,
+            element_tuple_infos=element_tuple_infos,
+        )
+        return BaseType.TUPLE
 
     def visitAdditiveExpr(self, ctx: ZincParser.AdditiveExprContext) -> BaseType:
         """Handle addition and subtraction."""
@@ -818,6 +1090,46 @@ class SymbolTableVisitor(zincVisitor):
             symbol.element_type = element_type
         return BaseType.ARRAY
 
+    def visitCollectionLiteral(self, ctx: ZincParser.CollectionLiteralContext) -> BaseType:
+        """Visit dict/set literal and infer inner types."""
+        if not ctx.dictEntry() and not ctx.expression():
+            raise ZincTypeError("empty collection literal {} is ambiguous; use dict(), set(), sortdict(), or sortset()")
+
+        if ctx.dictEntry():
+            key_type = BaseType.UNKNOWN
+            value_type = BaseType.UNKNOWN
+            for entry_ctx in ctx.dictEntry():
+                entry_key_type = self.visit(entry_ctx.expression(0))
+                entry_value_type = self.visit(entry_ctx.expression(1))
+                key_type = self._merge_key_type(key_type, entry_key_type, "dict key")
+                value_type = self._merge_value_type(value_type, entry_value_type, "dict value")
+
+            symbol = self.symbols.define_temp(
+                resolved_type=BaseType.DICT,
+                interval=ctx.getSourceInterval(),
+            )
+            symbol.dict_info = DictTypeInfo(
+                key_type=key_type,
+                value_type=value_type,
+                kind="dict",
+            )
+            return BaseType.DICT
+
+        element_type = BaseType.UNKNOWN
+        for expr_ctx in ctx.expression():
+            expr_type = self.visit(expr_ctx)
+            element_type = self._merge_key_type(element_type, expr_type, "set element")
+
+        symbol = self.symbols.define_temp(
+            resolved_type=BaseType.SET,
+            interval=ctx.getSourceInterval(),
+        )
+        symbol.set_info = SetTypeInfo(
+            element_type=element_type,
+            kind="set",
+        )
+        return BaseType.SET
+
     def visitIndexAccessExpr(self, ctx: ZincParser.IndexAccessExprContext) -> BaseType:
         """Visit index access and return element type if array."""
         arr_type = self.visit(ctx.expression(0))
@@ -835,6 +1147,40 @@ class SymbolTableVisitor(zincVisitor):
                     arr_symbol = self.symbols.lookup_by_id(arr_name)
                     if arr_symbol and arr_symbol.element_type:
                         element_type = arr_symbol.element_type
+        elif arr_type == BaseType.DICT:
+            dict_ctx = ctx.expression(0)
+            key_type = self.visit(ctx.expression(1))
+            self._merge_key_type(BaseType.UNKNOWN, key_type, "dict key")
+            if isinstance(dict_ctx, ZincParser.PrimaryExprContext):
+                primary = dict_ctx.primaryExpression()
+                if primary and primary.IDENTIFIER():
+                    dict_name = primary.IDENTIFIER().getText()
+                    dict_symbol = self.symbols.lookup_by_id(dict_name)
+                    if dict_symbol and dict_symbol.dict_info:
+                        element_type = dict_symbol.dict_info.value_type
+            else:
+                dict_symbol = self.symbols.lookup_by_interval(
+                    dict_ctx.getSourceInterval(), self._current_function
+                )
+                if dict_symbol and dict_symbol.dict_info:
+                    element_type = dict_symbol.dict_info.value_type
+        elif arr_type == BaseType.SET:
+            raise ZincTypeError("sets do not support index access")
+        elif arr_type == BaseType.TUPLE:
+            tuple_symbol = self._expr_symbol(ctx.expression(0))
+            tuple_info = tuple_symbol.tuple_info if tuple_symbol else None
+            index = self._integer_literal_value(ctx.expression(1))
+            if index is None:
+                raise ZincTypeError("tuple index must be an integer literal")
+            if tuple_info is None or index < 0 or index >= len(tuple_info.element_types):
+                raise ZincTypeError("tuple index out of bounds")
+            element_type = tuple_info.element_types[index]
+            symbol = self.symbols.define_temp(
+                resolved_type=element_type,
+                interval=ctx.getSourceInterval(),
+            )
+            symbol.tuple_info = self._copy_tuple_info(tuple_info.element_tuple_infos.get(index))
+            return element_type
 
         self.symbols.define_temp(
             resolved_type=element_type,
@@ -867,10 +1213,17 @@ class SymbolTableVisitor(zincVisitor):
 
         # Collect argument types and array info
         arg_types: list[BaseType] = []
+        arg_exprs: list = []
         arg_array_infos: dict[int, ArrayTypeInfo] = {}
+        arg_dict_infos: dict[int, DictTypeInfo] = {}
+        arg_set_infos: dict[int, SetTypeInfo] = {}
+        arg_tuple_infos: dict[int, TupleTypeInfo] = {}
         if ctx.argumentList():
             for i, arg_expr in enumerate(ctx.argumentList().expression()):
+                arg_exprs.append(arg_expr)
                 arg_type = self.visit(arg_expr)
+                if arg_type == BaseType.VOID:
+                    raise ZincTypeError("mutating collection methods cannot be used as values")
                 arg_types.append(arg_type)
 
                 # Track array element types for array arguments
@@ -884,8 +1237,61 @@ class SymbolTableVisitor(zincVisitor):
                                 arg_array_infos[i] = ArrayTypeInfo(
                                     element_type=arr_symbol.element_type
                                 )
+                elif arg_type == BaseType.DICT:
+                    arg_symbol = self.symbols.lookup_by_interval(
+                        arg_expr.getSourceInterval(), self._current_function
+                    )
+                    if arg_symbol and arg_symbol.dict_info:
+                        arg_dict_infos[i] = self._copy_dict_info(arg_symbol.dict_info) or DictTypeInfo()
+                    elif isinstance(arg_expr, ZincParser.PrimaryExprContext):
+                        primary = arg_expr.primaryExpression()
+                        if primary and primary.IDENTIFIER():
+                            dict_symbol = self.symbols.lookup_by_id(primary.IDENTIFIER().getText())
+                            if dict_symbol and dict_symbol.dict_info:
+                                arg_dict_infos[i] = self._copy_dict_info(dict_symbol.dict_info) or DictTypeInfo()
+                elif arg_type == BaseType.SET:
+                    arg_symbol = self.symbols.lookup_by_interval(
+                        arg_expr.getSourceInterval(), self._current_function
+                    )
+                    if arg_symbol and arg_symbol.set_info:
+                        arg_set_infos[i] = self._copy_set_info(arg_symbol.set_info) or SetTypeInfo()
+                    elif isinstance(arg_expr, ZincParser.PrimaryExprContext):
+                        primary = arg_expr.primaryExpression()
+                        if primary and primary.IDENTIFIER():
+                            set_symbol = self.symbols.lookup_by_id(primary.IDENTIFIER().getText())
+                            if set_symbol and set_symbol.set_info:
+                                arg_set_infos[i] = self._copy_set_info(set_symbol.set_info) or SetTypeInfo()
+                elif arg_type == BaseType.TUPLE:
+                    arg_symbol = self._expr_symbol(arg_expr)
+                    if arg_symbol and arg_symbol.tuple_info:
+                        copied = self._copy_tuple_info(arg_symbol.tuple_info)
+                        if copied:
+                            arg_tuple_infos[i] = copied
 
         callee_ctx = ctx.expression()
+
+        if isinstance(callee_ctx, ZincParser.PrimaryExprContext):
+            primary = callee_ctx.primaryExpression()
+            if primary and primary.IDENTIFIER():
+                func_name = primary.IDENTIFIER().getText()
+                if func_name in {"dict", "sortdict"}:
+                    if arg_types:
+                        raise ZincTypeError(f"{func_name}() does not accept arguments")
+                    symbol = self.symbols.define_temp(
+                        resolved_type=BaseType.DICT,
+                        interval=ctx.getSourceInterval(),
+                    )
+                    symbol.dict_info = DictTypeInfo(kind=func_name)
+                    return BaseType.DICT
+                if func_name in {"set", "sortset"}:
+                    if arg_types:
+                        raise ZincTypeError(f"{func_name}() does not accept arguments")
+                    symbol = self.symbols.define_temp(
+                        resolved_type=BaseType.SET,
+                        interval=ctx.getSourceInterval(),
+                    )
+                    symbol.set_info = SetTypeInfo(kind=func_name)
+                    return BaseType.SET
 
         # Check for method call (e.g., b.push(10))
         if isinstance(callee_ctx, ZincParser.MemberAccessExprContext):
@@ -900,6 +1306,13 @@ class SymbolTableVisitor(zincVisitor):
                 )
                 return BaseType.INTEGER
 
+            if method_name in {"is_empty", "contains", "contains_key"}:
+                self.symbols.define_temp(
+                    resolved_type=BaseType.BOOLEAN,
+                    interval=ctx.getSourceInterval(),
+                )
+                return BaseType.BOOLEAN
+
             # Get the receiver variable name if it's a simple identifier
             if isinstance(receiver_ctx, ZincParser.PrimaryExprContext):
                 primary = receiver_ctx.primaryExpression()
@@ -909,6 +1322,8 @@ class SymbolTableVisitor(zincVisitor):
                     if var_symbol:
                         # Check if this method mutates the receiver
                         if is_mutating_method(var_symbol.resolved_type, method_name):
+                            if var_symbol.resolved_type == BaseType.DICT and self._is_iterating_dict(var_name):
+                                raise ZincTypeError("cannot mutate dict during iteration")
                             var_symbol.is_mutated = True
 
                         # For push on arrays, track element type
@@ -920,12 +1335,89 @@ class SymbolTableVisitor(zincVisitor):
                             if var_symbol.element_type is None:
                                 var_symbol.element_type = arg_types[0]
 
+                        if var_symbol.resolved_type == BaseType.DICT and var_symbol.dict_info:
+                            dict_info = var_symbol.dict_info
+                            if method_name == "insert":
+                                if len(arg_types) != 2:
+                                    raise ZincTypeError("dict.insert() expects key and value arguments")
+                                dict_info.key_type = self._merge_key_type(dict_info.key_type, arg_types[0], "dict key")
+                                dict_info.value_type = self._merge_value_type(
+                                    dict_info.value_type, arg_types[1], "dict value"
+                                )
+                            elif method_name in {"get", "contains_key", "remove"}:
+                                if len(arg_types) != 1:
+                                    raise ZincTypeError(f"dict.{method_name}() expects one key argument")
+                                dict_info.key_type = self._merge_key_type(dict_info.key_type, arg_types[0], "dict key")
+                            elif method_name == "clear":
+                                if arg_types:
+                                    raise ZincTypeError("dict.clear() does not accept arguments")
+                            elif method_name == "keys":
+                                if arg_types:
+                                    raise ZincTypeError("dict.keys() does not accept arguments")
+                                symbol = self.symbols.define_temp(
+                                    resolved_type=BaseType.ARRAY,
+                                    interval=ctx.getSourceInterval(),
+                                )
+                                symbol.element_type = dict_info.key_type
+                                return BaseType.ARRAY
+                            elif method_name == "values":
+                                if arg_types:
+                                    raise ZincTypeError("dict.values() does not accept arguments")
+                                symbol = self.symbols.define_temp(
+                                    resolved_type=BaseType.ARRAY,
+                                    interval=ctx.getSourceInterval(),
+                                )
+                                symbol.element_type = dict_info.value_type
+                                return BaseType.ARRAY
+                            elif method_name == "items":
+                                if arg_types:
+                                    raise ZincTypeError("dict.items() does not accept arguments")
+                                symbol = self.symbols.define_temp(
+                                    resolved_type=BaseType.ARRAY,
+                                    interval=ctx.getSourceInterval(),
+                                )
+                                symbol.element_type = BaseType.TUPLE
+                                symbol.tuple_info = self._tuple_info_from_dict_info(dict_info)
+                                return BaseType.ARRAY
+
+                            if method_name == "get":
+                                self.symbols.define_temp(
+                                    resolved_type=dict_info.value_type,
+                                    interval=ctx.getSourceInterval(),
+                                )
+                                return dict_info.value_type
+                            if method_name in {"insert", "remove", "clear"}:
+                                self.symbols.define_temp(
+                                    resolved_type=BaseType.VOID,
+                                    interval=ctx.getSourceInterval(),
+                                )
+                                return BaseType.VOID
+
+                        if var_symbol.resolved_type == BaseType.SET and var_symbol.set_info:
+                            set_info = var_symbol.set_info
+                            if method_name in {"push", "insert", "contains", "remove"}:
+                                if len(arg_types) != 1:
+                                    raise ZincTypeError(f"set.{method_name}() expects one element argument")
+                                set_info.element_type = self._merge_key_type(
+                                    set_info.element_type, arg_types[0], "set element"
+                                )
+                            elif method_name == "clear":
+                                if arg_types:
+                                    raise ZincTypeError("set.clear() does not accept arguments")
+
+                            if method_name in {"push", "insert", "remove", "clear"}:
+                                self.symbols.define_temp(
+                                    resolved_type=BaseType.VOID,
+                                    interval=ctx.getSourceInterval(),
+                                )
+                                return BaseType.VOID
+
         # Create specialization for user-defined functions
         if isinstance(callee_ctx, ZincParser.PrimaryExprContext):
             primary = callee_ctx.primaryExpression()
             if primary and primary.IDENTIFIER():
                 func_name = primary.IDENTIFIER().getText()
-                if func_name not in ("print", "chan"):
+                if func_name not in ("print", "chan", "dict", "sortdict", "set", "sortset"):
                     # Look up function definition
                     func_def = self.atlas.function_defs.get(func_name)
                     # Only create specialization if all arg types are known
@@ -937,6 +1429,9 @@ class SymbolTableVisitor(zincVisitor):
                             func_def,
                             self._current_function,
                             arg_array_infos,
+                            arg_dict_infos,
+                            arg_set_infos,
+                            arg_tuple_infos,
                         )
                         # Store mapping from (caller, call site) to mangled name
                         # Scoped by caller so different specializations get correct callees
@@ -945,11 +1440,16 @@ class SymbolTableVisitor(zincVisitor):
 
                         # If this specialization has already been processed, use its return type
                         func_instance = self.atlas.functions.get(mangled)
+                        if func_instance:
+                            self._mark_mutated_call_arguments(func_instance, arg_exprs)
                         if func_instance and func_instance.return_type != BaseType.VOID:
-                            self.symbols.define_temp(
+                            temp = self.symbols.define_temp(
                                 resolved_type=func_instance.return_type,
                                 interval=ctx.getSourceInterval(),
                             )
+                            temp.dict_info = self._copy_dict_info(func_instance.return_dict_info)
+                            temp.set_info = self._copy_set_info(func_instance.return_set_info)
+                            temp.tuple_info = self._copy_tuple_info(func_instance.return_tuple_info)
                             return func_instance.return_type
 
                 func_symbol = self.symbols.lookup_by_id(func_name)
@@ -966,6 +1466,25 @@ class SymbolTableVisitor(zincVisitor):
         )
         return BaseType.UNKNOWN
 
+    def _mark_mutated_call_arguments(self, func_instance: FunctionInstance, arg_exprs: list) -> None:
+        """Mark caller variables as mutable when callee parameters are inferred mutable."""
+        for i, arg_expr in enumerate(arg_exprs):
+            is_mutated = False
+            if i in func_instance.arg_array_infos and func_instance.arg_array_infos[i].is_mutated:
+                is_mutated = True
+            if i in func_instance.arg_dict_infos and func_instance.arg_dict_infos[i].is_mutated:
+                is_mutated = True
+            if i in func_instance.arg_set_infos and func_instance.arg_set_infos[i].is_mutated:
+                is_mutated = True
+            if not is_mutated:
+                continue
+            if isinstance(arg_expr, ZincParser.PrimaryExprContext):
+                primary = arg_expr.primaryExpression()
+                if primary and primary.IDENTIFIER():
+                    symbol = self.symbols.lookup_by_id(primary.IDENTIFIER().getText())
+                    if symbol:
+                        symbol.is_mutated = True
+
     def visitStructInstantiation(self, ctx: ZincParser.StructInstantiationContext) -> BaseType:
         """Visit struct literal."""
         for field_ctx in ctx.fieldInit():
@@ -979,6 +1498,8 @@ class SymbolTableVisitor(zincVisitor):
     def visitVariableAssignment(self, ctx: ZincParser.VariableAssignmentContext) -> None:
         """Visit variable assignment with shadowing support."""
         expr_type = self.visit(ctx.expression())
+        if expr_type == BaseType.VOID:
+            raise ZincTypeError("mutating collection methods cannot be used as assignment values")
         target = ctx.assignmentTarget()
 
         if target.IDENTIFIER():
@@ -1009,6 +1530,29 @@ class SymbolTableVisitor(zincVisitor):
                 if expr_symbol and expr_symbol.element_type:
                     expr_element_type = expr_symbol.element_type
 
+            expr_dict_info = None
+            if expr_type == BaseType.DICT:
+                expr_symbol = self.symbols.lookup_by_interval(
+                    ctx.expression().getSourceInterval(), self._current_function
+                )
+                if expr_symbol and expr_symbol.dict_info:
+                    expr_dict_info = self._copy_dict_info(expr_symbol.dict_info)
+
+            expr_set_info = None
+            if expr_type == BaseType.SET:
+                expr_symbol = self.symbols.lookup_by_interval(
+                    ctx.expression().getSourceInterval(), self._current_function
+                )
+                if expr_symbol and expr_symbol.set_info:
+                    expr_set_info = self._copy_set_info(expr_symbol.set_info)
+
+            expr_tuple_info = None
+            expr_symbol = self.symbols.lookup_by_interval(
+                ctx.expression().getSourceInterval(), self._current_function
+            )
+            if expr_symbol and expr_symbol.tuple_info:
+                expr_tuple_info = self._copy_tuple_info(expr_symbol.tuple_info)
+
             if existing is None:
                 # First assignment - create new symbol
                 new_sym = self.symbols.define(
@@ -1021,14 +1565,107 @@ class SymbolTableVisitor(zincVisitor):
                 # Propagate array element type
                 if expr_element_type:
                     new_sym.element_type = expr_element_type
+                if expr_dict_info:
+                    new_sym.dict_info = expr_dict_info
+                if expr_set_info:
+                    new_sym.set_info = expr_set_info
+                if expr_tuple_info:
+                    new_sym.tuple_info = expr_tuple_info
             elif existing.resolved_type != expr_type:
                 # Type change - create shadow symbol
-                self.symbols.define(
+                new_sym = self.symbols.define(
                     id=var_name,
                     kind=SymbolKind.VARIABLE,
                     resolved_type=expr_type,
                     interval=target.getSourceInterval(),
                     is_shadow=True,
+                )
+                if expr_element_type:
+                    new_sym.element_type = expr_element_type
+                if expr_dict_info:
+                    new_sym.dict_info = expr_dict_info
+                if expr_set_info:
+                    new_sym.set_info = expr_set_info
+                if expr_tuple_info:
+                    new_sym.tuple_info = expr_tuple_info
+            elif expr_type == BaseType.DICT:
+                if expr_dict_info:
+                    if existing.dict_info is None:
+                        existing.dict_info = expr_dict_info
+                    elif existing.dict_info.kind != expr_dict_info.kind:
+                        new_sym = self.symbols.define(
+                            id=var_name,
+                            kind=SymbolKind.VARIABLE,
+                            resolved_type=expr_type,
+                            interval=target.getSourceInterval(),
+                            is_shadow=True,
+                        )
+                        new_sym.dict_info = expr_dict_info
+                        return
+                    else:
+                        try:
+                            existing.dict_info.key_type = self._merge_key_type(
+                                existing.dict_info.key_type, expr_dict_info.key_type, "dict key"
+                            )
+                            existing.dict_info.value_type = self._merge_value_type(
+                                existing.dict_info.value_type, expr_dict_info.value_type, "dict value"
+                            )
+                        except ZincTypeError:
+                            new_sym = self.symbols.define(
+                                id=var_name,
+                                kind=SymbolKind.VARIABLE,
+                                resolved_type=expr_type,
+                                interval=target.getSourceInterval(),
+                                is_shadow=True,
+                            )
+                            new_sym.dict_info = expr_dict_info
+                            return
+                existing.is_mutated = True
+                self.symbols.define_temp(
+                    resolved_type=expr_type,
+                    interval=target.getSourceInterval(),
+                )
+            elif expr_type == BaseType.SET:
+                if expr_set_info:
+                    if existing.set_info is None:
+                        existing.set_info = expr_set_info
+                    elif existing.set_info.kind != expr_set_info.kind:
+                        new_sym = self.symbols.define(
+                            id=var_name,
+                            kind=SymbolKind.VARIABLE,
+                            resolved_type=expr_type,
+                            interval=target.getSourceInterval(),
+                            is_shadow=True,
+                        )
+                        new_sym.set_info = expr_set_info
+                        return
+                    else:
+                        try:
+                            existing.set_info.element_type = self._merge_key_type(
+                                existing.set_info.element_type, expr_set_info.element_type, "set element"
+                            )
+                        except ZincTypeError:
+                            new_sym = self.symbols.define(
+                                id=var_name,
+                                kind=SymbolKind.VARIABLE,
+                                resolved_type=expr_type,
+                                interval=target.getSourceInterval(),
+                                is_shadow=True,
+                            )
+                            new_sym.set_info = expr_set_info
+                            return
+                existing.is_mutated = True
+                self.symbols.define_temp(
+                    resolved_type=expr_type,
+                    interval=target.getSourceInterval(),
+                )
+            elif expr_type == BaseType.TUPLE:
+                if expr_tuple_info:
+                    existing.tuple_info = expr_tuple_info
+                existing.is_mutated = True
+                self.symbols.define_temp(
+                    resolved_type=expr_type,
+                    interval=target.getSourceInterval(),
                 )
             elif (
                 expr_type == BaseType.ARRAY
@@ -1052,6 +1689,80 @@ class SymbolTableVisitor(zincVisitor):
                     resolved_type=expr_type,
                     interval=target.getSourceInterval(),
                 )
+        elif target.tupleAssignmentTarget():
+            expr_symbol = self._expr_symbol(ctx.expression())
+            tuple_info = expr_symbol.tuple_info if expr_symbol else None
+            if expr_type != BaseType.TUPLE or tuple_info is None:
+                if expr_type == BaseType.UNKNOWN:
+                    for token in self._binding_tokens(target.tupleAssignmentTarget()):
+                        self.symbols.define(
+                            id=token.getText(),
+                            kind=SymbolKind.VARIABLE,
+                            resolved_type=BaseType.UNKNOWN,
+                            interval=token.getSourceInterval(),
+                        )
+                    return
+                raise ZincTypeError("tuple destructuring assignment requires a tuple value")
+
+            tokens = self._binding_tokens(target.tupleAssignmentTarget())
+            if len(tokens) != len(tuple_info.element_types):
+                raise ZincTypeError("tuple destructuring arity mismatch")
+
+            for i, token in enumerate(tokens):
+                var_name = token.getText()
+                element_type = tuple_info.element_types[i]
+                existing = self.symbols.lookup_by_id(var_name)
+                new_tuple_info = self._copy_tuple_info(tuple_info.element_tuple_infos.get(i))
+                if existing is None or existing.resolved_type != element_type:
+                    new_sym = self.symbols.define(
+                        id=var_name,
+                        kind=SymbolKind.VARIABLE,
+                        resolved_type=element_type,
+                        interval=token.getSourceInterval(),
+                        is_shadow=existing is not None,
+                    )
+                    new_sym.tuple_info = new_tuple_info
+                else:
+                    existing.is_mutated = True
+                    if new_tuple_info:
+                        existing.tuple_info = new_tuple_info
+                    temp = self.symbols.define_temp(
+                        resolved_type=element_type,
+                        interval=token.getSourceInterval(),
+                    )
+                    temp.tuple_info = new_tuple_info
+        elif target.indexAccess():
+            index_access = target.indexAccess()
+            collection_ctx = index_access.expression(0)
+            key_ctx = index_access.expression(1)
+            collection_type = self.visit(collection_ctx)
+            key_type = self.visit(key_ctx)
+            if collection_type != BaseType.DICT:
+                self.symbols.define_temp(
+                    resolved_type=expr_type,
+                    interval=target.getSourceInterval(),
+                )
+                return
+
+            if isinstance(collection_ctx, ZincParser.PrimaryExprContext):
+                primary = collection_ctx.primaryExpression()
+                if primary and primary.IDENTIFIER():
+                    var_name = primary.IDENTIFIER().getText()
+                    if self._is_iterating_dict(var_name):
+                        raise ZincTypeError("cannot mutate dict during iteration")
+                    var_symbol = self.symbols.lookup_by_id(var_name)
+                    if var_symbol and var_symbol.dict_info:
+                        var_symbol.is_mutated = True
+                        var_symbol.dict_info.key_type = self._merge_key_type(
+                            var_symbol.dict_info.key_type, key_type, "dict key"
+                        )
+                        var_symbol.dict_info.value_type = self._merge_value_type(
+                            var_symbol.dict_info.value_type, expr_type, "dict value"
+                        )
+            self.symbols.define_temp(
+                resolved_type=expr_type,
+                interval=target.getSourceInterval(),
+            )
         else:
             self.symbols.define_temp(
                 resolved_type=expr_type,
@@ -1062,6 +1773,21 @@ class SymbolTableVisitor(zincVisitor):
         """Visit return statement and track return type."""
         if ctx.expression():
             return_type = self.visit(ctx.expression())
+            expr_symbol = self.symbols.lookup_by_interval(
+                ctx.expression().getSourceInterval(), self._current_function
+            )
+            if return_type == BaseType.DICT and expr_symbol:
+                self._current_return_dict_info = self._merge_dict_info(
+                    self._current_return_dict_info, expr_symbol.dict_info
+                )
+            if return_type == BaseType.SET and expr_symbol:
+                self._current_return_set_info = self._merge_set_info(
+                    self._current_return_set_info, expr_symbol.set_info
+                )
+            if return_type == BaseType.TUPLE and expr_symbol:
+                self._current_return_tuple_info = self._merge_tuple_info(
+                    self._current_return_tuple_info, expr_symbol.tuple_info
+                )
             if self._current_return_type == BaseType.VOID:
                 self._current_return_type = return_type
             elif return_type != BaseType.UNKNOWN and return_type != self._current_return_type:
@@ -1083,24 +1809,61 @@ class SymbolTableVisitor(zincVisitor):
     def visitForStatement(self, ctx: ZincParser.ForStatementContext) -> None:
         """Visit for-in loop statement."""
         iterable_type = self.visit(ctx.expression())
+        expr_symbol = self._expr_symbol(ctx.expression())
 
         block_name = self._next_block_name("for")
         self.symbols.enter_scope(block_name)
 
-        loop_var = ctx.IDENTIFIER().getText()
+        binding = ctx.forBinding()
+        binding_ctx = binding.tupleAssignmentTarget() or binding
+        tokens = self._binding_tokens(binding_ctx)
+
+        def define_binding(index: int, resolved_type: BaseType, tuple_info: TupleTypeInfo | None = None) -> None:
+            token = tokens[index]
+            symbol = self.symbols.define(
+                id=token.getText(),
+                kind=SymbolKind.VARIABLE,
+                resolved_type=resolved_type,
+                interval=token.getSourceInterval(),
+            )
+            symbol.tuple_info = self._copy_tuple_info(tuple_info)
+
+        item_tuple_info: TupleTypeInfo | None = None
         if iterable_type == BaseType.INTEGER:
             var_type = BaseType.INTEGER
+        elif iterable_type == BaseType.ARRAY:
+            var_type = BaseType.UNKNOWN
+            if expr_symbol and expr_symbol.element_type:
+                var_type = expr_symbol.element_type
+                if var_type == BaseType.TUPLE:
+                    item_tuple_info = expr_symbol.tuple_info
+        elif iterable_type == BaseType.SET:
+            var_type = BaseType.UNKNOWN
+            if expr_symbol and expr_symbol.set_info:
+                var_type = expr_symbol.set_info.element_type
+        elif iterable_type == BaseType.DICT:
+            var_type = BaseType.TUPLE
+            if expr_symbol and expr_symbol.dict_info:
+                item_tuple_info = self._tuple_info_from_dict_info(expr_symbol.dict_info)
         else:
             var_type = BaseType.UNKNOWN
 
-        self.symbols.define(
-            id=loop_var,
-            kind=SymbolKind.VARIABLE,
-            resolved_type=var_type,
-            interval=(ctx.IDENTIFIER().getSourceInterval()),
-        )
+        if len(tokens) == 1:
+            define_binding(0, var_type, item_tuple_info)
+        else:
+            if var_type != BaseType.TUPLE or item_tuple_info is None:
+                raise ZincTypeError("for-loop destructuring requires tuple items")
+            if len(tokens) != len(item_tuple_info.element_types):
+                raise ZincTypeError("for-loop destructuring arity mismatch")
+            for i, element_type in enumerate(item_tuple_info.element_types):
+                define_binding(i, element_type, item_tuple_info.element_tuple_infos.get(i))
 
-        self.visit(ctx.block())
+        iterated_dict_name = self._iterated_dict_name(ctx.expression())
+        self._iterating_dict_stack.append({iterated_dict_name} if iterated_dict_name else set())
+        try:
+            self.visit(ctx.block())
+        finally:
+            self._iterating_dict_stack.pop()
         self.symbols.exit_scope()
 
     def visitWhileStatement(self, ctx: ZincParser.WhileStatementContext) -> None:

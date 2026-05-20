@@ -81,11 +81,16 @@ parameter
 type
     : IDENTIFIER ('<' typeList '>')?
     | '[' type ']'                  // array type
+    | tupleType                     // tuple type
     | '(' typeList? ')' '->' type   // function type
     ;
 
 typeList
     : type (',' type)*
+    ;
+
+tupleType
+    : '(' type ',' (type (',' type)* ','?)? ')'
     ;
 
 // --- Statements ---
@@ -97,6 +102,13 @@ assignmentTarget
     : IDENTIFIER
     | memberAccess
     | indexAccess
+    | tupleAssignmentTarget
+    ;
+
+tupleAssignmentTarget
+    : IDENTIFIER ',' IDENTIFIER (',' IDENTIFIER)* ','?
+    | '(' IDENTIFIER ',' ')'
+    | '(' IDENTIFIER (',' IDENTIFIER)+ ','? ')'
     ;
 
 expressionStatement
@@ -108,7 +120,12 @@ ifStatement
     ;
 
 forStatement
-    : 'for' IDENTIFIER 'in' expression block
+    : 'for' forBinding 'in' expression block
+    ;
+
+forBinding
+    : IDENTIFIER
+    | tupleAssignmentTarget
     ;
 
 whileStatement
@@ -192,10 +209,12 @@ expression
 
 primaryExpression
     : literal
+    | structInstantiation
     | IDENTIFIER
     | 'self'
     | arrayLiteral
-    | structInstantiation
+    | collectionLiteral
+    | tupleLiteral
     ;
 
 memberAccess
@@ -221,6 +240,20 @@ booleanLiteral
 
 arrayLiteral
     : '[' (expression (',' expression)* ','?)? ']'
+    ;
+
+tupleLiteral
+    : '(' expression ',' (expression (',' expression)* ','?)? ')'
+    ;
+
+collectionLiteral
+    : '{' '}'
+    | '{' dictEntry (',' dictEntry)* ','? '}'
+    | '{' expression (',' expression)* ','? '}'
+    ;
+
+dictEntry
+    : expression ':' expression
     ;
 
 structInstantiation

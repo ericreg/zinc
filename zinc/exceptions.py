@@ -8,3 +8,9 @@ class ZincLogLevelError(ZincError):
     """Raised when an invalid log level is provided."""
 
     pass
+
+
+class ZincTypeError(ZincError):
+    """Raised when Zinc type inference or validation fails."""
+
+    pass

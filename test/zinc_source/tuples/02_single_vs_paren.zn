@@ -1,0 +1,7 @@
+fn main() {
+    single = (5,)
+    paren = (5)
+    only = single[0]
+    print("{only}")
+    print("{paren}")
+}

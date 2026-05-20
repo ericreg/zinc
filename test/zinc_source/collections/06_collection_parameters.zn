@@ -1,0 +1,25 @@
+fn sum_scores(scores) {
+    return scores.get("a") + scores.get("b")
+}
+
+fn add_score(scores) {
+    scores.insert("c", 3)
+}
+
+fn has_two(values) {
+    return values.contains(2)
+}
+
+fn main() {
+    scores = {"a": 1, "b": 2.5}
+    total = sum_scores(scores)
+    print("{total}")
+
+    add_score(scores)
+    score_count = scores.len()
+    print("{score_count}")
+
+    values = {1, 2}
+    has_value = has_two(values)
+    print("{has_value}")
+}

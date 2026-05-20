@@ -1,0 +1,10 @@
+fn main() {
+    values = {1, 2, 3}
+
+    has_two = values.contains(2)
+    print("{has_two}")
+
+    values.remove(1)
+    count = values.len()
+    print("{count}")
+}
