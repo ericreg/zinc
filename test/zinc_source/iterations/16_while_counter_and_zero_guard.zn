@@ -1,0 +1,20 @@
+fn main() {
+    i = 0
+    total = 0
+    checks = 0
+    while i < 4 {
+        total = total + i
+        checks = checks + 1
+        i = i + 1
+    }
+
+    j = 0
+    zero_count = 0
+    while j < 0 {
+        zero_count = zero_count + 1
+    }
+
+    print("{total}")
+    print("{checks}")
+    print("{zero_count}")
+}

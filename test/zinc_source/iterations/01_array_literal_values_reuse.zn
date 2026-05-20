@@ -1,0 +1,14 @@
+fn main() {
+    values = [2, 4, 6]
+    total = 0
+
+    for value in values {
+        print("{value}")
+        total = total + value
+    }
+
+    count = values.len()
+    print("{total}")
+    print("{count}")
+    print("{values[1]}")
+}

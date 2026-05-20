@@ -1,0 +1,16 @@
+fn main() {
+    values = sort_set()
+    values.push(3)
+    values.push(1)
+    values.push(2)
+
+    total = 0
+    for value in values {
+        print("{value}")
+        total = total + value
+    }
+
+    count = values.len()
+    print("{total}")
+    print("{count}")
+}

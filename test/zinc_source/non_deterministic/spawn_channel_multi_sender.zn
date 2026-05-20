@@ -1,0 +1,15 @@
+fn send_value(ch, x) {
+    ch <- x
+    print("sent {x}")
+}
+
+fn main() {
+    values = chan()
+    spawn send_value(values, 1)
+    spawn send_value(values, 2)
+
+    a = <- values
+    b = <- values
+    print("got {a}")
+    print("got {b}")
+}

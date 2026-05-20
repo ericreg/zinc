@@ -1,0 +1,31 @@
+fn main() {
+    scores = sort_dict()
+    scores["b"] = 2
+    scores["a"] = 1
+
+    key = "outer"
+    value = 99
+    collected_keys = []
+
+    for key, value in scores {
+        print("{key}")
+        print("{value}")
+        collected_keys.push(key)
+    }
+
+    for (key, value) in scores.items() {
+        print("{key}")
+        print("{value}")
+    }
+
+    print("{key}")
+    print("{value}")
+    print("{collected_keys[0]}")
+    print("{collected_keys[1]}")
+    collected_count = collected_keys.len()
+    score_count = scores.len()
+    first_score = scores.get("a")
+    print("{collected_count}")
+    print("{score_count}")
+    print("{first_score}")
+}

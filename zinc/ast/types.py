@@ -139,7 +139,14 @@ class ArrayTypeInfo:
     """Type information for arrays."""
 
     element_type: BaseType = BaseType.UNKNOWN
+    element_tuple_info: "TupleTypeInfo | None" = None
     is_mutated: bool = False  # True if array is modified (push, pop, etc.)
+
+    def element_rust_type(self) -> str:
+        """Generate Rust type for the array element."""
+        if self.element_type == BaseType.TUPLE and self.element_tuple_info:
+            return self.element_tuple_info.to_rust_type()
+        return type_to_rust(self.element_type)
 
     def to_rust_type(self, as_reference: bool = True) -> str:
         """Generate Rust type string (always Vec in Zinc).
@@ -147,26 +154,34 @@ class ArrayTypeInfo:
         Args:
             as_reference: If True, generate &Vec<T> or &mut Vec<T> for parameters
         """
-        elem = type_to_rust(self.element_type)
+        elem = self.element_rust_type()
         if as_reference:
             if self.is_mutated:
                 return f"&mut Vec<{elem}>"
             return f"&Vec<{elem}>"
         return f"Vec<{elem}>"
 
+    def to_rust_type_suffix(self) -> str:
+        """Generate type suffix for mangled names."""
+        if self.element_type == BaseType.TUPLE and self.element_tuple_info:
+            elem = self.element_tuple_info.to_rust_type_suffix()
+        else:
+            elem = type_to_rust(self.element_type)
+        return f"Vec_{elem}"
+
 
 @dataclass
 class DictTypeInfo:
-    """Type information for dict/sortdict containers."""
+    """Type information for dict/sort_dict containers."""
 
     key_type: BaseType = BaseType.UNKNOWN
     value_type: BaseType = BaseType.UNKNOWN
-    kind: str = "dict"  # "dict" or "sortdict"
+    kind: str = "dict"  # "dict" or "sort_dict"
     is_mutated: bool = False
 
     def rust_container(self) -> str:
         """Return the Rust collection type name."""
-        return "BTreeMap" if self.kind == "sortdict" else "HashMap"
+        return "BTreeMap" if self.kind == "sort_dict" else "HashMap"
 
     def to_rust_type(self, as_reference: bool = True) -> str:
         """Generate Rust type string."""
@@ -188,15 +203,15 @@ class DictTypeInfo:
 
 @dataclass
 class SetTypeInfo:
-    """Type information for set/sortset containers."""
+    """Type information for set/sort_set containers."""
 
     element_type: BaseType = BaseType.UNKNOWN
-    kind: str = "set"  # "set" or "sortset"
+    kind: str = "set"  # "set" or "sort_set"
     is_mutated: bool = False
 
     def rust_container(self) -> str:
         """Return the Rust collection type name."""
-        return "BTreeSet" if self.kind == "sortset" else "HashSet"
+        return "BTreeSet" if self.kind == "sort_set" else "HashSet"
 
     def to_rust_type(self, as_reference: bool = True) -> str:
         """Generate Rust type string."""

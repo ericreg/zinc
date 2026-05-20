@@ -1,0 +1,7 @@
+// expected-error: for-loop destructuring arity mismatch
+
+fn main() {
+    for a, b, c in [(1, 2)] {
+        print("{a}")
+    }
+}

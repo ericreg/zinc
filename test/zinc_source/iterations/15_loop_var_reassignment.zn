@@ -1,0 +1,10 @@
+fn main() {
+    total = 0
+
+    for x in 0..3 {
+        x = x + 10
+        total = total + x
+    }
+
+    print("{total}")
+}

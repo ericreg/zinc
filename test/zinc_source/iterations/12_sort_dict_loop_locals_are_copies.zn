@@ -1,0 +1,14 @@
+fn main() {
+    scores = sort_dict()
+    scores["a"] = 10
+
+    for key, value in scores {
+        key = "changed"
+        value = value + 10
+        print("{key}")
+        print("{value}")
+    }
+
+    original = scores.get("a")
+    print("{original}")
+}

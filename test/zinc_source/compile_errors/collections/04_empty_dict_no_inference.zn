@@ -1,0 +1,5 @@
+// expected-error: cannot infer type
+
+fn main() {
+    a = dict()
+}

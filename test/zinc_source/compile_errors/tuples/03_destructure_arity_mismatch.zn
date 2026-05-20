@@ -1,0 +1,5 @@
+// expected-error: tuple destructuring arity mismatch
+
+fn main() {
+    a, b = (1, 2, 3)
+}

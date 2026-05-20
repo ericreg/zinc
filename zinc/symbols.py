@@ -252,9 +252,9 @@ class SymbolTableVisitor(zincVisitor):
         )
         for name, base_type in (
             ("dict", BaseType.DICT),
-            ("sortdict", BaseType.DICT),
+            ("sort_dict", BaseType.DICT),
             ("set", BaseType.SET),
-            ("sortset", BaseType.SET),
+            ("sort_set", BaseType.SET),
         ):
             self.symbols.define(
                 id=name,
@@ -639,6 +639,16 @@ class SymbolTableVisitor(zincVisitor):
             is_mutated=info.is_mutated,
         )
 
+    def _copy_array_info(self, info: ArrayTypeInfo | None) -> ArrayTypeInfo | None:
+        """Copy array metadata, including tuple element metadata."""
+        if info is None:
+            return None
+        return ArrayTypeInfo(
+            element_type=info.element_type,
+            element_tuple_info=self._copy_tuple_info(info.element_tuple_info),
+            is_mutated=info.is_mutated,
+        )
+
     def _copy_tuple_info(self, info: TupleTypeInfo | None) -> TupleTypeInfo | None:
         """Copy tuple metadata recursively."""
         if info is None:
@@ -778,8 +788,8 @@ class SymbolTableVisitor(zincVisitor):
         return None
 
     def _is_empty_collection_constructor(self, expr_ctx) -> bool:
-        """Check if an expression is dict/set/sortdict/sortset()."""
-        return self._function_call_name(expr_ctx) in {"dict", "sortdict", "set", "sortset"}
+        """Check if an expression is dict/set/sort_dict/sort_set()."""
+        return self._function_call_name(expr_ctx) in {"dict", "sort_dict", "set", "sort_set"}
 
     def _next_block_name(self, prefix: str) -> str:
         """Generate unique block name like 'if_0', 'for_1'."""
@@ -841,6 +851,9 @@ class SymbolTableVisitor(zincVisitor):
                 # Track array parameters for element type
                 if param_type == BaseType.ARRAY and i in func.arg_array_infos:
                     param_symbol.element_type = func.arg_array_infos[i].element_type
+                    param_symbol.tuple_info = self._copy_tuple_info(
+                        func.arg_array_infos[i].element_tuple_info
+                    )
                 if param_type == BaseType.DICT and i in func.arg_dict_infos:
                     param_symbol.dict_info = self._copy_dict_info(func.arg_dict_infos[i])
                 if param_type == BaseType.SET and i in func.arg_set_infos:
@@ -886,6 +899,16 @@ class SymbolTableVisitor(zincVisitor):
                 continue
             if not symbol.unique_name.startswith(prefix):
                 continue
+            if (
+                symbol.resolved_type == BaseType.ARRAY
+                and (
+                    symbol.element_type is None
+                    or symbol.element_type == BaseType.UNKNOWN
+                )
+            ):
+                raise ZincTypeError(
+                    f"cannot infer type for empty array '{symbol.id}'"
+                )
             if symbol.dict_info and (
                 symbol.dict_info.key_type == BaseType.UNKNOWN
                 or symbol.dict_info.value_type == BaseType.UNKNOWN
@@ -1077,10 +1100,15 @@ class SymbolTableVisitor(zincVisitor):
     def visitArrayLiteral(self, ctx: ZincParser.ArrayLiteralContext) -> BaseType:
         """Visit array literal and infer element type from first element."""
         element_type = None
+        element_tuple_info = None
         for expr_ctx in ctx.expression():
             expr_type = self.visit(expr_ctx)
             if element_type is None:
                 element_type = expr_type
+                if expr_type == BaseType.TUPLE:
+                    expr_symbol = self._expr_symbol(expr_ctx)
+                    if expr_symbol and expr_symbol.tuple_info:
+                        element_tuple_info = self._copy_tuple_info(expr_symbol.tuple_info)
         symbol = self.symbols.define_temp(
             resolved_type=BaseType.ARRAY,
             interval=ctx.getSourceInterval(),
@@ -1088,12 +1116,13 @@ class SymbolTableVisitor(zincVisitor):
         # Track element type from the first element
         if element_type is not None:
             symbol.element_type = element_type
+            symbol.tuple_info = element_tuple_info
         return BaseType.ARRAY
 
     def visitCollectionLiteral(self, ctx: ZincParser.CollectionLiteralContext) -> BaseType:
         """Visit dict/set literal and infer inner types."""
         if not ctx.dictEntry() and not ctx.expression():
-            raise ZincTypeError("empty collection literal {} is ambiguous; use dict(), set(), sortdict(), or sortset()")
+            raise ZincTypeError("empty collection literal {} is ambiguous; use dict(), set(), sort_dict(), or sort_set()")
 
         if ctx.dictEntry():
             key_type = BaseType.UNKNOWN
@@ -1137,6 +1166,7 @@ class SymbolTableVisitor(zincVisitor):
 
         # Try to get element type from the array
         element_type = BaseType.UNKNOWN
+        tuple_info = None
         if arr_type == BaseType.ARRAY:
             arr_ctx = ctx.expression(0)
             # Look up the array symbol to get element type
@@ -1147,6 +1177,8 @@ class SymbolTableVisitor(zincVisitor):
                     arr_symbol = self.symbols.lookup_by_id(arr_name)
                     if arr_symbol and arr_symbol.element_type:
                         element_type = arr_symbol.element_type
+                        if element_type == BaseType.TUPLE:
+                            tuple_info = self._copy_tuple_info(arr_symbol.tuple_info)
         elif arr_type == BaseType.DICT:
             dict_ctx = ctx.expression(0)
             key_type = self.visit(ctx.expression(1))
@@ -1185,7 +1217,7 @@ class SymbolTableVisitor(zincVisitor):
         self.symbols.define_temp(
             resolved_type=element_type,
             interval=ctx.getSourceInterval(),
-        )
+        ).tuple_info = tuple_info if element_type == BaseType.TUPLE else None
         return element_type
 
     def visitRangeExpr(self, ctx: ZincParser.RangeExprContext) -> BaseType:
@@ -1228,14 +1260,21 @@ class SymbolTableVisitor(zincVisitor):
 
                 # Track array element types for array arguments
                 if arg_type == BaseType.ARRAY:
-                    if isinstance(arg_expr, ZincParser.PrimaryExprContext):
+                    arg_symbol = self._expr_symbol(arg_expr)
+                    if arg_symbol and arg_symbol.element_type:
+                        arg_array_infos[i] = ArrayTypeInfo(
+                            element_type=arg_symbol.element_type,
+                            element_tuple_info=self._copy_tuple_info(arg_symbol.tuple_info),
+                        )
+                    elif isinstance(arg_expr, ZincParser.PrimaryExprContext):
                         primary = arg_expr.primaryExpression()
                         if primary and primary.IDENTIFIER():
                             arr_var = primary.IDENTIFIER().getText()
                             arr_symbol = self.symbols.lookup_by_id(arr_var)
                             if arr_symbol and arr_symbol.element_type:
                                 arg_array_infos[i] = ArrayTypeInfo(
-                                    element_type=arr_symbol.element_type
+                                    element_type=arr_symbol.element_type,
+                                    element_tuple_info=self._copy_tuple_info(arr_symbol.tuple_info),
                                 )
                 elif arg_type == BaseType.DICT:
                     arg_symbol = self.symbols.lookup_by_interval(
@@ -1274,7 +1313,7 @@ class SymbolTableVisitor(zincVisitor):
             primary = callee_ctx.primaryExpression()
             if primary and primary.IDENTIFIER():
                 func_name = primary.IDENTIFIER().getText()
-                if func_name in {"dict", "sortdict"}:
+                if func_name in {"dict", "sort_dict"}:
                     if arg_types:
                         raise ZincTypeError(f"{func_name}() does not accept arguments")
                     symbol = self.symbols.define_temp(
@@ -1283,7 +1322,7 @@ class SymbolTableVisitor(zincVisitor):
                     )
                     symbol.dict_info = DictTypeInfo(kind=func_name)
                     return BaseType.DICT
-                if func_name in {"set", "sortset"}:
+                if func_name in {"set", "sort_set"}:
                     if arg_types:
                         raise ZincTypeError(f"{func_name}() does not accept arguments")
                     symbol = self.symbols.define_temp(
@@ -1334,6 +1373,10 @@ class SymbolTableVisitor(zincVisitor):
                         ):
                             if var_symbol.element_type is None:
                                 var_symbol.element_type = arg_types[0]
+                            if arg_types[0] == BaseType.TUPLE:
+                                arg_symbol = self._expr_symbol(arg_exprs[0])
+                                if arg_symbol and arg_symbol.tuple_info:
+                                    var_symbol.tuple_info = self._copy_tuple_info(arg_symbol.tuple_info)
 
                         if var_symbol.resolved_type == BaseType.DICT and var_symbol.dict_info:
                             dict_info = var_symbol.dict_info
@@ -1417,7 +1460,7 @@ class SymbolTableVisitor(zincVisitor):
             primary = callee_ctx.primaryExpression()
             if primary and primary.IDENTIFIER():
                 func_name = primary.IDENTIFIER().getText()
-                if func_name not in ("print", "chan", "dict", "sortdict", "set", "sortset"):
+                if func_name not in ("print", "chan", "dict", "sort_dict", "set", "sort_set"):
                     # Look up function definition
                     func_def = self.atlas.function_defs.get(func_name)
                     # Only create specialization if all arg types are known

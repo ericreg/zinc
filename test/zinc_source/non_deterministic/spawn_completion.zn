@@ -1,0 +1,9 @@
+fn emit(x) {
+    print("{x}")
+}
+
+fn main() {
+    spawn emit(1)
+    spawn emit(2)
+    print("done")
+}

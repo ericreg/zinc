@@ -1,0 +1,13 @@
+fn emit(x) {
+    print("{x}")
+}
+
+fn launch(x) {
+    spawn emit(x)
+    print("launched")
+}
+
+fn main() {
+    launch(7)
+    print("done")
+}

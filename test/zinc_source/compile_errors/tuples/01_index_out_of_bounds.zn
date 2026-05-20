@@ -1,0 +1,6 @@
+// expected-error: tuple index out of bounds
+
+fn main() {
+    pair = (1, 2)
+    bad = pair[2]
+}

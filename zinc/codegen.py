@@ -86,11 +86,13 @@ class CodeGenVisitor(zincVisitor):
         self._expected_dict_info: DictTypeInfo | None = None
         self._expected_set_info: SetTypeInfo | None = None
         self._expected_tuple_info: TupleTypeInfo | None = None
+        self._spawn_handles_var: str | None = None
 
     def generate(self) -> RustProgram:
         """Main entry point - generate Rust code for all reachable code."""
         # Pre-scan to determine which struct vars need mut
         self._prescan_for_mut_vars()
+        self._mark_async_functions()
 
         imports = self._generate_imports()
         consts = [self._generate_const(c) for c in self.atlas.consts.values()]
@@ -204,8 +206,6 @@ class CodeGenVisitor(zincVisitor):
     def _generate_imports(self) -> list[str]:
         """Generate import statements based on what's used."""
         imports = []
-        if self._uses_async:
-            imports.append("use tokio;")
         collections: set[str] = set()
         for symbol in self.symbols.all_symbols():
             if symbol.dict_info:
@@ -215,6 +215,29 @@ class CodeGenVisitor(zincVisitor):
         if collections:
             imports.append(f"use std::collections::{{{', '.join(sorted(collections))}}};")
         return imports
+
+    def _mark_async_functions(self) -> None:
+        """Mark functions that need async because they spawn or call async functions."""
+        async_funcs = {
+            name
+            for name, func in self.atlas.functions.items()
+            if func.is_async or self._block_contains_spawn(func.ctx.block())
+        }
+
+        changed = True
+        while changed:
+            changed = False
+            for caller, callees in self.atlas.calls.items():
+                if caller in self.atlas.functions and any(callee in async_funcs for callee in callees):
+                    if caller not in async_funcs:
+                        async_funcs.add(caller)
+                        changed = True
+
+        for name in async_funcs:
+            if name == "main":
+                self._uses_async = True
+            elif name in self.atlas.functions:
+                self.atlas.functions[name].is_async = True
 
     def _generate_const(self, const: ConstInstance) -> str:
         """Generate a const declaration."""
@@ -362,7 +385,48 @@ class CodeGenVisitor(zincVisitor):
     def _generate_function_body(self, func: FunctionInstance) -> list[str]:
         """Generate statements for a function body."""
         ctx: ZincParser.FunctionDeclarationContext = func.ctx
-        return self._generate_block(ctx.block())
+        has_spawns = self._block_contains_spawn(ctx.block())
+        previous_spawn_handles_var = self._spawn_handles_var
+        self._spawn_handles_var = "__zinc_spawn_handles" if has_spawns else None
+        try:
+            body = self._generate_block(ctx.block())
+        finally:
+            self._spawn_handles_var = previous_spawn_handles_var
+
+        if not has_spawns:
+            return body
+
+        body_with_setup = [
+            "let mut __zinc_spawn_handles = Vec::new();",
+            *body,
+        ]
+        if func.return_type == BaseType.VOID:
+            body_with_setup.append(self._render_spawn_handle_awaits("__zinc_spawn_handles"))
+        return body_with_setup
+
+    def _block_contains_spawn(self, ctx: ZincParser.BlockContext) -> bool:
+        """Return True if a block contains any spawn statement."""
+        for stmt in ctx.statement():
+            if stmt.spawnStatement():
+                return True
+            if stmt.ifStatement():
+                if any(self._block_contains_spawn(block) for block in stmt.ifStatement().block()):
+                    return True
+            if stmt.forStatement() and self._block_contains_spawn(stmt.forStatement().block()):
+                return True
+            if stmt.whileStatement() and self._block_contains_spawn(stmt.whileStatement().block()):
+                return True
+            if stmt.loopStatement() and self._block_contains_spawn(stmt.loopStatement().block()):
+                return True
+        return False
+
+    def _render_spawn_handle_awaits(self, handle_var: str) -> str:
+        """Render code that waits for all spawned tasks in this function."""
+        return "\n".join([
+            f"while let Some(__zinc_spawn_handle) = {handle_var}.pop() {{",
+            "    __zinc_spawn_handle.await.unwrap();",
+            "}",
+        ])
 
     def _generate_block(self, ctx: ZincParser.BlockContext) -> list[str]:
         """Generate statements for a block."""
@@ -699,7 +763,7 @@ class CodeGenVisitor(zincVisitor):
         if callee == "print":
             return self._render_print_call(args)
 
-        if callee in {"dict", "sortdict"}:
+        if callee in {"dict", "sort_dict"}:
             info = self._expected_dict_info or self._get_dict_info(ctx) or DictTypeInfo(kind=callee)
             collection_type = info.rust_container()
             if info.key_type != BaseType.UNKNOWN and info.value_type != BaseType.UNKNOWN:
@@ -708,7 +772,7 @@ class CodeGenVisitor(zincVisitor):
                 return f"{collection_type}::<{key}, {value}>::new()"
             return f"{collection_type}::new()"
 
-        if callee in {"set", "sortset"}:
+        if callee in {"set", "sort_set"}:
             info = self._expected_set_info or self._get_set_info(ctx) or SetTypeInfo(kind=callee)
             collection_type = info.rust_container()
             if info.element_type != BaseType.UNKNOWN:
@@ -792,7 +856,10 @@ class CodeGenVisitor(zincVisitor):
         if mangled:
             # Process arguments for string literal conversion
             args = self._process_function_args(mangled, args, arg_ctxs)
-            return f"{mangled}({', '.join(args)})"
+            call = f"{mangled}({', '.join(args)})"
+            if self.atlas.functions.get(mangled) and self.atlas.functions[mangled].is_async:
+                return f"{call}.await"
+            return call
 
         return f"{callee}({', '.join(args)})"
 
@@ -1259,8 +1326,17 @@ class CodeGenVisitor(zincVisitor):
                 expr_type = self._get_expr_type(ctx.expression())
                 if expr_type == BaseType.INTEGER:
                     value = f"({value} as f64)"
-            return f"return {value};"
-        return "return;"
+            return self._render_return(f"return {value};")
+        return self._render_return("return;")
+
+    def _render_return(self, return_stmt: str) -> str:
+        """Render a return statement, awaiting local spawned tasks first."""
+        if not self._spawn_handles_var:
+            return return_stmt
+        return "\n".join([
+            self._render_spawn_handle_awaits(self._spawn_handles_var),
+            return_stmt,
+        ])
 
     def visitBreakStatement(self, ctx: ZincParser.BreakStatementContext) -> str:
         """Visit break statement."""
@@ -1277,8 +1353,9 @@ class CodeGenVisitor(zincVisitor):
         # The expression is the function name, and args are in argumentList
         func_name = self.visit(ctx.expression())
         args = []
+        setup = []
         if ctx.argumentList():
-            for arg in ctx.argumentList().expression():
+            for i, arg in enumerate(ctx.argumentList().expression()):
                 arg_code = self.visit(arg)
                 # Check if this argument is a channel - use _tx suffix
                 if isinstance(arg, ZincParser.PrimaryExprContext):
@@ -1286,7 +1363,8 @@ class CodeGenVisitor(zincVisitor):
                     if primary and primary.IDENTIFIER():
                         var_name = primary.IDENTIFIER().getText()
                         if var_name in self._channel_infos:
-                            arg_code = f"{var_name}_tx"
+                            arg_code = f"__zinc_spawn_arg_{i}"
+                            setup.append(f"let {arg_code} = {var_name}_tx.clone();")
                 args.append(arg_code)
 
         # Look up mangled name from specialization map (scoped by current function)
@@ -1296,7 +1374,13 @@ class CodeGenVisitor(zincVisitor):
             call = f"{mangled}({', '.join(args)})"
         else:
             call = f"{func_name}({', '.join(args)})"
-        return f"tokio::spawn({call});"
+        if setup:
+            task = f"tokio::spawn({{ {' '.join(setup)} async move {{ {call}.await; }} }})"
+        else:
+            task = f"tokio::spawn(async move {{ {call}.await; }})"
+        if self._spawn_handles_var:
+            return f"{self._spawn_handles_var}.push({task});"
+        return f"{task}.await.unwrap();"
 
     def visitChannelSendStatement(self, ctx: ZincParser.ChannelSendStatementContext) -> str:
         """Visit channel send statement."""

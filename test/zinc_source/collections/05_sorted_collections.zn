@@ -1,10 +1,10 @@
 fn main() {
-    scores = sortdict()
+    scores = sort_dict()
     scores["x"] = 4
     x = scores.get("x")
     print("{x}")
 
-    values = sortset()
+    values = sort_set()
     values.insert(3)
     has_three = values.contains(3)
     print("{has_three}")

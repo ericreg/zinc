@@ -1,0 +1,13 @@
+fn child(x) {
+    print("{x}")
+}
+
+fn parent(x) {
+    spawn child(x + 1)
+    print("{x}")
+}
+
+fn main() {
+    spawn parent(10)
+    print("done")
+}

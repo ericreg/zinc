@@ -1,0 +1,8 @@
+// expected-error: cannot infer type
+
+fn main() {
+    values = set()
+    for value in values {
+        print("{value}")
+    }
+}

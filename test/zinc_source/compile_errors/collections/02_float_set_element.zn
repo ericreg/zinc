@@ -1,0 +1,5 @@
+// expected-error: set element cannot be a float
+
+fn main() {
+    a = {1.0, 2.0}
+}

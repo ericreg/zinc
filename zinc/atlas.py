@@ -206,9 +206,7 @@ class Atlas:
         type_parts = []
         for i, t in enumerate(arg_types):
             if t == BaseType.ARRAY and arg_array_infos and i in arg_array_infos:
-                # Include element type for arrays
-                elem = type_to_rust(arg_array_infos[i].element_type)
-                type_parts.append(f"Vec_{elem}")
+                type_parts.append(arg_array_infos[i].to_rust_type_suffix())
             elif t == BaseType.DICT and arg_dict_infos and i in arg_dict_infos:
                 type_parts.append(arg_dict_infos[i].to_rust_type_suffix())
             elif t == BaseType.SET and arg_set_infos and i in arg_set_infos:
@@ -380,7 +378,7 @@ class AtlasBuilder(zincVisitor):
                 if primary and primary.IDENTIFIER():
                     func_name = primary.IDENTIFIER().getText()
                     # Skip builtins like print, chan, and collection constructors
-                    if func_name not in ("print", "chan", "dict", "sortdict", "set", "sortset"):
+                    if func_name not in ("print", "chan", "dict", "sort_dict", "set", "sort_set"):
                         self._calls[self._current_function].add(func_name)
 
             # Method call on struct type (static method)
@@ -397,7 +395,7 @@ class AtlasBuilder(zincVisitor):
                 primary = expr.primaryExpression()
                 if primary and primary.IDENTIFIER():
                     func_name = primary.IDENTIFIER().getText()
-                    if func_name not in ("print", "chan", "dict", "sortdict", "set", "sortset") and self._current_function:
+                    if func_name not in ("print", "chan", "dict", "sort_dict", "set", "sort_set") and self._current_function:
                         self._calls[self._current_function].add(func_name)
 
         # Check for struct instantiation

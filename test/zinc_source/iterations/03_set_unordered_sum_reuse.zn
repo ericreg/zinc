@@ -1,0 +1,20 @@
+fn main() {
+    values = set()
+    values.push(1)
+    values.push(2)
+    values.push(3)
+
+    total = 0
+    seen = 0
+    for value in values {
+        total = total + value
+        seen = seen + 1
+    }
+
+    count = values.len()
+    has_two = values.contains(2)
+    print("{total}")
+    print("{seen}")
+    print("{count}")
+    print("{has_two}")
+}

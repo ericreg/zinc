@@ -1,0 +1,7 @@
+// expected-error: tuple index must be an integer literal
+
+fn main() {
+    item = (1, 2)
+    index = 1
+    bad = item[index]
+}

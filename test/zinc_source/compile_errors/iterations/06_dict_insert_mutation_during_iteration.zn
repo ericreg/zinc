@@ -1,0 +1,9 @@
+// expected-error: cannot mutate dict during iteration
+
+fn main() {
+    scores = sort_dict()
+    scores["a"] = 1
+    for key, value in scores {
+        scores.insert("b", 2)
+    }
+}

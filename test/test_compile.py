@@ -18,11 +18,13 @@ from zinc.codegen import CodeGenVisitor
 
 TEST_DIR = Path(__file__).parent
 ZINC_SOURCE_DIR = TEST_DIR / "zinc_source"
+COMPILE_ERROR_DIR = ZINC_SOURCE_DIR / "compile_errors"
 RUST_SOURCE_DIR = TEST_DIR / "rust_source"
 RUST_SRC_DIR = RUST_SOURCE_DIR / "src"  # Cargo src directory
 OUTPUT_DIR = TEST_DIR / "output"
 CARGO_TOML = RUST_SOURCE_DIR / "Cargo.toml"
 NON_DETERMINISTIC_FOLDER = "non_deterministic"
+NON_DETERMINISTIC_TESTS = {"bounded_channels"}
 
 
 def get_test_cases() -> list[str]:
@@ -36,8 +38,28 @@ def get_test_cases() -> list[str]:
     for f in ZINC_SOURCE_DIR.glob("**/*.zn"):
         # Get path relative to ZINC_SOURCE_DIR, without extension
         relative = f.relative_to(ZINC_SOURCE_DIR).with_suffix("")
+        if relative.parts and relative.parts[0] == COMPILE_ERROR_DIR.name:
+            continue
         test_cases.append(str(relative))
     return test_cases
+
+
+def get_compile_error_files(group: str) -> list[Path]:
+    """Discover compile-error Zinc fixtures for a specific group."""
+    group_dir = COMPILE_ERROR_DIR / group
+    if not group_dir.exists():
+        return []
+    return sorted(group_dir.glob("*.zn"))
+
+
+def read_expected_error(source_path: Path) -> str:
+    """Read the expected error regex from a compile-error fixture."""
+    prefix = "// expected-error:"
+    for line in source_path.read_text().splitlines():
+        stripped = line.strip()
+        if stripped.startswith(prefix):
+            return stripped[len(prefix):].strip()
+    raise AssertionError(f"Missing {prefix} comment in {source_path}")
 
 
 def generate_cargo_toml(test_paths: list[str]) -> str:
@@ -110,7 +132,7 @@ def compile_zinc(source_code: str) -> str:
 def is_nondeterministic_test(test_path: str) -> bool:
     """Check if a test should use non-deterministic comparison."""
     parts = Path(test_path).parts
-    return NON_DETERMINISTIC_FOLDER in parts
+    return NON_DETERMINISTIC_FOLDER in parts or test_path in NON_DETERMINISTIC_TESTS
 
 
 def lines_as_multiset(text: str) -> Counter[str]:
@@ -184,38 +206,33 @@ def build_cargo_project() -> None:
         raise RuntimeError(f"Cargo build failed:\n{result.stderr}")
 
 
-@pytest.mark.parametrize(
-    ("source", "message"),
-    [
-        ("fn main(){ a = {} }", "ambiguous"),
-        ("fn main(){ a = {1.0, 2.0} }", "set element cannot be a float"),
-        ("fn main(){ a = {1.0: \"x\"} }", "dict key cannot be a float"),
-        ("fn main(){ a = dict() }", "cannot infer type"),
-        ("fn main(){ a = set()\n b = a.insert(1) }", "mutating collection methods"),
-    ],
-)
-def test_collection_compile_errors(source: str, message: str) -> None:
-    """Invalid collection programs fail during Zinc type resolution."""
-    with pytest.raises(ZincTypeError, match=message):
-        compile_zinc(source)
+def assert_compile_error_files(group: str) -> None:
+    """Compile all negative fixtures in a group and check their expected diagnostics."""
+    source_paths = get_compile_error_files(group)
+    assert source_paths, f"No compile-error fixtures found for group: {group}"
+    for source_path in source_paths:
+        source = source_path.read_text()
+        expected_error = read_expected_error(source_path)
+        try:
+            with pytest.raises(ZincTypeError, match=expected_error):
+                compile_zinc(source)
+        except AssertionError as exc:
+            raise AssertionError(f"{source_path}: {exc}") from exc
 
 
-@pytest.mark.parametrize(
-    ("source", "message"),
-    [
-        ("fn main(){ pair = (1, 2)\n bad = pair[2] }", "tuple index out of bounds"),
-        ("fn main(){ pair = (1, 2)\n idx = 0\n bad = pair[idx] }", "tuple index must be an integer literal"),
-        ("fn main(){ a, b = (1, 2, 3) }", "tuple destructuring arity mismatch"),
-        (
-            'fn main(){ d = sortdict()\n d["a"] = 1\n for key, value in d { d["b"] = 2 } }',
-            "cannot mutate dict during iteration",
-        ),
-    ],
-)
-def test_tuple_iteration_compile_errors(source: str, message: str) -> None:
-    """Invalid tuple and dict iteration programs fail during Zinc type resolution."""
-    with pytest.raises(ZincTypeError, match=message):
-        compile_zinc(source)
+def test_collection_compile_errors() -> None:
+    """Invalid collection fixtures fail during Zinc type resolution."""
+    assert_compile_error_files("collections")
+
+
+def test_tuple_iteration_compile_errors() -> None:
+    """Invalid tuple and dict iteration fixtures fail during Zinc type resolution."""
+    assert_compile_error_files("tuples")
+
+
+def test_iteration_compile_errors() -> None:
+    """Invalid iteration fixtures fail during Zinc type resolution."""
+    assert_compile_error_files("iterations")
 
 
 @pytest.mark.parametrize("test_path", get_test_cases())

@@ -1,0 +1,25 @@
+fn find(limit, target) {
+    for n in 0..limit {
+        if n == target {
+            return n
+        }
+    }
+    return -1
+}
+
+fn find_zero(limit) {
+    for n in 0..limit {
+        return n
+    }
+    return -1
+}
+
+fn main() {
+    found = find(5, 3)
+    missing = find(5, 9)
+    zero = find_zero(0)
+
+    print("{found}")
+    print("{missing}")
+    print("{zero}")
+}

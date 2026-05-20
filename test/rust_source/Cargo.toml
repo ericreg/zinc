@@ -151,28 +151,92 @@ name = "if_else"
 path = "src/if_else.rs"
 
 [[bin]]
-name = "iterations_01_sortdict_keys_values"
-path = "src/iterations/01_sortdict_keys_values.rs"
+name = "iterations_01_array_literal_values_reuse"
+path = "src/iterations/01_array_literal_values_reuse.rs"
 
 [[bin]]
-name = "iterations_02_dict_bare_items_destructure"
-path = "src/iterations/02_dict_bare_items_destructure.rs"
+name = "iterations_02_array_empty_push_inference"
+path = "src/iterations/02_array_empty_push_inference.rs"
 
 [[bin]]
-name = "iterations_03_dict_items_parenthesized"
-path = "src/iterations/03_dict_items_parenthesized.rs"
+name = "iterations_03_set_unordered_sum_reuse"
+path = "src/iterations/03_set_unordered_sum_reuse.rs"
 
 [[bin]]
-name = "iterations_04_dict_items_tuple_binding"
-path = "src/iterations/04_dict_items_tuple_binding.rs"
+name = "iterations_04_set_loop_locals_are_copies"
+path = "src/iterations/04_set_loop_locals_are_copies.rs"
 
 [[bin]]
-name = "iterations_05_dict_loop_locals_are_copies"
-path = "src/iterations/05_dict_loop_locals_are_copies.rs"
+name = "iterations_05_dict_unordered_items_accumulate"
+path = "src/iterations/05_dict_unordered_items_accumulate.rs"
 
 [[bin]]
-name = "iterations_06_hashdict_order_independent"
-path = "src/iterations/06_hashdict_order_independent.rs"
+name = "iterations_06_dict_keys_values_items_order_independent"
+path = "src/iterations/06_dict_keys_values_items_order_independent.rs"
+
+[[bin]]
+name = "iterations_07_sort_set_ordered_values_reuse"
+path = "src/iterations/07_sort_set_ordered_values_reuse.rs"
+
+[[bin]]
+name = "iterations_08_sort_set_loop_locals_are_copies"
+path = "src/iterations/08_sort_set_loop_locals_are_copies.rs"
+
+[[bin]]
+name = "iterations_09_sort_dict_keys_values_ordered"
+path = "src/iterations/09_sort_dict_keys_values_ordered.rs"
+
+[[bin]]
+name = "iterations_10_sort_dict_items_destructure"
+path = "src/iterations/10_sort_dict_items_destructure.rs"
+
+[[bin]]
+name = "iterations_11_sort_dict_item_tuple_binding"
+path = "src/iterations/11_sort_dict_item_tuple_binding.rs"
+
+[[bin]]
+name = "iterations_12_sort_dict_loop_locals_are_copies"
+path = "src/iterations/12_sort_dict_loop_locals_are_copies.rs"
+
+[[bin]]
+name = "iterations_13_for_range_bounds"
+path = "src/iterations/13_for_range_bounds.rs"
+
+[[bin]]
+name = "iterations_14_nested_for_scopes_shadowing"
+path = "src/iterations/14_nested_for_scopes_shadowing.rs"
+
+[[bin]]
+name = "iterations_15_loop_var_reassignment"
+path = "src/iterations/15_loop_var_reassignment.rs"
+
+[[bin]]
+name = "iterations_16_while_counter_and_zero_guard"
+path = "src/iterations/16_while_counter_and_zero_guard.rs"
+
+[[bin]]
+name = "iterations_17_break_continue"
+path = "src/iterations/17_break_continue.rs"
+
+[[bin]]
+name = "iterations_18_loop_break"
+path = "src/iterations/18_loop_break.rs"
+
+[[bin]]
+name = "iterations_19_return_from_for"
+path = "src/iterations/19_return_from_for.rs"
+
+[[bin]]
+name = "iterations_20_array_tuple_destructure"
+path = "src/iterations/20_array_tuple_destructure.rs"
+
+[[bin]]
+name = "iterations_21_return_from_tuple_for"
+path = "src/iterations/21_return_from_tuple_for.rs"
+
+[[bin]]
+name = "iterations_22_break_in_nested_for"
+path = "src/iterations/22_break_in_nested_for.rs"
 
 [[bin]]
 name = "monomorphization"
@@ -261,6 +325,30 @@ path = "src/monomorphization/20_generic_with_channels.rs"
 [[bin]]
 name = "non_deterministic_spawn"
 path = "src/non_deterministic/spawn.rs"
+
+[[bin]]
+name = "non_deterministic_spawn_channel_multi_sender"
+path = "src/non_deterministic/spawn_channel_multi_sender.rs"
+
+[[bin]]
+name = "non_deterministic_spawn_completion"
+path = "src/non_deterministic/spawn_completion.rs"
+
+[[bin]]
+name = "non_deterministic_spawn_helper_completion"
+path = "src/non_deterministic/spawn_helper_completion.rs"
+
+[[bin]]
+name = "non_deterministic_spawn_loop_completion"
+path = "src/non_deterministic/spawn_loop_completion.rs"
+
+[[bin]]
+name = "non_deterministic_spawn_nested_completion"
+path = "src/non_deterministic/spawn_nested_completion.rs"
+
+[[bin]]
+name = "non_deterministic_spawn_return_completion"
+path = "src/non_deterministic/spawn_return_completion.rs"
 
 [[bin]]
 name = "reassign_type"

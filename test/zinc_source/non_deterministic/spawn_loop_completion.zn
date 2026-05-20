@@ -1,0 +1,10 @@
+fn emit(x) {
+    print("{x}")
+}
+
+fn main() {
+    for x in 0..5 {
+        spawn emit(x)
+    }
+    print("done")
+}

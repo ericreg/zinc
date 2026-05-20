@@ -1,0 +1,20 @@
+fn main() {
+    pairs = [(1, 2), (3, 4)]
+    total = 0
+    for a, b in pairs {
+        print("{a}")
+        print("{b}")
+        total = total + a
+        total = total + b
+    }
+    print("{total}")
+
+    triplets = [(1, 2, 3)]
+    triplet_total = 0
+    for a, b, c in triplets {
+        triplet_total = triplet_total + a
+        triplet_total = triplet_total + b
+        triplet_total = triplet_total + c
+    }
+    print("{triplet_total}")
+}

@@ -1,0 +1,9 @@
+// expected-error: cannot mutate dict during iteration
+
+fn main() {
+    d = sort_dict()
+    d["a"] = 1
+    for key, value in d {
+        d["b"] = 2
+    }
+}

@@ -1,0 +1,17 @@
+fn find_value(pairs, target) {
+    for index, value in pairs {
+        if index == target {
+            return value
+        }
+    }
+    return -1
+}
+
+fn main() {
+    pairs = [(1, 10), (2, 20)]
+    found = find_value(pairs, 2)
+    missing = find_value(pairs, 9)
+
+    print("{found}")
+    print("{missing}")
+}

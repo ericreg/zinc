@@ -1,0 +1,5 @@
+// expected-error: dict key cannot be a float
+
+fn main() {
+    a = {1.0: "x"}
+}

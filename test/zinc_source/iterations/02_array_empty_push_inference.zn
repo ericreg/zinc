@@ -1,0 +1,14 @@
+fn main() {
+    values = []
+    values.push(10)
+    values.push(20)
+    values.push(30)
+
+    total = 0
+    for value in values {
+        total = total + value
+    }
+
+    print("{total}")
+    print("{values[1]}")
+}
