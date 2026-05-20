@@ -1,0 +1,25 @@
+{
+  "name": "zinc-lang",
+  "displayName": "Zinc Language Support",
+  "description": "Basic syntax highlighting and editor configuration for Zinc files.",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.115.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [{
+      "id": "zinc",
+      "aliases": ["Zinc", "zinc"],
+      "extensions": [".zn"],
+      "configuration": "./language-configuration.json"
+    }],
+    "grammars": [{
+      "language": "zinc",
+      "scopeName": "source.zinc",
+      "path": "./syntaxes/zinc.tmLanguage.json"
+    }]
+  }
+}

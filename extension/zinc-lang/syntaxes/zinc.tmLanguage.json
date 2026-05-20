@@ -1,0 +1,299 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Zinc",
+  "scopeName": "source.zinc",
+  "fileTypes": ["zn"],
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#declarations" },
+    { "include": "#types" },
+    { "include": "#module_paths" },
+    { "include": "#constants" },
+    { "include": "#self" },
+    { "include": "#keywords" },
+    { "include": "#function_calls" },
+    { "include": "#operators" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.zinc",
+          "match": "//.*$"
+        },
+        {
+          "name": "comment.block.zinc",
+          "begin": "/\\*",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.comment.begin.zinc" }
+          },
+          "end": "\\*/",
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.comment.end.zinc" }
+          }
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.zinc",
+          "begin": "\"",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.string.begin.zinc" }
+          },
+          "end": "\"",
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.string.end.zinc" }
+          },
+          "patterns": [
+            { "include": "#escape_sequences" },
+            { "include": "#interpolation" }
+          ]
+        },
+        {
+          "name": "string.quoted.single.zinc",
+          "begin": "'",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.string.begin.zinc" }
+          },
+          "end": "'",
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.string.end.zinc" }
+          },
+          "patterns": [
+            { "include": "#escape_sequences" },
+            { "include": "#interpolation" }
+          ]
+        }
+      ]
+    },
+    "escape_sequences": {
+      "name": "constant.character.escape.zinc",
+      "match": "\\\\([btnfr\"'\\\\]|u[0-9a-fA-F]{4})"
+    },
+    "interpolation": {
+      "name": "meta.interpolation.zinc",
+      "begin": "\\{",
+      "beginCaptures": {
+        "0": { "name": "punctuation.section.interpolation.begin.zinc" }
+      },
+      "end": "\\}",
+      "endCaptures": {
+        "0": { "name": "punctuation.section.interpolation.end.zinc" }
+      },
+      "patterns": [
+        { "include": "#numbers" },
+        { "include": "#constants" },
+        { "include": "#self" },
+        { "include": "#keywords" },
+        { "include": "#function_calls" },
+        { "include": "#operators" },
+        { "include": "#punctuation" },
+        { "include": "#identifiers" }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.float.zinc",
+          "match": "\\b(?:[0-9]+\\.[0-9]+(?:[eE][+-]?[0-9]+)?|[0-9]+[eE][+-]?[0-9]+)\\b"
+        },
+        {
+          "name": "constant.numeric.hex.zinc",
+          "match": "\\b0x[0-9a-fA-F]+\\b"
+        },
+        {
+          "name": "constant.numeric.octal.zinc",
+          "match": "\\b0o[0-7]+\\b"
+        },
+        {
+          "name": "constant.numeric.binary.zinc",
+          "match": "\\b0b[01]+\\b"
+        },
+        {
+          "name": "constant.numeric.integer.zinc",
+          "match": "\\b(?:0|[1-9][0-9]*)\\b"
+        }
+      ]
+    },
+    "declarations": {
+      "patterns": [
+        {
+          "name": "meta.function.zinc",
+          "match": "\\b(fn|async)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+          "captures": {
+            "1": { "name": "keyword.declaration.function.zinc" },
+            "2": { "name": "entity.name.function.zinc" }
+          }
+        },
+        {
+          "name": "meta.struct.zinc",
+          "match": "\\b(struct)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+          "captures": {
+            "1": { "name": "keyword.declaration.struct.zinc" },
+            "2": { "name": "entity.name.type.struct.zinc" }
+          }
+        },
+        {
+          "name": "meta.use.zinc",
+          "match": "\\b(use)\\s+([A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*)",
+          "captures": {
+            "1": { "name": "keyword.control.import.zinc" },
+            "2": { "name": "entity.name.namespace.zinc" }
+          }
+        },
+        {
+          "name": "meta.constant.zinc",
+          "match": "\\b(const)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+          "captures": {
+            "1": { "name": "storage.modifier.const.zinc" },
+            "2": { "name": "variable.other.constant.zinc" }
+          }
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "meta.type.annotation.zinc",
+          "match": "(:)\\s*(\\[?\\b[A-Za-z_][A-Za-z0-9_]*(?:\\s*<[^>]+>)?\\]?)(?=\\s*(?:[,)=\\{]|//|$))",
+          "captures": {
+            "1": { "name": "punctuation.separator.type.zinc" },
+            "2": { "name": "entity.name.type.zinc" }
+          }
+        },
+        {
+          "name": "meta.type.return.zinc",
+          "match": "(->)\\s*(\\[?\\b[A-Za-z_][A-Za-z0-9_]*(?:\\s*<[^>]+>)?\\]?)",
+          "captures": {
+            "1": { "name": "keyword.operator.arrow.zinc" },
+            "2": { "name": "entity.name.type.zinc" }
+          }
+        }
+      ]
+    },
+    "module_paths": {
+      "name": "entity.name.namespace.zinc",
+      "match": "\\b[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)+\\b"
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.zinc",
+          "match": "\\b(?:true|false)\\b"
+        },
+        {
+          "name": "constant.language.nil.zinc",
+          "match": "\\bnil\\b"
+        }
+      ]
+    },
+    "self": {
+      "name": "variable.language.self.zinc",
+      "match": "\\bself\\b"
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.zinc",
+          "match": "\\b(?:if|else|for|in|while|loop|match|return|break|continue)\\b"
+        },
+        {
+          "name": "keyword.other.concurrency.zinc",
+          "match": "\\b(?:spawn|select|case|await)\\b"
+        },
+        {
+          "name": "keyword.operator.word.zinc",
+          "match": "\\b(?:and|or|not)\\b"
+        },
+        {
+          "name": "keyword.declaration.zinc",
+          "match": "\\b(?:fn|async|struct|const|use)\\b"
+        }
+      ]
+    },
+    "function_calls": {
+      "name": "meta.function-call.zinc",
+      "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+      "captures": {
+        "1": { "name": "entity.name.function.zinc" }
+      }
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.channel.zinc",
+          "match": "<-"
+        },
+        {
+          "name": "keyword.operator.range.zinc",
+          "match": "\\.\\.(?:=)?"
+        },
+        {
+          "name": "keyword.operator.arrow.zinc",
+          "match": "=>|->"
+        },
+        {
+          "name": "keyword.operator.comparison.zinc",
+          "match": "==|!=|<=|>=|<|>"
+        },
+        {
+          "name": "keyword.operator.logical.zinc",
+          "match": "&&|\\|\\||!"
+        },
+        {
+          "name": "keyword.operator.assignment.zinc",
+          "match": "(?<![=!<>])=(?!=)"
+        },
+        {
+          "name": "keyword.operator.arithmetic.zinc",
+          "match": "[+\\-*/%]"
+        },
+        {
+          "name": "punctuation.accessor.zinc",
+          "match": "\\."
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.terminator.statement.zinc",
+          "match": ";"
+        },
+        {
+          "name": "punctuation.separator.comma.zinc",
+          "match": ","
+        },
+        {
+          "name": "punctuation.separator.key-value.zinc",
+          "match": ":"
+        },
+        {
+          "name": "punctuation.section.block.zinc",
+          "match": "[{}]"
+        },
+        {
+          "name": "punctuation.section.brackets.zinc",
+          "match": "[\\[\\]]"
+        },
+        {
+          "name": "punctuation.section.parens.zinc",
+          "match": "[()]"
+        },
+        {
+          "name": "punctuation.definition.lambda.zinc",
+          "match": "\\|"
+        }
+      ]
+    },
+    "identifiers": {
+      "name": "variable.other.zinc",
+      "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b"
+    }
+  }
+}
