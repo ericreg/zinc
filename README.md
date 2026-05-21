@@ -331,6 +331,18 @@ Zinc uses a 3-pass compiler:
 
 ## Development
 
+### VSCode extension
+
+The `zinc-lang` VSCode extension provides syntax highlighting. It is not available on the marketplace yet, but you can build and install it locally
+
+```sh
+npm install -g @vscode/vsce
+cd extension/zinc-lang
+vsce package --allow-missing-repository --skip-license
+code --install-extension zinc-lang-0.0.1.vsix
+```
+
+
 ### Regenerate ANTLR4 Parser
 
 ```sh
