@@ -114,6 +114,10 @@ function git-flatten()
         git commit --edit -m"$(git log --format=%B --reverse HEAD..HEAD@{1})"
 }
 
+export NVM_DIR="$HOME/.nvm"
+  [ -s "$(brew --prefix nvm)/nvm.sh" ] && . "$(brew --prefix nvm)/nvm.sh"
+  [ -s "$(brew --prefix nvm)/etc/bash_completion.d/nvm" ] && . "$(brew --prefix nvm)/etc/bash_completion.d/nvm"
+
 # Configure zsh history to be shared between sessions and 
 # persisted across container restarts
 export HISTFILE=/root/.cache/zsh/history

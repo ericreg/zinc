@@ -96,3 +96,16 @@ COPY zshrc /root/.zshrc
 
 # source the .zshrc file to ensure the aliases are available in the dev container
 RUN zsh -c "source /root/.zshrc"
+
+# The source tree is bind-mounted onto /app at runtime, so this image acts as a
+# development base rather than copying the project in during build.
+RUN printf '%s\n' \
+    'export NVM_DIR="/usr/local/nvm"' \
+    '[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"' \
+    'alias dcs="uv run dcs"' \
+    >> /root/.bashrc \
+    && printf '%s\n' \
+    'export NVM_DIR="/usr/local/nvm"' \
+    '[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"' \
+    'alias dcs="uv run dcs"' \
+    >> /root/.zshrc
