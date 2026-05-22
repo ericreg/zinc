@@ -1,0 +1,10 @@
+struct Point {
+    x: 0
+    y: 0
+}
+
+const SCALE = 2
+
+fn double(x) {
+    return x * SCALE
+}

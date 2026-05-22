@@ -1,0 +1,8 @@
+import modules/_lib/io as io
+
+fn main() {
+    file = io.File { name: "notes" }
+    print("{file.name}")
+    print(io.size())
+    print("{io.TAG}")
+}

@@ -1,11 +1,23 @@
-"""Atlas - Graph of all code reachable from main()."""
+"""Atlas - Graph of all code reachable from the entry module's main()."""
 
+from __future__ import annotations
+
+import re
 from dataclasses import dataclass, field
+
 from antlr4 import ParserRuleContext
 from sortedcontainers import SortedDict, SortedSet
 
-from zinc.ast.types import BaseType, type_to_rust, ChannelTypeInfo, ArrayTypeInfo, DictTypeInfo, SetTypeInfo, TupleTypeInfo
-from zinc.parser.zincVisitor import zincVisitor
+from zinc.ast.types import (
+    ArrayTypeInfo,
+    BaseType,
+    ChannelTypeInfo,
+    DictTypeInfo,
+    SetTypeInfo,
+    TupleTypeInfo,
+    type_to_rust,
+)
+from zinc.modules import ModuleGraph, extract_identifier_path, struct_path_from_ctx
 from zinc.parser.zincParser import zincParser as ZincParser
 
 
@@ -13,8 +25,10 @@ from zinc.parser.zincParser import zincParser as ZincParser
 class FunctionInstance:
     """A specific instantiation of a function (possibly monomorphized)."""
 
-    name: str  # Original function name
-    mangled_name: str  # Unique name (e.g., "add_i64_i64")
+    name: str  # Unqualified function name
+    qualified_name: str  # Canonical id like "foo/bar::add"
+    module_id: str
+    mangled_name: str  # Unique Rust name
     ctx: ParserRuleContext  # Parse tree reference
     arg_types: list[BaseType]  # Concrete argument types
     return_type: BaseType = field(default=BaseType.VOID)  # Inferred return type
@@ -40,16 +54,15 @@ class StructFieldInfo:
     """Analyzed struct field information."""
 
     name: str
-    type_annotation: str | None = None  # Explicit type like "i32", "string"
-    default_value: str | None = None  # Default value expression text
-    is_private: bool = False  # Starts with _
-    is_const: bool = False  # Has 'const' modifier
+    type_annotation: str | None = None
+    default_value: str | None = None
+    is_private: bool = False
+    is_const: bool = False
     resolved_type: BaseType = field(default=BaseType.UNKNOWN)
 
     def rust_type(self) -> str:
         """Get Rust type string for this field."""
         if self.type_annotation:
-            # Map zinc types to Rust
             mapping = {
                 "i32": "i32",
                 "i64": "i64",
@@ -64,11 +77,9 @@ class StructFieldInfo:
     def rust_default(self) -> str:
         """Get Rust default value for this field."""
         if self.default_value:
-            # Handle string literals
             if self.rust_type() == "String" and self.default_value.startswith('"'):
                 return f"String::from({self.default_value})"
             return self.default_value
-        # Zero-initialize based on type
         defaults = {
             "i32": "0",
             "i64": "0",
@@ -85,13 +96,11 @@ class StructMethodInfo:
     """Analyzed struct method information."""
 
     name: str
-    parameters: list[tuple[str, str | None, str | None]] = field(
-        default_factory=list
-    )  # (name, type_annotation, resolved_type)
-    is_static: bool = False  # True if no self usage
-    self_mutability: str | None = None  # None, "&self", or "&mut self"
+    parameters: list[tuple[str, str | None, str | None]] = field(default_factory=list)
+    is_static: bool = False
+    self_mutability: str | None = None
     return_type: str | None = None
-    body_ctx: ParserRuleContext | None = None  # For codegen
+    body_ctx: ParserRuleContext | None = None
 
 
 @dataclass
@@ -99,9 +108,10 @@ class StructInstance:
     """A struct that is used in the program."""
 
     name: str
+    qualified_name: str
+    module_id: str
     ctx: ParserRuleContext
-    methods_used: SortedSet[str] = field(default_factory=SortedSet)  # Which methods are actually called
-    # Analyzed data (populated by SymbolTableVisitor)
+    methods_used: SortedSet[str] = field(default_factory=SortedSet)
     fields: list[StructFieldInfo] = field(default_factory=list)
     methods: list[StructMethodInfo] = field(default_factory=list)
 
@@ -111,6 +121,8 @@ class ConstInstance:
     """A global constant declaration."""
 
     name: str
+    qualified_name: str
+    module_id: str
     ctx: ParserRuleContext
 
 
@@ -118,28 +130,14 @@ class ConstInstance:
 class Atlas:
     """Graph of all code reachable from main()."""
 
-    # Entry point
+    module_graph: ModuleGraph
     main: FunctionInstance
-
-    # All reachable functions (keyed by mangled_name)
     functions: SortedDict[str, FunctionInstance] = field(default_factory=SortedDict)
-
-    # All reachable structs (keyed by struct name)
     structs: SortedDict[str, StructInstance] = field(default_factory=SortedDict)
-
-    # All reachable global constants (keyed by const name)
     consts: SortedDict[str, ConstInstance] = field(default_factory=SortedDict)
-
-    # Call graph: caller mangled_name -> set of callee mangled_names
     calls: SortedDict[str, SortedSet[str]] = field(default_factory=SortedDict)
-
-    # Struct usage: func mangled_name -> set of struct names used
     struct_usages: SortedDict[str, SortedSet[str]] = field(default_factory=SortedDict)
-
-    # Const usage: func mangled_name -> set of const names used
     const_usages: SortedDict[str, SortedSet[str]] = field(default_factory=SortedDict)
-
-    # Raw function definitions (name -> ctx) for specialization creation
     function_defs: SortedDict[str, ParserRuleContext] = field(default_factory=SortedDict)
 
     def is_reachable(self, name: str) -> bool:
@@ -148,7 +146,7 @@ class Atlas:
 
     def add_specialization(
         self,
-        name: str,
+        qualified_name: str,
         arg_types: list[BaseType],
         ctx: ParserRuleContext,
         caller_mangled: str | None = None,
@@ -157,13 +155,9 @@ class Atlas:
         arg_set_infos: dict[int, SetTypeInfo] | None = None,
         arg_tuple_infos: dict[int, TupleTypeInfo] | None = None,
     ) -> str:
-        """Create a new function specialization. Returns mangled name.
-
-        If caller_mangled is provided, updates the call graph to record that
-        caller_mangled calls this specialization.
-        """
+        """Create a new function specialization and return its mangled name."""
         mangled = self._mangle_name(
-            name,
+            qualified_name,
             arg_types,
             arg_array_infos,
             arg_dict_infos,
@@ -171,20 +165,21 @@ class Atlas:
             arg_tuple_infos,
         )
         if mangled not in self.functions:
+            module_id, name = ModuleGraph.split_qualified_name(qualified_name)
             self.functions[mangled] = FunctionInstance(
                 name=name,
+                qualified_name=qualified_name,
+                module_id=module_id,
                 mangled_name=mangled,
                 ctx=ctx,
-                arg_types=list(arg_types),  # Copy to avoid mutation
+                arg_types=list(arg_types),
                 arg_array_infos=arg_array_infos or {},
                 arg_dict_infos=arg_dict_infos or {},
                 arg_set_infos=arg_set_infos or {},
                 arg_tuple_infos=arg_tuple_infos or {},
             )
-            # Initialize call graph entry for the new specialization
             self.calls[mangled] = SortedSet()
 
-        # Update call graph: caller calls this specialization
         if caller_mangled and caller_mangled in self.calls:
             self.calls[caller_mangled].add(mangled)
 
@@ -192,259 +187,250 @@ class Atlas:
 
     def _mangle_name(
         self,
-        name: str,
+        qualified_name: str,
         arg_types: list[BaseType],
         arg_array_infos: dict[int, ArrayTypeInfo] | None = None,
         arg_dict_infos: dict[int, DictTypeInfo] | None = None,
         arg_set_infos: dict[int, SetTypeInfo] | None = None,
         arg_tuple_infos: dict[int, TupleTypeInfo] | None = None,
     ) -> str:
-        """Generate mangled name like 'add_i64_i64' or 'find_Vec_i64_i64'."""
+        """Generate a flattened Rust symbol name."""
+        base_name = self.module_graph.rust_base_name(qualified_name)
         if not arg_types:
-            return name
+            return base_name
 
         type_parts = []
-        for i, t in enumerate(arg_types):
-            if t == BaseType.ARRAY and arg_array_infos and i in arg_array_infos:
+        for i, base_type in enumerate(arg_types):
+            if base_type == BaseType.ARRAY and arg_array_infos and i in arg_array_infos:
                 type_parts.append(arg_array_infos[i].to_rust_type_suffix())
-            elif t == BaseType.DICT and arg_dict_infos and i in arg_dict_infos:
+            elif base_type == BaseType.DICT and arg_dict_infos and i in arg_dict_infos:
                 type_parts.append(arg_dict_infos[i].to_rust_type_suffix())
-            elif t == BaseType.SET and arg_set_infos and i in arg_set_infos:
+            elif base_type == BaseType.SET and arg_set_infos and i in arg_set_infos:
                 type_parts.append(arg_set_infos[i].to_rust_type_suffix())
-            elif t == BaseType.TUPLE and arg_tuple_infos and i in arg_tuple_infos:
+            elif base_type == BaseType.TUPLE and arg_tuple_infos and i in arg_tuple_infos:
                 type_parts.append(arg_tuple_infos[i].to_rust_type_suffix())
             else:
-                type_parts.append(type_to_rust(t))
+                type_parts.append(type_to_rust(base_type))
 
-        type_suffix = "_".join(type_parts)
-        return f"{name}_{type_suffix}"
+        return f"{base_name}_{'_'.join(type_parts)}"
 
     def topological_order(self) -> list[str]:
-        """Return function mangled_names in dependency order (callees first).
-
-        Uses DFS-based topological sort. Only considers functions that exist
-        in self.functions (i.e., have been specialized).
-        """
+        """Return function mangled names in dependency order."""
         visited: set[str] = set()
         result: list[str] = []
 
         def dfs(name: str) -> None:
-            if name in visited:
-                return
-            # Only process functions that actually exist
-            if name not in self.functions:
+            if name in visited or name not in self.functions:
                 return
             visited.add(name)
-            # Visit callees first (only those that exist as specializations)
             for callee in self.calls.get(name, set()):
                 if callee in self.functions:
                     dfs(callee)
             result.append(name)
 
-        # Start DFS from all functions
         for name in self.functions:
             dfs(name)
 
         return result
 
 
-class AtlasBuilder(zincVisitor):
-    """Builds an Atlas by walking from main() and discovering reachable code."""
+class AtlasBuilder:
+    """Build the Atlas from a module graph."""
 
-    def __init__(self):
-        # Collected definitions (first pass)
-        self._function_defs: SortedDict[str, ParserRuleContext] = SortedDict()  # name -> ctx
-        self._struct_defs: SortedDict[str, ParserRuleContext] = SortedDict()  # name -> ctx
-        self._const_defs: SortedDict[str, ParserRuleContext] = SortedDict()  # name -> ctx
-        self._main_ctx: ParserRuleContext | None = None
+    BUILTIN_FUNCTIONS = {"print", "chan", "dict", "sort_dict", "set", "sort_set"}
 
-        # Reachability tracking
+    def __init__(self, module_graph: ModuleGraph):
+        self.module_graph = module_graph
+        self._function_defs: SortedDict[str, ParserRuleContext] = SortedDict(
+            self.module_graph.top_level_functions()
+        )
+        self._struct_defs: SortedDict[str, StructInstance] = SortedDict()
+        self._const_defs: SortedDict[str, ConstInstance] = SortedDict()
+        for symbol in self.module_graph.top_level_symbols.values():
+            if symbol.kind == "struct":
+                self._struct_defs[symbol.qualified_name] = StructInstance(
+                    name=symbol.name,
+                    qualified_name=symbol.qualified_name,
+                    module_id=symbol.module_id,
+                    ctx=symbol.ctx,
+                )
+            elif symbol.kind == "const":
+                self._const_defs[symbol.qualified_name] = ConstInstance(
+                    name=symbol.name,
+                    qualified_name=symbol.qualified_name,
+                    module_id=symbol.module_id,
+                    ctx=symbol.ctx,
+                )
+
         self._reachable_functions: SortedDict[str, FunctionInstance] = SortedDict()
         self._reachable_structs: SortedDict[str, StructInstance] = SortedDict()
         self._reachable_consts: SortedDict[str, ConstInstance] = SortedDict()
-
-        # Graph edges (populated during reachability walk)
         self._calls: SortedDict[str, SortedSet[str]] = SortedDict()
         self._struct_usages: SortedDict[str, SortedSet[str]] = SortedDict()
         self._const_usages: SortedDict[str, SortedSet[str]] = SortedDict()
-
-        # Current context for edge building
         self._current_function: str | None = None
-
-    def visitFunctionDeclaration(self, ctx: ZincParser.FunctionDeclarationContext):
-        """Collect function definition."""
-        name = ctx.IDENTIFIER().getText()
-        self._function_defs[name] = ctx
-        if name == "main":
-            self._main_ctx = ctx
-        return self.visitChildren(ctx)
-
-    def visitStructDeclaration(self, ctx: ZincParser.StructDeclarationContext):
-        """Collect struct definition."""
-        name = ctx.IDENTIFIER().getText()
-        self._struct_defs[name] = ctx
-        return self.visitChildren(ctx)
-
-    def visitConstDeclaration(self, ctx: ZincParser.ConstDeclarationContext):
-        """Collect const definition."""
-        name = ctx.IDENTIFIER().getText()
-        self._const_defs[name] = ctx
-        return self.visitChildren(ctx)
+        self._current_module: str | None = None
 
     def build(self) -> Atlas:
-        """Build the Atlas after visiting the parse tree.
-
-        Uses worklist algorithm to discover reachable code from main.
-        Only creates FunctionInstance for main - other functions get their
-        FunctionInstances created by SymbolTableVisitor during monomorphization.
-        """
-        if self._main_ctx is None:
+        """Build the Atlas after loading the full module graph."""
+        entry_module = self.module_graph.get_module(self.module_graph.entry_module_id)
+        main_symbol = entry_module.symbols.get("main")
+        if main_symbol is None or main_symbol.kind != "function":
             raise ValueError("No main() function found")
 
-        # Create main function instance (only main is created here)
-        main_instance = FunctionInstance(
-            name="main",
-            mangled_name="main",
-            ctx=self._main_ctx,
-            arg_types=[],
-        )
-        self._reachable_functions["main"] = main_instance
-
-        # Worklist algorithm: discover reachable functions (but don't create instances)
-        worklist = ["main"]
-        visited: set[str] = set()
-        reachable_func_names: set[str] = {"main"}
-
-        while worklist:
-            func_name = worklist.pop()
-            if func_name in visited:
-                continue
-            visited.add(func_name)
-
-            # Get function ctx - either from reachable_functions or function_defs
-            if func_name in self._reachable_functions:
-                func_ctx = self._reachable_functions[func_name].ctx
-            elif func_name in self._function_defs:
-                func_ctx = self._function_defs[func_name]
-            else:
-                continue
-
-            self._current_function = func_name
-            self._calls[func_name] = SortedSet()
-            self._struct_usages[func_name] = SortedSet()
-            self._const_usages[func_name] = SortedSet()
-
-            # Walk the function body to find calls, struct usages, and const usages
-            self._walk_for_references(func_ctx)
-
-            # Add discovered functions to worklist (but don't create FunctionInstances)
-            for callee in self._calls[func_name]:
-                if callee not in visited and callee in self._function_defs:
-                    reachable_func_names.add(callee)
-                    worklist.append(callee)
-
-        return Atlas(
-            main=main_instance,
-            functions=self._reachable_functions,  # Only contains main at this point
-            structs=self._reachable_structs,
-            consts=self._reachable_consts,
-            calls=self._calls,
-            struct_usages=self._struct_usages,
-            const_usages=self._const_usages,
+        atlas = Atlas(
+            module_graph=self.module_graph,
+            main=FunctionInstance(
+                name=main_symbol.name,
+                qualified_name=main_symbol.qualified_name,
+                module_id=main_symbol.module_id,
+                mangled_name=self.module_graph.rust_base_name(main_symbol.qualified_name),
+                ctx=main_symbol.ctx,
+                arg_types=[],
+            ),
             function_defs=self._function_defs,
         )
+        self._reachable_functions[atlas.main.mangled_name] = atlas.main
+
+        worklist = [main_symbol.qualified_name]
+        visited: set[str] = set()
+
+        while worklist:
+            qualified_name = worklist.pop()
+            if qualified_name in visited:
+                continue
+            visited.add(qualified_name)
+
+            func_ctx = self._function_defs.get(qualified_name)
+            if func_ctx is None:
+                continue
+
+            module_id, _ = ModuleGraph.split_qualified_name(qualified_name)
+            caller_key = (
+                atlas.main.mangled_name
+                if qualified_name == atlas.main.qualified_name
+                else qualified_name
+            )
+            self._current_function = caller_key
+            self._current_module = module_id
+            self._calls[caller_key] = SortedSet()
+            self._struct_usages[caller_key] = SortedSet()
+            self._const_usages[caller_key] = SortedSet()
+            self._walk_for_references(func_ctx)
+
+            for callee in self._calls[caller_key]:
+                if callee in self._function_defs and callee not in visited:
+                    worklist.append(callee)
+
+        atlas.functions = self._reachable_functions
+        atlas.structs = self._reachable_structs
+        atlas.consts = self._reachable_consts
+        atlas.calls = self._calls
+        atlas.struct_usages = self._struct_usages
+        atlas.const_usages = self._const_usages
+        return atlas
 
     def _walk_for_references(self, ctx: ParserRuleContext) -> None:
-        """Walk a parse tree node to find function calls, struct usages, and const usages."""
-        if ctx is None:
+        """Walk a parse tree node to find top-level references."""
+        if ctx is None or self._current_function is None or self._current_module is None:
             return
 
-        # Check for identifier reference (could be a const)
-        if isinstance(ctx, ZincParser.PrimaryExpressionContext):
-            if ctx.IDENTIFIER():
-                name = ctx.IDENTIFIER().getText()
-                if name in self._const_defs:
-                    self._add_const_usage(name)
+        if isinstance(ctx, ZincParser.PrimaryExpressionContext) and ctx.IDENTIFIER():
+            symbol = self.module_graph.resolve_const_path(
+                self._current_module, [ctx.IDENTIFIER().getText()]
+            )
+            if symbol:
+                self._add_const_usage(symbol.qualified_name)
 
-        # Check for function call
-        if isinstance(ctx, ZincParser.FunctionCallExprContext):
-            # Get the callee - could be an identifier or member access
-            callee_ctx = ctx.expression()
-            callee_text = callee_ctx.getText()
+        if isinstance(ctx, ZincParser.LiteralContext) and ctx.STRING():
+            text = ctx.STRING().getText()[1:-1]
+            for expr in re.findall(r"\{([^}]+)\}", text):
+                for token in re.findall(r"\b[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*\b", expr):
+                    path = token.split(".")
+                    const_symbol = self.module_graph.resolve_const_path(self._current_module, path)
+                    if const_symbol:
+                        self._add_const_usage(const_symbol.qualified_name)
 
-            # Simple function call (not a method call)
-            if isinstance(callee_ctx, ZincParser.PrimaryExprContext):
-                primary = callee_ctx.primaryExpression()
-                if primary and primary.IDENTIFIER():
-                    func_name = primary.IDENTIFIER().getText()
-                    # Skip builtins like print, chan, and collection constructors
-                    if func_name not in ("print", "chan", "dict", "sort_dict", "set", "sort_set"):
-                        self._calls[self._current_function].add(func_name)
-
-            # Method call on struct type (static method)
-            elif isinstance(callee_ctx, ZincParser.MemberAccessExprContext):
-                target = callee_ctx.expression().getText()
-                if target in self._struct_defs:
-                    self._add_struct_usage(target, callee_ctx.IDENTIFIER().getText())
-
-        # Check for spawn statement - spawn expr(args) where expr is function name
-        if isinstance(ctx, ZincParser.SpawnStatementContext):
-            expr = ctx.expression()
-            # The expression is the function name (e.g., greet in "spawn greet(42)")
-            if isinstance(expr, ZincParser.PrimaryExprContext):
-                primary = expr.primaryExpression()
-                if primary and primary.IDENTIFIER():
-                    func_name = primary.IDENTIFIER().getText()
-                    if func_name not in ("print", "chan", "dict", "sort_dict", "set", "sort_set") and self._current_function:
-                        self._calls[self._current_function].add(func_name)
-
-        # Check for struct instantiation
-        if isinstance(ctx, ZincParser.StructInstantiationContext):
-            struct_name = ctx.IDENTIFIER().getText()
-            self._add_struct_usage(struct_name, None)
-
-        # Check for method call on identifier (instance method)
         if isinstance(ctx, ZincParser.MemberAccessExprContext):
-            # Check if the target is a known struct type
-            target_text = ctx.expression().getText()
-            if target_text in self._struct_defs:
-                method_name = ctx.IDENTIFIER().getText()
-                self._add_struct_usage(target_text, method_name)
+            path = extract_identifier_path(ctx)
+            if path:
+                const_symbol = self.module_graph.resolve_const_path(self._current_module, path)
+                if const_symbol:
+                    self._add_const_usage(const_symbol.qualified_name)
+                static_target = self.module_graph.resolve_static_method_target(
+                    self._current_module, path
+                )
+                if static_target:
+                    struct_symbol, method_name = static_target
+                    self._add_struct_usage(struct_symbol.qualified_name, method_name)
 
-        # Recurse into children
+        if isinstance(ctx, ZincParser.FunctionCallExprContext):
+            path = extract_identifier_path(ctx.expression())
+            if path:
+                func_symbol = self.module_graph.resolve_function_path(self._current_module, path)
+                if func_symbol and func_symbol.name not in self.BUILTIN_FUNCTIONS:
+                    self._calls[self._current_function].add(func_symbol.qualified_name)
+                else:
+                    static_target = self.module_graph.resolve_static_method_target(
+                        self._current_module, path
+                    )
+                    if static_target:
+                        struct_symbol, method_name = static_target
+                        self._add_struct_usage(struct_symbol.qualified_name, method_name)
+
+        if isinstance(ctx, ZincParser.SpawnStatementContext):
+            path = extract_identifier_path(ctx.expression())
+            if path:
+                func_symbol = self.module_graph.resolve_function_path(self._current_module, path)
+                if func_symbol and func_symbol.name not in self.BUILTIN_FUNCTIONS:
+                    self._calls[self._current_function].add(func_symbol.qualified_name)
+
+        if isinstance(ctx, ZincParser.StructInstantiationContext):
+            struct_symbol = self.module_graph.resolve_struct_path(
+                self._current_module, struct_path_from_ctx(ctx)
+            )
+            if struct_symbol:
+                self._add_struct_usage(struct_symbol.qualified_name, None)
+
         for i in range(ctx.getChildCount()):
             child = ctx.getChild(i)
             if isinstance(child, ParserRuleContext):
                 self._walk_for_references(child)
 
-    def _add_struct_usage(self, struct_name: str, method_name: str | None) -> None:
+    def _add_struct_usage(self, qualified_name: str, method_name: str | None) -> None:
         """Record that a struct is used, optionally with a specific method."""
-        if struct_name not in self._struct_defs:
+        struct = self._struct_defs.get(qualified_name)
+        if struct is None:
             return
 
-        if struct_name not in self._reachable_structs:
-            self._reachable_structs[struct_name] = StructInstance(
-                name=struct_name,
-                ctx=self._struct_defs[struct_name],
+        if qualified_name not in self._reachable_structs:
+            self._reachable_structs[qualified_name] = StructInstance(
+                name=struct.name,
+                qualified_name=struct.qualified_name,
+                module_id=struct.module_id,
+                ctx=struct.ctx,
                 methods_used=SortedSet(),
             )
 
         if method_name:
-            self._reachable_structs[struct_name].methods_used.add(method_name)
+            self._reachable_structs[qualified_name].methods_used.add(method_name)
 
         if self._current_function:
-            self._struct_usages[self._current_function].add(struct_name)
+            self._struct_usages[self._current_function].add(qualified_name)
 
-    def _add_const_usage(self, const_name: str) -> None:
+    def _add_const_usage(self, qualified_name: str) -> None:
         """Record that a global constant is used."""
-        if const_name not in self._const_defs:
+        const = self._const_defs.get(qualified_name)
+        if const is None:
             return
 
-        if const_name not in self._reachable_consts:
-            self._reachable_consts[const_name] = ConstInstance(
-                name=const_name,
-                ctx=self._const_defs[const_name],
+        if qualified_name not in self._reachable_consts:
+            self._reachable_consts[qualified_name] = ConstInstance(
+                name=const.name,
+                qualified_name=const.qualified_name,
+                module_id=const.module_id,
+                ctx=const.ctx,
             )
 
         if self._current_function:
-            self._const_usages[self._current_function].add(const_name)
+            self._const_usages[self._current_function].add(qualified_name)

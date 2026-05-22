@@ -1,0 +1,7 @@
+// expected-error: alias 'left' conflicts with an existing name in module 'compile_errors/modules/03_alias_collision'
+const left = 1
+import modules/_lib/right as left
+
+fn main() {
+    print(1)
+}

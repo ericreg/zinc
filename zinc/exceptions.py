@@ -14,3 +14,9 @@ class ZincTypeError(ZincError):
     """Raised when Zinc type inference or validation fails."""
 
     pass
+
+
+class ZincModuleError(ZincError):
+    """Raised when package or module loading fails."""
+
+    pass

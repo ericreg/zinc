@@ -325,7 +325,7 @@ Zinc uses a 3-pass compiler:
 - [x] Maps
 - [x] Sets
 - [ ] Error handling
-- [ ] Modules and imports
+- [x] Modules and imports
 - [ ] A ton of tests
 - [ ] Tiny book documentation
 
@@ -338,8 +338,7 @@ The `zinc-lang` VSCode extension provides syntax highlighting. It is not availab
 ```sh
 npm install -g @vscode/vsce
 cd extension/zinc-lang
-vsce package --allow-missing-repository --skip-license
-code --install-extension zinc-lang-0.0.1.vsix
+vsce package --allow-missing-repository --skip-license && code --install-extension zinc-lang-0.0.1.vsix
 ```
 
 

@@ -1,0 +1,7 @@
+// expected-error: duplicate imported name 'value' in module 'compile_errors/modules/02_duplicate_import_name'
+import modules/_lib/left
+import modules/_lib/right
+
+fn main() {
+    print(value())
+}

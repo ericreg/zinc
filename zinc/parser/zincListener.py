@@ -26,21 +26,39 @@ class zincListener(ParseTreeListener):
         pass
 
 
-    # Enter a parse tree produced by zincParser#useStatement.
-    def enterUseStatement(self, ctx:zincParser.UseStatementContext):
+    # Enter a parse tree produced by zincParser#importStatement.
+    def enterImportStatement(self, ctx:zincParser.ImportStatementContext):
         pass
 
-    # Exit a parse tree produced by zincParser#useStatement.
-    def exitUseStatement(self, ctx:zincParser.UseStatementContext):
+    # Exit a parse tree produced by zincParser#importStatement.
+    def exitImportStatement(self, ctx:zincParser.ImportStatementContext):
         pass
 
 
-    # Enter a parse tree produced by zincParser#modulePath.
-    def enterModulePath(self, ctx:zincParser.ModulePathContext):
+    # Enter a parse tree produced by zincParser#importPath.
+    def enterImportPath(self, ctx:zincParser.ImportPathContext):
         pass
 
-    # Exit a parse tree produced by zincParser#modulePath.
-    def exitModulePath(self, ctx:zincParser.ModulePathContext):
+    # Exit a parse tree produced by zincParser#importPath.
+    def exitImportPath(self, ctx:zincParser.ImportPathContext):
+        pass
+
+
+    # Enter a parse tree produced by zincParser#importNameList.
+    def enterImportNameList(self, ctx:zincParser.ImportNameListContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#importNameList.
+    def exitImportNameList(self, ctx:zincParser.ImportNameListContext):
+        pass
+
+
+    # Enter a parse tree produced by zincParser#qualifiedName.
+    def enterQualifiedName(self, ctx:zincParser.QualifiedNameContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#qualifiedName.
+    def exitQualifiedName(self, ctx:zincParser.QualifiedNameContext):
         pass
 
 

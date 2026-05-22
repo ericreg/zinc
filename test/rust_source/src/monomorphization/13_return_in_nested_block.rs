@@ -1,4 +1,4 @@
-fn find_value_Vec_i64_i64(arr: &Vec<i64>, target: i64) -> i64 {
+fn monomorphization_13_return_in_nested_block__find_value_Vec_i64_i64(arr: &Vec<i64>, target: i64) -> i64 {
     let mut i = 0;
     while (i < (arr.len() as i64)) {
         if (arr[(i as usize)] == target) {
@@ -9,7 +9,7 @@ fn find_value_Vec_i64_i64(arr: &Vec<i64>, target: i64) -> i64 {
     return (-1);
 }
 
-fn sum_until_Vec_i64_i64(arr: &Vec<i64>, limit: i64) -> i64 {
+fn monomorphization_13_return_in_nested_block__sum_until_Vec_i64_i64(arr: &Vec<i64>, limit: i64) -> i64 {
     let mut total = 0;
     let mut i = 0;
     while (i < (arr.len() as i64)) {
@@ -24,12 +24,12 @@ fn sum_until_Vec_i64_i64(arr: &Vec<i64>, limit: i64) -> i64 {
 
 fn main() {
     let nums = vec![10, 20, 30, 40, 50];
-    let idx1 = find_value_Vec_i64_i64(&nums, 30);
+    let idx1 = monomorphization_13_return_in_nested_block__find_value_Vec_i64_i64(&nums, 30);
     println!("find 30: {}", idx1);
-    let idx2 = find_value_Vec_i64_i64(&nums, 99);
+    let idx2 = monomorphization_13_return_in_nested_block__find_value_Vec_i64_i64(&nums, 99);
     println!("find 99: {}", idx2);
-    let sum1 = sum_until_Vec_i64_i64(&nums, 50);
+    let sum1 = monomorphization_13_return_in_nested_block__sum_until_Vec_i64_i64(&nums, 50);
     println!("sum until 50: {}", sum1);
-    let sum2 = sum_until_Vec_i64_i64(&nums, 1000);
+    let sum2 = monomorphization_13_return_in_nested_block__sum_until_Vec_i64_i64(&nums, 1000);
     println!("sum until 1000: {}", sum2);
 }

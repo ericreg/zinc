@@ -1,10 +1,10 @@
-async fn emit_i64(x: i64) {
+async fn non_deterministic_spawn_return_completion__emit_i64(x: i64) {
     println!("{}", x);
 }
 
-async fn launch_i64(x: i64) -> i64 {
+async fn non_deterministic_spawn_return_completion__launch_i64(x: i64) -> i64 {
     let mut __zinc_spawn_handles = Vec::new();
-    __zinc_spawn_handles.push(tokio::spawn(async move { emit_i64(x).await; }));
+    __zinc_spawn_handles.push(tokio::spawn(async move { non_deterministic_spawn_return_completion__emit_i64(x).await; }));
     while let Some(__zinc_spawn_handle) = __zinc_spawn_handles.pop() {
         __zinc_spawn_handle.await.unwrap();
     }
@@ -13,6 +13,6 @@ async fn launch_i64(x: i64) -> i64 {
 
 #[tokio::main]
 async fn main() {
-    let result = launch_i64(5).await;
+    let result = non_deterministic_spawn_return_completion__launch_i64(5).await;
     println!("{}", result);
 }

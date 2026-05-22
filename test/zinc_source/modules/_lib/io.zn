@@ -1,0 +1,9 @@
+struct File {
+    name: string
+}
+
+fn size() {
+    return 7
+}
+
+const TAG = "disk"

@@ -1,24 +1,24 @@
-struct Calculator {
+struct structs_04_static_methods__Calculator {
     pub value: i32,
 }
 
-impl Calculator {
+impl structs_04_static_methods__Calculator {
     fn pi() -> i64 {
         return 3;
     }
     fn new(initial: i32) -> Self {
-        return Calculator { value: initial };
+        return structs_04_static_methods__Calculator { value: initial };
     }
     fn zero() -> Self {
-        return Calculator { value: 0 };
+        return structs_04_static_methods__Calculator { value: 0 };
     }
 }
 
 fn main() {
-    let pi_value = Calculator::pi();
+    let pi_value = structs_04_static_methods__Calculator::pi();
     println!("{}", pi_value);
-    let calc = Calculator::new((100) as i32);
+    let calc = structs_04_static_methods__Calculator::new((100) as i32);
     println!("{}", calc.value);
-    let zero_calc = Calculator::zero();
+    let zero_calc = structs_04_static_methods__Calculator::zero();
     println!("{}", zero_calc.value);
 }

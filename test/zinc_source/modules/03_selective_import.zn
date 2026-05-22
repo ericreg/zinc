@@ -1,0 +1,7 @@
+import modules/_lib/shapes [Point, double]
+
+fn main() {
+    point = Point { x: double(2), y: 9 }
+    print("{point.x}")
+    print("{point.y}")
+}

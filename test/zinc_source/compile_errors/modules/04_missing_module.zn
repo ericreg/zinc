@@ -1,0 +1,6 @@
+// expected-error: module not found: modules/_lib/missing
+import modules/_lib/missing
+
+fn main() {
+    print(1)
+}

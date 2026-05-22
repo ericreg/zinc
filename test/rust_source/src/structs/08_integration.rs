@@ -1,13 +1,13 @@
-struct BankAccount {
+struct structs_08_integration__BankAccount {
     _account_number: i32,
     _balance: i32,
     pub owner: String,
     pub bank_name: String,
 }
 
-impl BankAccount {
+impl structs_08_integration__BankAccount {
     fn new(owner: String, account_number: i32, initial_balance: i32) -> Self {
-        return BankAccount { _account_number: account_number, _balance: initial_balance, owner: owner, bank_name: String::from("Zinc Bank") };
+        return structs_08_integration__BankAccount { _account_number: account_number, _balance: initial_balance, owner: owner, bank_name: String::from("Zinc Bank") };
     }
     fn get_balance(&self) -> i32 {
         return self._balance;
@@ -26,16 +26,16 @@ impl BankAccount {
     }
 }
 
-struct Transaction {
+struct structs_08_integration__Transaction {
     pub from_account: String,
     pub to_account: String,
     pub amount: i32,
     _processed: bool,
 }
 
-impl Transaction {
+impl structs_08_integration__Transaction {
     fn new(from: String, to: String, amount: i32) -> Self {
-        return Transaction { from_account: from, to_account: to, amount: amount, _processed: false };
+        return structs_08_integration__Transaction { from_account: from, to_account: to, amount: amount, _processed: false };
     }
     fn mark_processed(&mut self) {
         self._processed = true;
@@ -49,17 +49,17 @@ impl Transaction {
 }
 
 fn main() {
-    let mut alice_account = BankAccount::new(String::from("Alice"), (1001) as i32, (1000) as i32);
-    let mut bob_account = BankAccount::new(String::from("Bob"), (1002) as i32, (500) as i32);
+    let mut alice_account = structs_08_integration__BankAccount::new(String::from("Alice"), (1001) as i32, (1000) as i32);
+    let mut bob_account = structs_08_integration__BankAccount::new(String::from("Bob"), (1002) as i32, (500) as i32);
     println!("{}", alice_account.summary());
     println!("{}", bob_account.summary());
     println!("{}", alice_account.get_balance());
     println!("{}", bob_account.get_balance());
     alice_account.deposit((200) as i32);
     println!("{}", alice_account.get_balance());
-    let mut tx = Transaction::new(String::from("Alice"), String::from("Bob"), (100) as i32);
+    let mut tx = structs_08_integration__Transaction::new(String::from("Alice"), String::from("Bob"), (100) as i32);
     println!("{}", tx.describe());
-    let fee = BankAccount::transfer_fee();
+    let fee = structs_08_integration__BankAccount::transfer_fee();
     alice_account.withdraw(((100 + fee)) as i32);
     bob_account.deposit((100) as i32);
     tx.mark_processed();

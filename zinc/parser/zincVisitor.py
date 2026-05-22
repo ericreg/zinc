@@ -19,13 +19,23 @@ class zincVisitor(ParseTreeVisitor):
         return self.visitChildren(ctx)
 
 
-    # Visit a parse tree produced by zincParser#useStatement.
-    def visitUseStatement(self, ctx:zincParser.UseStatementContext):
+    # Visit a parse tree produced by zincParser#importStatement.
+    def visitImportStatement(self, ctx:zincParser.ImportStatementContext):
         return self.visitChildren(ctx)
 
 
-    # Visit a parse tree produced by zincParser#modulePath.
-    def visitModulePath(self, ctx:zincParser.ModulePathContext):
+    # Visit a parse tree produced by zincParser#importPath.
+    def visitImportPath(self, ctx:zincParser.ImportPathContext):
+        return self.visitChildren(ctx)
+
+
+    # Visit a parse tree produced by zincParser#importNameList.
+    def visitImportNameList(self, ctx:zincParser.ImportNameListContext):
+        return self.visitChildren(ctx)
+
+
+    # Visit a parse tree produced by zincParser#qualifiedName.
+    def visitQualifiedName(self, ctx:zincParser.QualifiedNameContext):
         return self.visitChildren(ctx)
 
 

@@ -1,9 +1,9 @@
-struct Counter {
+struct structs_05_instance_methods__Counter {
     pub count: i64,
     pub step: i64,
 }
 
-impl Counter {
+impl structs_05_instance_methods__Counter {
     fn get_count(&self) -> i64 {
         return self.count;
     }
@@ -20,12 +20,12 @@ impl Counter {
         self.step = new_step;
     }
     fn new(initial: i64, step: i64) -> Self {
-        return Counter { count: initial, step: step };
+        return structs_05_instance_methods__Counter { count: initial, step: step };
     }
 }
 
 fn main() {
-    let mut counter = Counter::new(0, 5);
+    let mut counter = structs_05_instance_methods__Counter::new(0, 5);
     println!("{}", counter.get_count());
     counter.increment();
     println!("{}", counter.get_count());

@@ -239,6 +239,26 @@ name = "iterations_22_break_in_nested_for"
 path = "src/iterations/22_break_in_nested_for.rs"
 
 [[bin]]
+name = "modules_01_bare_import"
+path = "src/modules/01_bare_import.rs"
+
+[[bin]]
+name = "modules_02_alias_import"
+path = "src/modules/02_alias_import.rs"
+
+[[bin]]
+name = "modules_03_selective_import"
+path = "src/modules/03_selective_import.rs"
+
+[[bin]]
+name = "modules_04_same_name_aliases"
+path = "src/modules/04_same_name_aliases.rs"
+
+[[bin]]
+name = "modules_05_cross_module_monomorphization"
+path = "src/modules/05_cross_module_monomorphization.rs"
+
+[[bin]]
 name = "monomorphization"
 path = "src/monomorphization.rs"
 

@@ -1,0 +1,7 @@
+import modules/_lib/left as left
+import modules/_lib/right as right
+
+fn main() {
+    print(left.value())
+    print(right.value())
+}

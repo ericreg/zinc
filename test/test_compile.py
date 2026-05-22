@@ -6,15 +6,13 @@ from pathlib import Path
 
 import click
 import pytest
-from antlr4 import CommonTokenStream, InputStream
 
-from zinc.parser.zincLexer import zincLexer as ZincLexer
-from zinc.parser.zincParser import zincParser as ZincParser
 from zinc.struct_logging import configure_logging, get_logger
 from zinc.atlas import AtlasBuilder
-from zinc.exceptions import ZincTypeError
+from zinc.exceptions import ZincModuleError, ZincTypeError
 from zinc.symbols import SymbolTableVisitor
 from zinc.codegen import CodeGenVisitor
+from zinc.modules import build_module_graph
 
 TEST_DIR = Path(__file__).parent
 ZINC_SOURCE_DIR = TEST_DIR / "zinc_source"
@@ -25,6 +23,11 @@ OUTPUT_DIR = TEST_DIR / "output"
 CARGO_TOML = RUST_SOURCE_DIR / "Cargo.toml"
 NON_DETERMINISTIC_FOLDER = "non_deterministic"
 NON_DETERMINISTIC_TESTS = {"bounded_channels"}
+
+
+def is_entry_fixture(relative: Path) -> bool:
+    """Return True when a Zinc fixture should be treated as a test entrypoint."""
+    return all(not part.startswith("_") for part in relative.parts)
 
 
 def get_test_cases() -> list[str]:
@@ -39,6 +42,8 @@ def get_test_cases() -> list[str]:
         # Get path relative to ZINC_SOURCE_DIR, without extension
         relative = f.relative_to(ZINC_SOURCE_DIR).with_suffix("")
         if relative.parts and relative.parts[0] == COMPILE_ERROR_DIR.name:
+            continue
+        if not is_entry_fixture(relative):
             continue
         test_cases.append(str(relative))
     return test_cases
@@ -101,24 +106,12 @@ def generate_cargo_toml(test_paths: list[str]) -> str:
     return '\n'.join(lines)
 
 
-def compile_zinc(source_code: str) -> str:
-    """Compile Zinc source code to Rust."""
-    input_stream = InputStream(source_code)
-    lexer = ZincLexer(input_stream)
-    stream = CommonTokenStream(lexer)
-    parser = ZincParser(stream)
-    tree = parser.program()
-
-    # Pass 1: Build Atlas (reachability)
-    atlas_builder = AtlasBuilder()
-    atlas_builder.visit(tree)
-    atlas = atlas_builder.build()
-
-    # Pass 2: Build SymbolTable
+def compile_zinc(source_path: Path) -> str:
+    """Compile a Zinc entry file to Rust."""
+    module_graph = build_module_graph(source_path)
+    atlas = AtlasBuilder(module_graph).build()
     symbol_visitor = SymbolTableVisitor(atlas)
     symbols = symbol_visitor.resolve()
-
-    # Pass 3: Generate Rust code
     codegen = CodeGenVisitor(
         atlas, symbols, symbol_visitor.specialization_map, symbol_visitor._channel_infos
     )
@@ -211,11 +204,10 @@ def assert_compile_error_files(group: str) -> None:
     source_paths = get_compile_error_files(group)
     assert source_paths, f"No compile-error fixtures found for group: {group}"
     for source_path in source_paths:
-        source = source_path.read_text()
         expected_error = read_expected_error(source_path)
         try:
-            with pytest.raises(ZincTypeError, match=expected_error):
-                compile_zinc(source)
+            with pytest.raises((ZincTypeError, ZincModuleError), match=expected_error):
+                compile_zinc(source_path)
         except AssertionError as exc:
             raise AssertionError(f"{source_path}: {exc}") from exc
 
@@ -235,6 +227,26 @@ def test_iteration_compile_errors() -> None:
     assert_compile_error_files("iterations")
 
 
+def test_module_compile_errors() -> None:
+    """Invalid module fixtures fail during package loading or Zinc resolution."""
+    assert_compile_error_files("modules")
+
+
+def test_missing_pkg_toml(tmp_path: Path) -> None:
+    """A Zinc entry file must live under a package root."""
+    entry = tmp_path / "main.zn"
+    entry.write_text(
+        "\n".join([
+            "fn main() {",
+            "    print(1)",
+            "}",
+        ])
+    )
+
+    with pytest.raises(ZincModuleError, match=r"missing pkg\.toml"):
+        compile_zinc(entry)
+
+
 @pytest.mark.parametrize("test_path", get_test_cases())
 def test_compile(test_path: str) -> None:
     """Test that compiling a source file produces the expected output.
@@ -247,10 +259,9 @@ def test_compile(test_path: str) -> None:
 
     assert zinc_file.exists(), f"Source file not found: {zinc_file}"
     assert rust_file.exists(), f"Expected output file not found: {rust_file}"
-    zinc_code = zinc_file.read_text()
     rust_code = rust_file.read_text()
 
-    observed_rust_code = compile_zinc(zinc_code)
+    observed_rust_code = compile_zinc(zinc_file)
 
     assert observed_rust_code == rust_code, (
         f"Compilation output mismatch for {test_path}\n"
@@ -300,13 +311,15 @@ def main(update_output: bool) -> None:
         # Get path relative to ZINC_SOURCE_DIR, without extension
         relative = source_file.relative_to(ZINC_SOURCE_DIR).with_suffix("")
         test_path = str(relative)
+        if relative.parts and relative.parts[0] == COMPILE_ERROR_DIR.name:
+            continue
+        if not is_entry_fixture(relative):
+            continue
         test_paths.append(test_path)
 
         # read the zinc source file
-        zinc_code = source_file.read_text()
-
         # compile it to rust
-        rust_code = compile_zinc(zinc_code)
+        rust_code = compile_zinc(source_file)
 
         if update_output:
             # Write rust code to cargo src directory (create subdirs as needed)

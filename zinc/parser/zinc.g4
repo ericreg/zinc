@@ -9,7 +9,7 @@ program
     ;
 
 statement
-    : useStatement
+    : importStatement
     | constDeclaration
     | structDeclaration
     | functionDeclaration
@@ -29,13 +29,21 @@ statement
     | block
     ;
 
-// --- Use/Import Statement ---
-useStatement
-    : 'use' modulePath ';'
+// --- Import Statement ---
+importStatement
+    : 'import' importPath ( 'as' IDENTIFIER | '[' importNameList ']' )?
     ;
 
-modulePath
-    : IDENTIFIER ('::' IDENTIFIER)*
+importPath
+    : IDENTIFIER ('/' IDENTIFIER)*
+    ;
+
+importNameList
+    : IDENTIFIER (',' IDENTIFIER)* ','?
+    ;
+
+qualifiedName
+    : IDENTIFIER ('.' IDENTIFIER)*
     ;
 
 // --- Const Declaration (global constants) ---
@@ -79,7 +87,7 @@ parameter
     ;
 
 type
-    : IDENTIFIER ('<' typeList '>')?
+    : qualifiedName ('<' typeList '>')?
     | '[' type ']'                  // array type
     | tupleType                     // tuple type
     | '(' typeList? ')' '->' type   // function type
@@ -257,7 +265,7 @@ dictEntry
     ;
 
 structInstantiation
-    : IDENTIFIER '{' (fieldInit (','? fieldInit)* ','?)? '}'
+    : qualifiedName '{' (fieldInit (','? fieldInit)* ','?)? '}'
     ;
 
 fieldInit

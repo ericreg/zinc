@@ -1,0 +1,8 @@
+import modules/_lib/math
+
+fn main() {
+    total = add(2, 3)
+    shifted = total + MAGIC
+    print("total={total}")
+    print("shifted={shifted}")
+}

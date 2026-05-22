@@ -36,7 +36,7 @@ fn main() {
 }
 ```
 
-Most statements do not use semicolons. `use` statements are the exception.
+Statements do not use semicolons.
 
 Zinc supports line comments and block comments:
 
@@ -48,22 +48,51 @@ block comment
 */
 ```
 
-## Use Statements
+## Import Statements
 
-The parser accepts `use` statements with Rust-style module paths:
+Zinc v1 modules are package-scoped and file-backed. Every package root must
+contain a `pkg.toml` file:
 
-```zinc
-use math::vectors;
+```toml
+[package]
+name = "my_pkg"
+version = "0.1.0"
 ```
 
-The syntax is:
+Import paths are slash-separated and package-relative. `import foo/bar`
+resolves to `foo/bar.zn` under the package root.
+
+Supported forms:
 
 ```zinc
-use module::path;
+import math/vectors
+import math/vectors as vec
+import std/io [File, String]
 ```
 
-`use` is currently only a parsed language form. Full module loading, name
-resolution through imports, and package layout rules are not implemented yet.
+Bare imports inject all public top-level `fn`, `struct`, and `const`
+declarations from the target module. Alias imports bind a module namespace that
+is accessed with `.`:
+
+```zinc
+import modules/_lib/io as io
+
+fn main() {
+    file = io.File { name: "notes" }
+    print(io.size())
+    print("{io.TAG}")
+}
+```
+
+Selective imports inject only the listed public names:
+
+```zinc
+import geometry/shapes [Point, make_origin]
+```
+
+Top-level names starting with `_` are private to their module. Cyclic imports,
+missing modules, unknown selective imports, and duplicate imported names are
+compile errors.
 
 ## Values And Variables
 
@@ -972,7 +1001,7 @@ fn main() {
 - Tuple indexing requires ..a literal integer index.
 - Dictionary mutation during dictionary iteration is rejected.
 - Local variable type annotations are not part of the current syntax.
-- Module resolution and `use` support are still minimal.
+- External package dependencies and re-export syntax are not implemented yet.
 
 ## Development Tests
 

@@ -1,0 +1,5 @@
+import compile_errors/modules/_cycle/b
+
+fn ping() {
+    return pong()
+}

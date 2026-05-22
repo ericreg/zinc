@@ -1,38 +1,38 @@
-struct Greeting {
+struct structs_07_string_conversion__Greeting {
     pub text: String,
 }
 
-impl Greeting {
+impl structs_07_string_conversion__Greeting {
     fn new(text: String) -> Self {
-        return Greeting { text: text };
+        return structs_07_string_conversion__Greeting { text: text };
     }
 }
 
-struct Message {
+struct structs_07_string_conversion__Message {
     pub content: String,
     pub sender: String,
     pub priority: i32,
 }
 
-impl Message {
+impl structs_07_string_conversion__Message {
     fn new(content: String, sender: String) -> Self {
-        return Message { content: content, sender: sender, priority: 0 };
+        return structs_07_string_conversion__Message { content: content, sender: sender, priority: 0 };
     }
     fn with_priority(content: String, sender: String, priority: i32) -> Self {
-        return Message { content: content, sender: sender, priority: priority };
+        return structs_07_string_conversion__Message { content: content, sender: sender, priority: priority };
     }
 }
 
 fn main() {
-    let msg1 = Message { content: String::from("Hello World"), sender: String::from("Alice"), priority: 1 };
+    let msg1 = structs_07_string_conversion__Message { content: String::from("Hello World"), sender: String::from("Alice"), priority: 1 };
     println!("{}", msg1.content);
     println!("{}", msg1.sender);
-    let msg2 = Message::new(String::from("Test message"), String::from("Bob"));
+    let msg2 = structs_07_string_conversion__Message::new(String::from("Test message"), String::from("Bob"));
     println!("{}", msg2.content);
     println!("{}", msg2.sender);
-    let msg3 = Message::with_priority(String::from("Urgent"), String::from("Admin"), (10) as i32);
+    let msg3 = structs_07_string_conversion__Message::with_priority(String::from("Urgent"), String::from("Admin"), (10) as i32);
     println!("{}", msg3.content);
     println!("{}", msg3.priority);
-    let greeting = Greeting::new(String::from("Welcome!"));
+    let greeting = structs_07_string_conversion__Greeting::new(String::from("Welcome!"));
     println!("{}", greeting.text);
 }

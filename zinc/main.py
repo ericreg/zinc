@@ -1,14 +1,11 @@
 import json
 import click
 from pathlib import Path
-from antlr4 import InputStream, CommonTokenStream
-
-from zinc.parser.zincLexer import zincLexer as ZincLexer
-from zinc.parser.zincParser import zincParser as ZincParser
 from zinc.struct_logging import configure_logging, get_logger
 from zinc.atlas import AtlasBuilder
 from zinc.symbols import SymbolTableVisitor
 from zinc.codegen import CodeGenVisitor
+from zinc.modules import build_module_graph
 
 configure_logging()
 logger = get_logger()
@@ -21,6 +18,18 @@ def main():
     pass
 
 
+def _compile_pipeline(file: Path):
+    """Build the module graph, atlas, symbols, and codegen for a file."""
+    module_graph = build_module_graph(file)
+    atlas = AtlasBuilder(module_graph).build()
+    symbol_visitor = SymbolTableVisitor(atlas)
+    symbols = symbol_visitor.resolve()
+    codegen = CodeGenVisitor(
+        atlas, symbols, symbol_visitor.specialization_map, symbol_visitor._channel_infos
+    )
+    return module_graph, atlas, symbols, codegen
+
+
 @main.command()
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
 @click.option(
@@ -28,27 +37,7 @@ def main():
 )
 def compile(file: Path, output: Path | None):
     """Compile a Zinc source file to Rust."""
-    input_text = file.read_text()
-
-    input_stream = InputStream(input_text)
-    lexer = ZincLexer(input_stream)
-    stream = CommonTokenStream(lexer)
-    parser = ZincParser(stream)
-    tree = parser.program()
-
-    # Pass 1: Build Atlas (reachability)
-    atlas_builder = AtlasBuilder()
-    atlas_builder.visit(tree)
-    atlas = atlas_builder.build()
-
-    # Pass 2: Build SymbolTable
-    symbol_visitor = SymbolTableVisitor(atlas)
-    symbols = symbol_visitor.resolve()
-
-    # Pass 3: Generate Rust code
-    codegen = CodeGenVisitor(
-        atlas, symbols, symbol_visitor.specialization_map, symbol_visitor._channel_infos
-    )
+    _, _, _, codegen = _compile_pipeline(file)
     program = codegen.generate()
     rust_code = program.render()
 
@@ -63,29 +52,7 @@ def compile(file: Path, output: Path | None):
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
 def tree(file: Path):
     """Print the AST of a Zinc source file."""
-    input_text = file.read_text()
-
-    input_stream = InputStream(input_text)
-    lexer = ZincLexer(input_stream)
-
-    stream = CommonTokenStream(lexer)
-    parser = ZincParser(stream)
-
-    tree = parser.program()
-
-    # Pass 1: Build Atlas (reachability)
-    atlas_builder = AtlasBuilder()
-    atlas_builder.visit(tree)
-    atlas = atlas_builder.build()
-
-    # Pass 2: Build SymbolTable
-    symbol_visitor = SymbolTableVisitor(atlas)
-    symbols = symbol_visitor.resolve()
-
-    # Pass 3: Generate Rust code
-    codegen = CodeGenVisitor(
-        atlas, symbols, symbol_visitor.specialization_map, symbol_visitor._channel_infos
-    )
+    _, _, _, codegen = _compile_pipeline(file)
     program = codegen.generate()
     click.echo(program)
 
@@ -94,45 +61,15 @@ def tree(file: Path):
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
 def check(file: Path):
     """Check a Zinc source file for syntax errors."""
-    input_text = file.read_text()
-
-    input_stream = InputStream(input_text)
-    lexer = ZincLexer(input_stream)
-
-    stream = CommonTokenStream(lexer)
-    parser = ZincParser(stream)
-
-    tree = parser.program()
-
-    if parser.getNumberOfSyntaxErrors() > 0:
-        click.echo(
-            f"Found {parser.getNumberOfSyntaxErrors()} syntax error(s)", err=True
-        )
-        raise SystemExit(1)
-    else:
-        click.echo(f"{file}: OK")
+    _compile_pipeline(file)
+    click.echo(f"{file}: OK")
 
 
 @main.command("resolve-types")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
 def resolve_types(file: Path):
     """Run type resolution and print the SymbolTable as JSON."""
-    input_text = file.read_text()
-
-    input_stream = InputStream(input_text)
-    lexer = ZincLexer(input_stream)
-    stream = CommonTokenStream(lexer)
-    parser = ZincParser(stream)
-    tree = parser.program()
-
-    # Pass 1: Build Atlas (reachability)
-    atlas_builder = AtlasBuilder()
-    atlas_builder.visit(tree)
-    atlas = atlas_builder.build()
-
-    # Pass 2: Build SymbolTable
-    symbol_visitor = SymbolTableVisitor(atlas)
-    symbols = symbol_visitor.resolve()
+    _, _, symbols, _ = _compile_pipeline(file)
 
     # Output as JSON
     output = {

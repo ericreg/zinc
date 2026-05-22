@@ -1,4 +1,4 @@
-fn find_i64_i64(limit: i64, target: i64) -> i64 {
+fn iterations_19_return_from_for__find_i64_i64(limit: i64, target: i64) -> i64 {
     for n in 0..limit {
         if (n == target) {
             return n;
@@ -7,7 +7,7 @@ fn find_i64_i64(limit: i64, target: i64) -> i64 {
     return (-1);
 }
 
-fn find_zero_i64(limit: i64) -> i64 {
+fn iterations_19_return_from_for__find_zero_i64(limit: i64) -> i64 {
     for n in 0..limit {
         return n;
     }
@@ -15,9 +15,9 @@ fn find_zero_i64(limit: i64) -> i64 {
 }
 
 fn main() {
-    let found = find_i64_i64(5, 3);
-    let missing = find_i64_i64(5, 9);
-    let zero = find_zero_i64(0);
+    let found = iterations_19_return_from_for__find_i64_i64(5, 3);
+    let missing = iterations_19_return_from_for__find_i64_i64(5, 9);
+    let zero = iterations_19_return_from_for__find_zero_i64(0);
     println!("{}", found);
     println!("{}", missing);
     println!("{}", zero);

@@ -1,0 +1,8 @@
+import modules/_lib/generic
+
+fn main() {
+    a = first(1, 2)
+    b = first("a", "b")
+    print("{a}")
+    print("{b}")
+}

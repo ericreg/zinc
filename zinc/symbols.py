@@ -22,6 +22,7 @@ from zinc.exceptions import ZincTypeError
 from zinc.parser.zincVisitor import zincVisitor
 from zinc.parser.zincParser import zincParser as ZincParser
 from zinc.atlas import Atlas, FunctionInstance, ConstInstance, StructFieldInfo, StructMethodInfo
+from zinc.modules import extract_identifier_path, struct_path_from_ctx
 
 
 class SymbolKind(Enum):
@@ -174,9 +175,11 @@ class SymbolTableVisitor(zincVisitor):
 
     def __init__(self, atlas: Atlas):
         self.atlas = atlas
+        self.module_graph = atlas.module_graph
         self.symbols = SymbolTable()
         self._block_counters: dict[str, int] = {}  # For unique block names
         self._current_function: str | None = None
+        self._current_module: str | None = None
         self._current_return_type: BaseType = BaseType.VOID  # Track return type during resolution
         self._current_return_dict_info: DictTypeInfo | None = None
         self._current_return_set_info: SetTypeInfo | None = None
@@ -189,6 +192,48 @@ class SymbolTableVisitor(zincVisitor):
         # Track all caller channel infos for function parameters (param_name -> list of ChannelTypeInfos)
         self._channel_param_all_infos: dict[str, list[ChannelTypeInfo]] = {}
         self._iterating_dict_stack: list[set[str]] = []
+
+    def _resolve_const_symbol(self, path: list[str]) -> ConstInstance | None:
+        """Resolve a const path in the current module."""
+        if self._current_module is None:
+            return None
+        symbol = self.module_graph.resolve_const_path(self._current_module, path)
+        if symbol is None:
+            return None
+        return self.atlas.consts.get(symbol.qualified_name) or ConstInstance(
+            name=symbol.name,
+            qualified_name=symbol.qualified_name,
+            module_id=symbol.module_id,
+            ctx=symbol.ctx,
+        )
+
+    def _resolve_function_symbol(self, path: list[str]):
+        """Resolve a function path in the current module."""
+        if self._current_module is None:
+            return None
+        return self.module_graph.resolve_function_path(self._current_module, path)
+
+    def _resolve_struct_symbol(self, path: list[str]):
+        """Resolve a struct path in the current module."""
+        if self._current_module is None:
+            return None
+        return self.module_graph.resolve_struct_path(self._current_module, path)
+
+    def _method_return_base_type(self, return_type: str | None) -> BaseType:
+        """Map an analyzed method return type string to a base type."""
+        if return_type is None:
+            return BaseType.VOID
+        mapping = {
+            "i32": BaseType.INTEGER,
+            "i64": BaseType.INTEGER,
+            "f32": BaseType.FLOAT,
+            "f64": BaseType.FLOAT,
+            "String": BaseType.STRING,
+            "string": BaseType.STRING,
+            "bool": BaseType.BOOLEAN,
+            "Self": BaseType.STRUCT,
+        }
+        return mapping.get(return_type, BaseType.UNKNOWN)
 
     def resolve(self) -> SymbolTable:
         """Main entry point - resolve types for all reachable code.
@@ -554,7 +599,7 @@ class SymbolTableVisitor(zincVisitor):
             if isinstance(expr_ctx, ZincParser.PrimaryExprContext):
                 primary = expr_ctx.primaryExpression()
                 if primary and primary.structInstantiation():
-                    inst_name = primary.structInstantiation().IDENTIFIER().getText()
+                    inst_name = primary.structInstantiation().qualifiedName().getText()
                     if inst_name == struct_name:
                         return "Self"
                     return inst_name
@@ -800,18 +845,24 @@ class SymbolTableVisitor(zincVisitor):
     def _resolve_const(self, const: ConstInstance) -> None:
         """Resolve type of a global constant."""
         ctx: ZincParser.ConstDeclarationContext = const.ctx  # type: ignore[assignment]
-        expr_type = self.visit(ctx.expression())
-        self.symbols.define(
-            id=const.name,
-            kind=SymbolKind.CONST,
-            resolved_type=expr_type,
-            interval=ctx.getSourceInterval(),
-        )
+        previous_module = self._current_module
+        self._current_module = const.module_id
+        try:
+            expr_type = self.visit(ctx.expression())
+            self.symbols.define(
+                id=const.qualified_name,
+                kind=SymbolKind.CONST,
+                resolved_type=expr_type,
+                interval=ctx.getSourceInterval(),
+            )
+        finally:
+            self._current_module = previous_module
 
     def _resolve_function(self, func: FunctionInstance) -> None:
         """Resolve types within a function body for a specific specialization."""
         self._block_counters.clear()
         self._current_function = func.mangled_name
+        self._current_module = func.module_id
         self._current_return_type = BaseType.VOID  # Reset for this function
         self._current_return_dict_info = None
         self._current_return_set_info = None
@@ -890,6 +941,7 @@ class SymbolTableVisitor(zincVisitor):
 
         self.symbols.exit_scope()
         self._current_function = None
+        self._current_module = None
 
     def _validate_resolved_collections(self, function_scope: str) -> None:
         """Reject empty collection types that were never constrained."""
@@ -950,6 +1002,20 @@ class SymbolTableVisitor(zincVisitor):
                 temp.set_info = symbol.set_info
                 temp.tuple_info = symbol.tuple_info
                 return symbol.resolved_type
+
+            const_symbol = None
+            if self._current_module is not None:
+                resolved_const = self.module_graph.resolve_const_path(
+                    self._current_module, [name]
+                )
+                if resolved_const:
+                    const_symbol = self.symbols.lookup_by_id(resolved_const.qualified_name)
+            if const_symbol:
+                self.symbols.define_temp(
+                    resolved_type=const_symbol.resolved_type,
+                    interval=ctx.getSourceInterval(),
+                )
+                return const_symbol.resolved_type
             self.symbols.define_temp(
                 resolved_type=BaseType.UNKNOWN,
                 interval=ctx.getSourceInterval(),
@@ -1233,6 +1299,20 @@ class SymbolTableVisitor(zincVisitor):
     def visitMemberAccessExpr(self, ctx: ZincParser.MemberAccessExprContext) -> BaseType:
         """Handle member access."""
         self.visit(ctx.expression())
+
+        if self._current_module is not None:
+            path = extract_identifier_path(ctx)
+            if path:
+                const_symbol = self.module_graph.resolve_const_path(self._current_module, path)
+                if const_symbol:
+                    resolved = self.symbols.lookup_by_id(const_symbol.qualified_name)
+                    if resolved:
+                        self.symbols.define_temp(
+                            resolved_type=resolved.resolved_type,
+                            interval=ctx.getSourceInterval(),
+                        )
+                        return resolved.resolved_type
+
         self.symbols.define_temp(
             resolved_type=BaseType.UNKNOWN,
             interval=ctx.getSourceInterval(),
@@ -1455,47 +1535,56 @@ class SymbolTableVisitor(zincVisitor):
                                 )
                                 return BaseType.VOID
 
-        # Create specialization for user-defined functions
-        if isinstance(callee_ctx, ZincParser.PrimaryExprContext):
-            primary = callee_ctx.primaryExpression()
-            if primary and primary.IDENTIFIER():
-                func_name = primary.IDENTIFIER().getText()
-                if func_name not in ("print", "chan", "dict", "sort_dict", "set", "sort_set"):
-                    # Look up function definition
-                    func_def = self.atlas.function_defs.get(func_name)
-                    # Only create specialization if all arg types are known
-                    if func_def and arg_types and BaseType.UNKNOWN not in arg_types:
-                        # Create specialization in Atlas (pass caller for call graph)
-                        mangled = self.atlas.add_specialization(
-                            func_name,
-                            arg_types,
-                            func_def,
-                            self._current_function,
-                            arg_array_infos,
-                            arg_dict_infos,
-                            arg_set_infos,
-                            arg_tuple_infos,
+        path = extract_identifier_path(callee_ctx)
+        if path and self._current_module is not None:
+            static_target = self.module_graph.resolve_static_method_target(self._current_module, path)
+            if static_target:
+                struct_symbol, method_name = static_target
+                struct = self.atlas.structs.get(struct_symbol.qualified_name)
+                if struct:
+                    method = next((candidate for candidate in struct.methods if candidate.name == method_name), None)
+                    if method:
+                        return_type = self._method_return_base_type(method.return_type)
+                        temp = self.symbols.define_temp(
+                            resolved_type=return_type,
+                            interval=ctx.getSourceInterval(),
                         )
-                        # Store mapping from (caller, call site) to mangled name
-                        # Scoped by caller so different specializations get correct callees
-                        key = (self._current_function, ctx.getSourceInterval())
-                        self.specialization_map[key] = mangled
+                        if return_type == BaseType.STRUCT:
+                            temp.tuple_info = None
+                        return return_type
 
-                        # If this specialization has already been processed, use its return type
-                        func_instance = self.atlas.functions.get(mangled)
-                        if func_instance:
-                            self._mark_mutated_call_arguments(func_instance, arg_exprs)
-                        if func_instance and func_instance.return_type != BaseType.VOID:
-                            temp = self.symbols.define_temp(
-                                resolved_type=func_instance.return_type,
-                                interval=ctx.getSourceInterval(),
-                            )
-                            temp.dict_info = self._copy_dict_info(func_instance.return_dict_info)
-                            temp.set_info = self._copy_set_info(func_instance.return_set_info)
-                            temp.tuple_info = self._copy_tuple_info(func_instance.return_tuple_info)
-                            return func_instance.return_type
+            resolved_function = self.module_graph.resolve_function_path(self._current_module, path)
+            if resolved_function and resolved_function.name not in ("print", "chan", "dict", "sort_dict", "set", "sort_set"):
+                func_def = self.atlas.function_defs.get(resolved_function.qualified_name)
+                if func_def and BaseType.UNKNOWN not in arg_types:
+                    mangled = self.atlas.add_specialization(
+                        resolved_function.qualified_name,
+                        arg_types,
+                        func_def,
+                        self._current_function,
+                        arg_array_infos,
+                        arg_dict_infos,
+                        arg_set_infos,
+                        arg_tuple_infos,
+                    )
+                    key = (self._current_function, ctx.getSourceInterval())
+                    self.specialization_map[key] = mangled
 
-                func_symbol = self.symbols.lookup_by_id(func_name)
+                    func_instance = self.atlas.functions.get(mangled)
+                    if func_instance:
+                        self._mark_mutated_call_arguments(func_instance, arg_exprs)
+                    if func_instance and func_instance.return_type != BaseType.VOID:
+                        temp = self.symbols.define_temp(
+                            resolved_type=func_instance.return_type,
+                            interval=ctx.getSourceInterval(),
+                        )
+                        temp.dict_info = self._copy_dict_info(func_instance.return_dict_info)
+                        temp.set_info = self._copy_set_info(func_instance.return_set_info)
+                        temp.tuple_info = self._copy_tuple_info(func_instance.return_tuple_info)
+                        return func_instance.return_type
+
+            if len(path) == 1:
+                func_symbol = self.symbols.lookup_by_id(path[0])
                 if func_symbol:
                     self.symbols.define_temp(
                         resolved_type=func_symbol.resolved_type,
@@ -1532,6 +1621,13 @@ class SymbolTableVisitor(zincVisitor):
         """Visit struct literal."""
         for field_ctx in ctx.fieldInit():
             self.visit(field_ctx.expression())
+
+        if self._current_module is not None:
+            resolved_struct = self.module_graph.resolve_struct_path(
+                self._current_module, struct_path_from_ctx(ctx)
+            )
+            if resolved_struct is None:
+                raise ZincTypeError(f"unknown struct '{ctx.qualifiedName().getText()}'")
         self.symbols.define_temp(
             resolved_type=BaseType.STRUCT,
             interval=ctx.getSourceInterval(),
@@ -1936,49 +2032,44 @@ class SymbolTableVisitor(zincVisitor):
 
     def visitSpawnStatement(self, ctx: ZincParser.SpawnStatementContext) -> None:
         """Visit spawn statement and create specialization for spawned function."""
-        # Grammar: spawn expression '(' argumentList? ')'
-        # The expression is the function name
         func_expr = ctx.expression()
-        if isinstance(func_expr, ZincParser.PrimaryExprContext):
-            primary = func_expr.primaryExpression()
-            if primary and primary.IDENTIFIER():
-                func_name = primary.IDENTIFIER().getText()
+        path = extract_identifier_path(func_expr)
+        if path is None or self._current_module is None:
+            return
 
-                # Collect argument types and track channel arguments
-                arg_types: list[BaseType] = []
-                arg_channel_infos: dict[int, ChannelTypeInfo] = {}
-                if ctx.argumentList():
-                    for i, arg_expr in enumerate(ctx.argumentList().expression()):
-                        arg_type = self.visit(arg_expr)
-                        arg_types.append(arg_type)
+        # Collect argument types and track channel arguments
+        arg_types: list[BaseType] = []
+        arg_channel_infos: dict[int, ChannelTypeInfo] = {}
+        if ctx.argumentList():
+            for i, arg_expr in enumerate(ctx.argumentList().expression()):
+                arg_type = self.visit(arg_expr)
+                arg_types.append(arg_type)
 
-                        # Check if argument is a channel variable
-                        if arg_type == BaseType.CHANNEL:
-                            if isinstance(arg_expr, ZincParser.PrimaryExprContext):
-                                arg_primary = arg_expr.primaryExpression()
-                                if arg_primary and arg_primary.IDENTIFIER():
-                                    chan_var = arg_primary.IDENTIFIER().getText()
-                                    if chan_var in self._channel_infos:
-                                        arg_channel_infos[i] = self._channel_infos[chan_var]
+                if arg_type == BaseType.CHANNEL and isinstance(arg_expr, ZincParser.PrimaryExprContext):
+                    arg_primary = arg_expr.primaryExpression()
+                    if arg_primary and arg_primary.IDENTIFIER():
+                        chan_var = arg_primary.IDENTIFIER().getText()
+                        if chan_var in self._channel_infos:
+                            arg_channel_infos[i] = self._channel_infos[chan_var]
 
-                # Create specialization for the spawned function
-                if func_name not in ("print", "chan"):
-                    func_def = self.atlas.function_defs.get(func_name)
-                    if func_def and arg_types:
-                        mangled = self.atlas.add_specialization(
-                            func_name, arg_types, func_def, self._current_function
-                        )
-                        # Store mapping from (caller, spawn site) to mangled name
-                        key = (self._current_function, ctx.getSourceInterval())
-                        self.specialization_map[key] = mangled
-                        # Mark the function as async since it's being spawned
-                        self.atlas.functions[mangled].is_async = True
-                        # Propagate channel type info to the function instance
-                        # Append to existing list so all call sites' channels get updated
-                        for idx, chan_info in arg_channel_infos.items():
-                            if idx not in self.atlas.functions[mangled].arg_channel_infos:
-                                self.atlas.functions[mangled].arg_channel_infos[idx] = []
-                            self.atlas.functions[mangled].arg_channel_infos[idx].append(chan_info)
+        resolved_function = self.module_graph.resolve_function_path(self._current_module, path)
+        if resolved_function is None or resolved_function.name in ("print", "chan"):
+            return
+
+        func_def = self.atlas.function_defs.get(resolved_function.qualified_name)
+        if func_def is None or BaseType.UNKNOWN in arg_types:
+            return
+
+        mangled = self.atlas.add_specialization(
+            resolved_function.qualified_name, arg_types, func_def, self._current_function
+        )
+        key = (self._current_function, ctx.getSourceInterval())
+        self.specialization_map[key] = mangled
+        self.atlas.functions[mangled].is_async = True
+        for idx, chan_info in arg_channel_infos.items():
+            if idx not in self.atlas.functions[mangled].arg_channel_infos:
+                self.atlas.functions[mangled].arg_channel_infos[idx] = []
+            self.atlas.functions[mangled].arg_channel_infos[idx].append(chan_info)
 
     def visitChannelSendStatement(self, ctx: ZincParser.ChannelSendStatementContext) -> None:
         """Visit channel send statement and infer channel element type."""

@@ -1,0 +1,10 @@
+const MAGIC = 10
+const _SECRET = 99
+
+fn add(a, b) {
+    return a + b
+}
+
+fn _hidden() {
+    return 0
+}

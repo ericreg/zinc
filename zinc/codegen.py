@@ -8,6 +8,7 @@ from zinc.parser.zincParser import zincParser as ZincParser
 from zinc.atlas import Atlas, FunctionInstance, StructInstance, ConstInstance, StructFieldInfo, StructMethodInfo
 from zinc.symbols import SymbolTable, SymbolKind
 from zinc.ast.types import BaseType, type_to_rust, ChannelTypeInfo, DictTypeInfo, SetTypeInfo, TupleTypeInfo
+from zinc.modules import extract_identifier_path, struct_path_from_ctx
 
 
 @dataclass
@@ -69,11 +70,13 @@ class CodeGenVisitor(zincVisitor):
         channel_infos: dict[str, ChannelTypeInfo] | None = None,
     ):
         self.atlas = atlas
+        self.module_graph = atlas.module_graph
         self.symbols = symbols
         self._specialization_map = specialization_map or {}  # (caller, interval) -> mangled
         self._channel_infos = channel_infos or {}  # var_name -> ChannelTypeInfo
         self._uses_async = False
         self._current_function: str | None = None
+        self._current_module: str | None = None
         self._declared_vars: set[str] = set()
         self._indent_level = 0
         # Struct tracking
@@ -103,7 +106,8 @@ class CodeGenVisitor(zincVisitor):
         for func_name in self.atlas.topological_order():
             func = self.atlas.functions[func_name]
             if func.name == "main":
-                self._current_function = "main"
+                self._current_function = func.mangled_name
+                self._current_module = func.module_id
                 self._declared_vars.clear()
                 main_body = self._generate_function_body(func)
             else:
@@ -120,9 +124,14 @@ class CodeGenVisitor(zincVisitor):
 
     def _prescan_for_mut_vars(self) -> None:
         """Scan all code to find struct variables that call &mut self methods."""
-        main_func = self.atlas.functions.get("main")
+        main_func = self.atlas.functions.get(self.atlas.main.mangled_name)
         if main_func:
-            self._prescan_block(main_func.ctx.block())
+            previous_module = self._current_module
+            self._current_module = main_func.module_id
+            try:
+                self._prescan_block(main_func.ctx.block())
+            finally:
+                self._current_module = previous_module
 
     def _prescan_block(self, block_ctx) -> None:
         """Recursively scan a block for struct assignments and method calls."""
@@ -167,19 +176,25 @@ class CodeGenVisitor(zincVisitor):
         if isinstance(expr_ctx, ZincParser.PrimaryExprContext):
             primary = expr_ctx.primaryExpression()
             if primary and primary.structInstantiation():
-                return primary.structInstantiation().IDENTIFIER().getText()
+                if self._current_module is not None:
+                    struct_symbol = self.module_graph.resolve_struct_path(
+                        self._current_module, struct_path_from_ctx(primary.structInstantiation())
+                    )
+                    if struct_symbol:
+                        return struct_symbol.qualified_name
 
         # Static method call returning Self: Counter.new(0)
         if isinstance(expr_ctx, ZincParser.FunctionCallExprContext):
-            callee = expr_ctx.expression()
-            if isinstance(callee, ZincParser.MemberAccessExprContext):
-                target_text = callee.expression().getText()
-                method_name = callee.IDENTIFIER().getText()
-                struct = next((s for s in self.atlas.structs.values() if s.name == target_text), None)
-                if struct:
-                    method = next((m for m in struct.methods if m.name == method_name), None)
-                    if method and method.return_type == "Self":
-                        return target_text
+            path = extract_identifier_path(expr_ctx.expression())
+            if path and self._current_module is not None:
+                static_target = self.module_graph.resolve_static_method_target(self._current_module, path)
+                if static_target:
+                    struct_symbol, method_name = static_target
+                    struct = self.atlas.structs.get(struct_symbol.qualified_name)
+                    if struct:
+                        method = next((m for m in struct.methods if m.name == method_name), None)
+                        if method and method.return_type == "Self":
+                            return struct_symbol.qualified_name
         return None
 
     def _check_for_mut_method_call(self, expr_ctx) -> None:
@@ -197,7 +212,7 @@ class CodeGenVisitor(zincVisitor):
                         target_text = primary.IDENTIFIER().getText()
                         if target_text in self._struct_instance_vars:
                             struct_name = self._struct_instance_vars[target_text]
-                            struct = next((s for s in self.atlas.structs.values() if s.name == struct_name), None)
+                            struct = self.atlas.structs.get(struct_name)
                             if struct:
                                 method = next((m for m in struct.methods if m.name == method_name), None)
                                 if method and method.self_mutability == "&mut self":
@@ -234,28 +249,62 @@ class CodeGenVisitor(zincVisitor):
                         changed = True
 
         for name in async_funcs:
-            if name == "main":
+            if name in self.atlas.functions and self.atlas.functions[name].name == "main":
                 self._uses_async = True
             elif name in self.atlas.functions:
                 self.atlas.functions[name].is_async = True
 
+    def _struct_rust_name(self, struct: StructInstance) -> str:
+        """Return the flattened Rust name for a struct."""
+        return self.module_graph.rust_base_name(struct.qualified_name)
+
+    def _const_rust_name(self, const: ConstInstance) -> str:
+        """Return the flattened Rust name for a const."""
+        return self.module_graph.rust_base_name(const.qualified_name).upper()
+
+    def _const_symbol(self, const: ConstInstance):
+        """Return the resolved symbol-table entry for a const, if any."""
+        return self.symbols.lookup_by_id(const.qualified_name)
+
+    def _const_expr(self, const: ConstInstance) -> str:
+        """Return a Rust expression that evaluates to the Zinc const's value."""
+        symbol = self._const_symbol(const)
+        rust_name = self._const_rust_name(const)
+        if symbol and symbol.resolved_type == BaseType.STRING:
+            return f"(*{rust_name}).clone()"
+        return rust_name
+
+    def _struct_rust_name_from_symbol(self, symbol) -> str:
+        """Return the flattened Rust name for a resolved struct symbol."""
+        return self.module_graph.rust_base_name(symbol.qualified_name)
+
     def _generate_const(self, const: ConstInstance) -> str:
         """Generate a const declaration."""
         ctx: ZincParser.ConstDeclarationContext = const.ctx
-        name = const.name
-        value = self.visit(ctx.expression())
-        symbol = self.symbols.lookup_by_id(name)
+        previous_module = self._current_module
+        self._current_module = const.module_id
+        try:
+            value = self.visit(ctx.expression())
+        finally:
+            self._current_module = previous_module
+        name = self._const_rust_name(const)
+        symbol = self._const_symbol(const)
         if symbol:
             type_str = type_to_rust(symbol.resolved_type)
-            return f"const {name.upper()}: {type_str} = {value};"
-        return f"const {name.upper()} = {value};"
+            if type_str == "String":
+                if value.startswith('"'):
+                    value = f"String::from({value})"
+                return f"static {name}: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {value});"
+            return f"const {name}: {type_str} = {value};"
+        return f"const {name} = {value};"
 
     def _generate_struct(self, struct: StructInstance) -> str:
         """Generate a struct definition and impl block."""
         lines = []
+        rust_name = self._struct_rust_name(struct)
 
         # Struct definition
-        lines.append(f"struct {struct.name} {{")
+        lines.append(f"struct {rust_name} {{")
         for f in struct.fields:
             vis = "" if f.is_private else "pub "
             rust_type = f.rust_type()
@@ -265,7 +314,7 @@ class CodeGenVisitor(zincVisitor):
         # Impl block (only if there are methods)
         if struct.methods:
             lines.append("")
-            lines.append(f"impl {struct.name} {{")
+            lines.append(f"impl {rust_name} {{")
             for method in struct.methods:
                 method_code = self._generate_struct_method(method, struct)
                 for line in method_code.split("\n"):
@@ -276,6 +325,11 @@ class CodeGenVisitor(zincVisitor):
 
     def _generate_struct_method(self, method: StructMethodInfo, struct: StructInstance) -> str:
         """Generate a single struct method."""
+        previous_declared = self._declared_vars.copy()
+        self._declared_vars = {name for name, _, _ in method.parameters}
+        if not method.is_static:
+            self._declared_vars.add("self")
+
         # Build parameter list
         param_strs = []
         if not method.is_static:
@@ -293,11 +347,15 @@ class CodeGenVisitor(zincVisitor):
         ret_type = f" -> {method.return_type}" if method.return_type else ""
 
         # Generate body
-        self._current_struct = struct.name
+        previous_module = self._current_module
+        self._current_module = struct.module_id
+        self._current_struct = struct.qualified_name
         self._current_struct_fields = {f.name: f for f in struct.fields}
         body_stmts = self._generate_block(method.body_ctx)
         self._current_struct = None
         self._current_struct_fields = None
+        self._current_module = previous_module
+        self._declared_vars = previous_declared
 
         lines = [f"fn {method.name}({params}){ret_type} {{"]
         for stmt in body_stmts:
@@ -322,6 +380,7 @@ class CodeGenVisitor(zincVisitor):
     def _generate_function(self, func: FunctionInstance) -> str:
         """Generate a function definition using mangled name."""
         self._current_function = func.mangled_name
+        self._current_module = func.module_id
         self._declared_vars.clear()
         ctx: ZincParser.FunctionDeclarationContext = func.ctx
 
@@ -354,6 +413,7 @@ class CodeGenVisitor(zincVisitor):
                     params.append(f"{param_name}: {type_str}")
                 else:
                     params.append(param_name)
+                self._declared_vars.add(param_name)
 
         body_stmts = self._generate_function_body(func)
         param_str = ", ".join(params)
@@ -461,15 +521,65 @@ class CodeGenVisitor(zincVisitor):
         if not interpolations:
             return text
         format_str = re.sub(r"\{[^}]+\}", "{}", inner)
-        args = ", ".join(interpolations)
+        args = ", ".join(self._rewrite_interpolation_expr(expr) for expr in interpolations)
         return f'format!("{format_str}", {args})'
+
+    def _rewrite_interpolation_expr(self, expr: str) -> str:
+        """Rewrite imported const and struct references inside string interpolation."""
+        if self._current_module is None:
+            return expr
+
+        keyword_like = {"and", "or", "not", "true", "false", "self"}
+
+        def replace(match: re.Match[str]) -> str:
+            token = match.group(0)
+            if token in keyword_like:
+                return token
+
+            parts = token.split(".")
+            if len(parts) == 1 and token in self._declared_vars:
+                return token
+
+            const_symbol = self.module_graph.resolve_const_path(self._current_module, parts)
+            if const_symbol:
+                const = self.atlas.consts.get(const_symbol.qualified_name)
+                if const:
+                    return self._const_expr(const)
+                return self.module_graph.rust_base_name(const_symbol.qualified_name).upper()
+
+            struct_symbol = self.module_graph.resolve_struct_path(self._current_module, parts)
+            if struct_symbol:
+                struct = self.atlas.structs.get(struct_symbol.qualified_name)
+                if struct:
+                    return self._struct_rust_name(struct)
+                return self.module_graph.rust_base_name(struct_symbol.qualified_name)
+
+            static_target = self.module_graph.resolve_static_method_target(self._current_module, parts)
+            if static_target:
+                struct_symbol, method_name = static_target
+                struct = self.atlas.structs.get(struct_symbol.qualified_name)
+                if struct:
+                    return f"{self._struct_rust_name(struct)}::{method_name}"
+                return f"{self.module_graph.rust_base_name(struct_symbol.qualified_name)}::{method_name}"
+
+            return token
+
+        return re.sub(r"\b[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*\b", replace, expr)
 
     def visitPrimaryExpression(self, ctx: ZincParser.PrimaryExpressionContext) -> str:
         """Visit a primary expression."""
         if ctx.literal():
             return self.visit(ctx.literal())
         if ctx.IDENTIFIER():
-            return ctx.IDENTIFIER().getText()
+            name = ctx.IDENTIFIER().getText()
+            if self._current_module is not None:
+                const_symbol = self.module_graph.resolve_const_path(self._current_module, [name])
+                if const_symbol:
+                    const = self.atlas.consts.get(const_symbol.qualified_name)
+                    if const:
+                        return self._const_expr(const)
+                    return self.module_graph.rust_base_name(const_symbol.qualified_name).upper()
+            return name
         if ctx.arrayLiteral():
             return self.visit(ctx.arrayLiteral())
         if ctx.collectionLiteral():
@@ -735,18 +845,34 @@ class CodeGenVisitor(zincVisitor):
 
     def visitMemberAccessExpr(self, ctx: ZincParser.MemberAccessExprContext) -> str:
         """Visit member access - could be field access or static method reference."""
-        target_text = ctx.expression().getText()
-        member = ctx.IDENTIFIER().getText()
+        if self._current_module is not None:
+            path = extract_identifier_path(ctx)
+            if path:
+                const_symbol = self.module_graph.resolve_const_path(self._current_module, path)
+                if const_symbol:
+                    const = self.atlas.consts.get(const_symbol.qualified_name)
+                    if const:
+                        return self._const_expr(const)
+                    return self.module_graph.rust_base_name(const_symbol.qualified_name).upper()
 
-        # Check if target is a struct type (for static method calls)
-        struct_names = [s.name for s in self.atlas.structs.values()]
-        if target_text in struct_names:
-            # Return struct::method format for function call handler
-            return f"{target_text}::{member}"
+                static_target = self.module_graph.resolve_static_method_target(self._current_module, path)
+                if static_target:
+                    struct_symbol, method_name = static_target
+                    struct = self.atlas.structs.get(struct_symbol.qualified_name)
+                    if struct:
+                        return f"{self._struct_rust_name(struct)}::{method_name}"
+                    return f"{self.module_graph.rust_base_name(struct_symbol.qualified_name)}::{method_name}"
+
+                struct_symbol = self.module_graph.resolve_struct_path(self._current_module, path)
+                if struct_symbol:
+                    struct = self.atlas.structs.get(struct_symbol.qualified_name)
+                    if struct:
+                        return self._struct_rust_name(struct)
+                    return self.module_graph.rust_base_name(struct_symbol.qualified_name)
 
         # Regular member access (field or instance method)
         obj = self.visit(ctx.expression())
-        return f"{obj}.{member}"
+        return f"{obj}.{ctx.IDENTIFIER().getText()}"
 
     def visitFunctionCallExpr(self, ctx: ZincParser.FunctionCallExprContext) -> str:
         """Visit function call, handling static and instance method calls."""
@@ -782,11 +908,26 @@ class CodeGenVisitor(zincVisitor):
 
         # Static method call (StructName::method)
         if "::" in callee:
-            struct_name, method_name = callee.split("::")
-            struct = next((s for s in self.atlas.structs.values() if s.name == struct_name), None)
+            struct_name, method_name = callee.rsplit("::", 1)
+            struct = next((s for s in self.atlas.structs.values() if self._struct_rust_name(s) == struct_name), None)
             if struct:
                 args = self._process_method_args(struct, method_name, args, arg_ctxs)
             return f"{callee}({', '.join(args)})"
+
+        if self._current_module is not None:
+            path = extract_identifier_path(callee_ctx)
+            if path:
+                resolved_function = self.module_graph.resolve_function_path(self._current_module, path)
+                if resolved_function:
+                    key = (self._current_function, ctx.getSourceInterval())
+                    mangled = self._specialization_map.get(key) or self.module_graph.rust_base_name(
+                        resolved_function.qualified_name
+                    )
+                    args = self._process_function_args(mangled, args, arg_ctxs)
+                    call = f"{mangled}({', '.join(args)})"
+                    if self.atlas.functions.get(mangled) and self.atlas.functions[mangled].is_async:
+                        return f"{call}.await"
+                    return call
 
         # Instance method call (obj.method) - already visited, callee is "obj.method"
         if isinstance(callee_ctx, ZincParser.MemberAccessExprContext):
@@ -841,7 +982,7 @@ class CodeGenVisitor(zincVisitor):
                     target_var = primary.IDENTIFIER().getText()
                     if target_var in self._struct_instance_vars:
                         struct_name = self._struct_instance_vars[target_var]
-                        struct = next((s for s in self.atlas.structs.values() if s.name == struct_name), None)
+                        struct = self.atlas.structs.get(struct_name)
                         if struct:
                             args = self._process_method_args(struct, method_name, args, arg_ctxs)
             result = f"{callee}({', '.join(args)})"
@@ -1051,7 +1192,7 @@ class CodeGenVisitor(zincVisitor):
             interpolations = re.findall(r"\{([^}]+)\}", inner)
             if interpolations:
                 format_str = re.sub(r"\{[^}]+\}", "{}", inner)
-                expr_args = ", ".join(interpolations)
+                expr_args = ", ".join(self._rewrite_interpolation_expr(expr) for expr in interpolations)
                 return f'println!("{format_str}", {expr_args})'
             return f'println!("{inner}")'
         return f"println!(\"{{}}\", {arg})"
@@ -1073,7 +1214,15 @@ class CodeGenVisitor(zincVisitor):
 
     def visitStructInstantiation(self, ctx: ZincParser.StructInstantiationContext) -> str:
         """Visit struct instantiation."""
-        name = ctx.IDENTIFIER().getText()
+        if self._current_module is None:
+            name = ctx.qualifiedName().getText()
+            struct = None
+        else:
+            struct_symbol = self.module_graph.resolve_struct_path(
+                self._current_module, struct_path_from_ctx(ctx)
+            )
+            struct = self.atlas.structs.get(struct_symbol.qualified_name) if struct_symbol else None
+            name = self._struct_rust_name(struct) if struct else ctx.qualifiedName().getText()
 
         # Get provided field values
         provided_fields: dict[str, str] = {}
@@ -1083,7 +1232,6 @@ class CodeGenVisitor(zincVisitor):
             provided_fields[field_name] = field_value
 
         # Look up struct definition to get all fields with defaults
-        struct = next((s for s in self.atlas.structs.values() if s.name == name), None)
         if struct:
             fields = []
             for f in struct.fields:

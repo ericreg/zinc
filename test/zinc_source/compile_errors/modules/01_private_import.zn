@@ -1,0 +1,6 @@
+// expected-error: module 'modules/_lib/math' does not export '_SECRET'
+import modules/_lib/math [_SECRET]
+
+fn main() {
+    print(_SECRET)
+}

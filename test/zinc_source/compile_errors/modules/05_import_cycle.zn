@@ -1,0 +1,6 @@
+// expected-error: cyclic imports are not supported
+import compile_errors/modules/_cycle/a
+
+fn main() {
+    print(ping())
+}
