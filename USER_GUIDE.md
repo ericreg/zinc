@@ -907,6 +907,28 @@ fn main() {
 }
 ```
 
+`select` chooses the first channel case that can proceed:
+
+```zinc
+select {
+    case msg = <-messages {
+        print("{msg}")
+    }
+    case work <- 1 {
+        print("sent")
+    }
+    default {
+        print("idle")
+    }
+}
+```
+
+Receive bindings are local to the selected case block, so they can shadow outer
+variables without changing them after the block exits. `default` is non-blocking:
+it runs only when every other case would wait. Closed-channel receives and sends
+still panic at runtime, matching Zinc's existing `unwrap()` behavior for channel
+operations.
+
 Use `spawn` to run a function concurrently:
 
 ```zinc

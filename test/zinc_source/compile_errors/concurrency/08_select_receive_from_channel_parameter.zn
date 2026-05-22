@@ -1,0 +1,14 @@
+// expected-error: cannot receive from channel parameter
+
+fn helper(values) {
+    select {
+        case value = <-values {
+            print("{value}")
+        }
+    }
+}
+
+fn main() {
+    values = chan()
+    helper(values)
+}

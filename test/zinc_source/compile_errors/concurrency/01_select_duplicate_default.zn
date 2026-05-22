@@ -1,0 +1,12 @@
+// expected-error: select supports at most one default case
+
+fn main() {
+    select {
+        default {
+            print("first")
+        }
+        default {
+            print("second")
+        }
+    }
+}

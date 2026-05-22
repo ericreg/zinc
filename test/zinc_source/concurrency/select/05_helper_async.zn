@@ -1,0 +1,19 @@
+fn emit(ch) {
+    ch <- 7
+}
+
+fn helper() {
+    values = chan()
+    spawn emit(values)
+
+    select {
+        case msg = <-values {
+            return msg
+        }
+    }
+}
+
+fn main() {
+    result = helper()
+    print("{result}")
+}

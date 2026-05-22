@@ -1,0 +1,22 @@
+fn emit(ch, value) {
+    ch <- value
+}
+
+fn main() {
+    left = chan()
+    right = chan()
+
+    spawn emit(left, 1)
+    spawn emit(right, 2)
+
+    for i in 0..2 {
+        select {
+            case msg = <-left {
+                print("left {msg}")
+            }
+            case msg = <-right {
+                print("right {msg}")
+            }
+        }
+    }
+}

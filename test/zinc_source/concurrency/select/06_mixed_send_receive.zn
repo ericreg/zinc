@@ -1,0 +1,18 @@
+fn main() {
+    ready = chan()
+    full = chan(1)
+
+    ready <- 7
+    full <- 9
+
+    select {
+        case msg = <-ready {
+            print("recv {msg}")
+        }
+        case full <- 10 {
+            print("send")
+        }
+    }
+
+    print(<-full)
+}

@@ -1,0 +1,18 @@
+fn emit(ch) {
+    ch <- "inner"
+}
+
+fn main() {
+    value = "outer"
+    values = chan()
+
+    spawn emit(values)
+
+    select {
+        case value = <-values {
+            print("{value}")
+        }
+    }
+
+    print("{value}")
+}

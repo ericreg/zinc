@@ -1,0 +1,6 @@
+// expected-error: 'value' is not a channel
+
+fn main() {
+    value = 1
+    value <- 2
+}

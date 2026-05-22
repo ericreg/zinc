@@ -1,0 +1,5 @@
+// expected-error: chan\(\) accepts at most one capacity argument
+
+fn main() {
+    values = chan(1, 2)
+}

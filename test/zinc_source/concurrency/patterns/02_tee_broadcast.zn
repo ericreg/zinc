@@ -1,0 +1,18 @@
+fn source(out) {
+    out <- 3
+}
+
+fn main() {
+    input = chan()
+    left = chan()
+    right = chan()
+
+    spawn source(input)
+
+    value = <-input
+    left <- value
+    right <- value
+
+    print(<-left)
+    print(<-right)
+}

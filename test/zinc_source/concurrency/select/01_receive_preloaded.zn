@@ -1,0 +1,17 @@
+fn main() {
+    ready = chan()
+    blocked = chan()
+
+    blocked <- 0
+    ignored = <-blocked
+    ready <- 7
+
+    select {
+        case msg = <-ready {
+            print("ready {msg}")
+        }
+        case msg = <-blocked {
+            print("blocked {msg}")
+        }
+    }
+}

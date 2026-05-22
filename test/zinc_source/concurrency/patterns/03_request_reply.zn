@@ -1,0 +1,12 @@
+fn respond(reply, request) {
+    reply <- request + 1
+}
+
+fn main() {
+    reply = chan()
+
+    spawn respond(reply, 41)
+
+    response = <-reply
+    print("{response}")
+}

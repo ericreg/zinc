@@ -1,0 +1,13 @@
+fn child() {
+    print("child")
+}
+
+fn helper() {
+    spawn child()
+    return 99
+}
+
+fn main() {
+    value = helper()
+    print("{value}")
+}

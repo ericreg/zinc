@@ -707,6 +707,38 @@ class SymbolTableVisitor(zincVisitor):
             },
         )
 
+    def _is_channel_constructor_call(self, expr_ctx) -> bool:
+        """Return True when an expression is a direct chan(...) call."""
+        return self._function_call_name(expr_ctx) == "chan"
+
+    def _channel_info_for_name(self, channel_name: str) -> ChannelTypeInfo:
+        """Return mutable channel metadata for a resolved channel symbol."""
+        symbol = self.symbols.lookup_by_id(channel_name)
+        if symbol is None or symbol.resolved_type != BaseType.CHANNEL:
+            raise ZincTypeError(f"'{channel_name}' is not a channel")
+        info = self._channel_infos.get(channel_name)
+        if info is None:
+            info = ChannelTypeInfo(element_type=BaseType.UNKNOWN)
+            self._channel_infos[channel_name] = info
+        return info
+
+    def _merge_channel_value_type(self, channel_name: str, value_type: BaseType) -> None:
+        """Merge a sent value type into channel metadata."""
+        targets = self._channel_param_all_infos.get(channel_name)
+        if targets is None:
+            targets = [self._channel_info_for_name(channel_name)]
+
+        for chan_info in targets:
+            if chan_info.element_type == BaseType.UNKNOWN:
+                chan_info.element_type = value_type
+                continue
+            if value_type == BaseType.UNKNOWN or value_type == chan_info.element_type:
+                continue
+            merged = promote_numeric(chan_info.element_type, value_type)
+            if merged == BaseType.UNKNOWN:
+                raise ZincTypeError("mixed channel value types are not supported")
+            chan_info.element_type = merged
+
     def _merge_key_type(self, current: BaseType, incoming: BaseType, label: str) -> BaseType:
         """Merge dict key or set element types, rejecting floats for Rust container keys."""
         if incoming == BaseType.FLOAT:
@@ -1326,6 +1358,7 @@ class SymbolTableVisitor(zincVisitor):
         # Collect argument types and array info
         arg_types: list[BaseType] = []
         arg_exprs: list = []
+        arg_channel_infos: dict[int, ChannelTypeInfo] = {}
         arg_array_infos: dict[int, ArrayTypeInfo] = {}
         arg_dict_infos: dict[int, DictTypeInfo] = {}
         arg_set_infos: dict[int, SetTypeInfo] = {}
@@ -1338,8 +1371,14 @@ class SymbolTableVisitor(zincVisitor):
                     raise ZincTypeError("mutating collection methods cannot be used as values")
                 arg_types.append(arg_type)
 
+                if arg_type == BaseType.CHANNEL and isinstance(arg_expr, ZincParser.PrimaryExprContext):
+                    primary = arg_expr.primaryExpression()
+                    if primary and primary.IDENTIFIER():
+                        chan_var = primary.IDENTIFIER().getText()
+                        if chan_var in self._channel_infos:
+                            arg_channel_infos[i] = self._channel_infos[chan_var]
                 # Track array element types for array arguments
-                if arg_type == BaseType.ARRAY:
+                elif arg_type == BaseType.ARRAY:
                     arg_symbol = self._expr_symbol(arg_expr)
                     if arg_symbol and arg_symbol.element_type:
                         arg_array_infos[i] = ArrayTypeInfo(
@@ -1393,6 +1432,16 @@ class SymbolTableVisitor(zincVisitor):
             primary = callee_ctx.primaryExpression()
             if primary and primary.IDENTIFIER():
                 func_name = primary.IDENTIFIER().getText()
+                if func_name == "chan":
+                    if len(arg_types) > 1:
+                        raise ZincTypeError("chan() accepts at most one capacity argument")
+                    if arg_types and arg_types[0] != BaseType.INTEGER:
+                        raise ZincTypeError("chan() capacity must be an integer")
+                    self.symbols.define_temp(
+                        resolved_type=BaseType.CHANNEL,
+                        interval=ctx.getSourceInterval(),
+                    )
+                    return BaseType.CHANNEL
                 if func_name in {"dict", "sort_dict"}:
                     if arg_types:
                         raise ZincTypeError(f"{func_name}() does not accept arguments")
@@ -1562,6 +1611,7 @@ class SymbolTableVisitor(zincVisitor):
                         arg_types,
                         func_def,
                         self._current_function,
+                        arg_channel_infos,
                         arg_array_infos,
                         arg_dict_infos,
                         arg_set_infos,
@@ -1572,6 +1622,10 @@ class SymbolTableVisitor(zincVisitor):
 
                     func_instance = self.atlas.functions.get(mangled)
                     if func_instance:
+                        for idx, chan_info in arg_channel_infos.items():
+                            func_instance.arg_channel_infos.setdefault(idx, [])
+                            if all(existing is not chan_info for existing in func_instance.arg_channel_infos[idx]):
+                                func_instance.arg_channel_infos[idx].append(chan_info)
                         self._mark_mutated_call_arguments(func_instance, arg_exprs)
                     if func_instance and func_instance.return_type != BaseType.VOID:
                         temp = self.symbols.define_temp(
@@ -1646,19 +1700,16 @@ class SymbolTableVisitor(zincVisitor):
             existing = self.symbols.lookup_by_id(var_name)
 
             # Check if this is a chan() call - track channel info
-            if expr_type == BaseType.CHANNEL:
-                expr = ctx.expression()
-                if isinstance(expr, ZincParser.FunctionCallExprContext):
-                    callee = expr.expression()
-                    if isinstance(callee, ZincParser.PrimaryExprContext):
-                        primary = callee.primaryExpression()
-                        if primary and primary.IDENTIFIER() and primary.IDENTIFIER().getText() == "chan":
-                            # Only create new ChannelTypeInfo if it doesn't exist or has UNKNOWN type
-                            # This preserves type info learned from previous passes
-                            existing_chan = self._channel_infos.get(var_name)
-                            if existing_chan is None or existing_chan.element_type == BaseType.UNKNOWN:
-                                new_info = ChannelTypeInfo(element_type=BaseType.UNKNOWN)
-                                self._channel_infos[var_name] = new_info
+            if expr_type == BaseType.CHANNEL and self._is_channel_constructor_call(ctx.expression()):
+                existing_chan = self._channel_infos.get(var_name)
+                is_bounded = bool(ctx.expression().argumentList())
+                if existing_chan is None:
+                    self._channel_infos[var_name] = ChannelTypeInfo(
+                        element_type=BaseType.UNKNOWN,
+                        is_bounded=is_bounded,
+                    )
+                else:
+                    existing_chan.is_bounded = is_bounded
 
             # Get element type from expression if it's an array
             expr_element_type = None
@@ -2030,6 +2081,64 @@ class SymbolTableVisitor(zincVisitor):
         """Visit expression statement."""
         self.visit(ctx.expression())
 
+    def visitSelectStatement(self, ctx: ZincParser.SelectStatementContext) -> None:
+        """Visit a select statement and validate case structure."""
+        default_count = sum(
+            isinstance(case_ctx, ZincParser.SelectDefaultCaseContext)
+            for case_ctx in ctx.selectCase()
+        )
+        if default_count > 1:
+            raise ZincTypeError("select supports at most one default case")
+        for case_ctx in ctx.selectCase():
+            self.visit(case_ctx)
+
+    def visitSelectReceiveCase(self, ctx: ZincParser.SelectReceiveCaseContext) -> None:
+        """Visit a select receive case."""
+        binding_name = ctx.IDENTIFIER(0).getText()
+        channel_name = ctx.IDENTIFIER(1).getText()
+        channel_symbol = self.symbols.lookup_by_id(channel_name)
+        if channel_symbol is None or channel_symbol.resolved_type != BaseType.CHANNEL:
+            raise ZincTypeError(f"'{channel_name}' is not a channel")
+        if channel_symbol.kind == SymbolKind.PARAMETER:
+            raise ZincTypeError("cannot receive from channel parameter")
+
+        block_name = self._next_block_name("select")
+        self.symbols.enter_scope(block_name)
+        try:
+            channel_info = self._channel_info_for_name(channel_name)
+            self.symbols.define(
+                id=binding_name,
+                kind=SymbolKind.VARIABLE,
+                resolved_type=channel_info.element_type,
+                interval=ctx.IDENTIFIER(0).getSourceInterval(),
+                is_shadow=self.symbols.lookup_by_id(binding_name) is not None,
+            )
+            self.visit(ctx.block())
+        finally:
+            self.symbols.exit_scope()
+
+    def visitSelectSendCase(self, ctx: ZincParser.SelectSendCaseContext) -> None:
+        """Visit a select send case."""
+        channel_name = ctx.IDENTIFIER().getText()
+        value_type = self.visit(ctx.expression())
+        self._merge_channel_value_type(channel_name, value_type)
+
+        block_name = self._next_block_name("select")
+        self.symbols.enter_scope(block_name)
+        try:
+            self.visit(ctx.block())
+        finally:
+            self.symbols.exit_scope()
+
+    def visitSelectDefaultCase(self, ctx: ZincParser.SelectDefaultCaseContext) -> None:
+        """Visit a select default case."""
+        block_name = self._next_block_name("select")
+        self.symbols.enter_scope(block_name)
+        try:
+            self.visit(ctx.block())
+        finally:
+            self.symbols.exit_scope()
+
     def visitSpawnStatement(self, ctx: ZincParser.SpawnStatementContext) -> None:
         """Visit spawn statement and create specialization for spawned function."""
         func_expr = ctx.expression()
@@ -2061,53 +2170,52 @@ class SymbolTableVisitor(zincVisitor):
             return
 
         mangled = self.atlas.add_specialization(
-            resolved_function.qualified_name, arg_types, func_def, self._current_function
+            resolved_function.qualified_name,
+            arg_types,
+            func_def,
+            self._current_function,
+            arg_channel_infos,
         )
         key = (self._current_function, ctx.getSourceInterval())
         self.specialization_map[key] = mangled
         self.atlas.functions[mangled].is_async = True
         for idx, chan_info in arg_channel_infos.items():
-            if idx not in self.atlas.functions[mangled].arg_channel_infos:
-                self.atlas.functions[mangled].arg_channel_infos[idx] = []
-            self.atlas.functions[mangled].arg_channel_infos[idx].append(chan_info)
+            self.atlas.functions[mangled].arg_channel_infos.setdefault(idx, [])
+            if all(
+                existing is not chan_info
+                for existing in self.atlas.functions[mangled].arg_channel_infos[idx]
+            ):
+                self.atlas.functions[mangled].arg_channel_infos[idx].append(chan_info)
 
     def visitChannelSendStatement(self, ctx: ZincParser.ChannelSendStatementContext) -> None:
         """Visit channel send statement and infer channel element type."""
-        # Grammar: IDENTIFIER '<-' expression
         channel_name = ctx.IDENTIFIER().getText()
         value_type = self.visit(ctx.expression())
-
-        # Update channel info with inferred element type
-        # If this is a function parameter, update ALL caller's channel infos
-        if channel_name in self._channel_param_all_infos:
-            all_infos = self._channel_param_all_infos[channel_name]
-            for chan_info in all_infos:
-                if chan_info.element_type == BaseType.UNKNOWN:
-                    chan_info.element_type = value_type
-        elif channel_name in self._channel_infos:
-            chan_info = self._channel_infos[channel_name]
-            if chan_info.element_type == BaseType.UNKNOWN:
-                chan_info.element_type = value_type
+        self._merge_channel_value_type(channel_name, value_type)
 
     def visitChannelReceiveExpr(self, ctx: ZincParser.ChannelReceiveExprContext) -> BaseType:
         """Visit channel receive expression."""
-        # Grammar: '<-' expression
-        # The expression should be a channel variable
         chan_expr = ctx.expression()
-        self.visit(chan_expr)
+        expr_type = self.visit(chan_expr)
 
-        # Try to get channel name and look up element type
         if isinstance(chan_expr, ZincParser.PrimaryExprContext):
             primary = chan_expr.primaryExpression()
             if primary and primary.IDENTIFIER():
                 channel_name = primary.IDENTIFIER().getText()
-                if channel_name in self._channel_infos:
-                    elem_type = self._channel_infos[channel_name].element_type
-                    self.symbols.define_temp(
-                        resolved_type=elem_type,
-                        interval=ctx.getSourceInterval(),
-                    )
-                    return elem_type
+                channel_symbol = self.symbols.lookup_by_id(channel_name)
+                if channel_symbol is None or channel_symbol.resolved_type != BaseType.CHANNEL:
+                    raise ZincTypeError(f"'{channel_name}' is not a channel")
+                if channel_symbol.kind == SymbolKind.PARAMETER:
+                    raise ZincTypeError("cannot receive from channel parameter")
+                elem_type = self._channel_info_for_name(channel_name).element_type
+                self.symbols.define_temp(
+                    resolved_type=elem_type,
+                    interval=ctx.getSourceInterval(),
+                )
+                return elem_type
+
+        if expr_type != BaseType.CHANNEL:
+            raise ZincTypeError("channel receive expects a channel expression")
 
         self.symbols.define_temp(
             resolved_type=BaseType.UNKNOWN,

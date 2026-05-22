@@ -1,0 +1,19 @@
+fn worker(results, value) {
+    results <- value * value
+}
+
+fn main() {
+    results = chan()
+
+    spawn worker(results, 1)
+    spawn worker(results, 2)
+    spawn worker(results, 3)
+
+    total = 0
+    for i in 0..3 {
+        value = <-results
+        total = total + value
+    }
+
+    print("{total}")
+}

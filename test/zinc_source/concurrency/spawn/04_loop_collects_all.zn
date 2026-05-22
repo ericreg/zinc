@@ -1,0 +1,19 @@
+fn emit(results, value) {
+    results <- value
+}
+
+fn main() {
+    results = chan()
+
+    for i in 1..=4 {
+        spawn emit(results, i)
+    }
+
+    total = 0
+    for i in 0..4 {
+        value = <-results
+        total = total + value
+    }
+
+    print("{total}")
+}

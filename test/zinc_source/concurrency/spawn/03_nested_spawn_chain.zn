@@ -1,0 +1,17 @@
+fn grandchild() {
+    print("grandchild")
+}
+
+fn child() {
+    spawn grandchild()
+}
+
+fn parent() {
+    child()
+    print("parent")
+}
+
+fn main() {
+    parent()
+    print("done")
+}

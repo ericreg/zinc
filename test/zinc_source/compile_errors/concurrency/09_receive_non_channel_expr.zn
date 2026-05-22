@@ -1,0 +1,7 @@
+// expected-error: 'value' is not a channel
+
+fn main() {
+    value = 1
+    received = <-value
+    print("{received}")
+}

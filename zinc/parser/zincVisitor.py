@@ -1,4 +1,4 @@
-# Generated from zinc.g4 by ANTLR 4.13.2
+# Generated from zinc/parser/zinc.g4 by ANTLR 4.13.2
 from antlr4 import *
 if "." in __name__:
     from .zincParser import zincParser
@@ -189,6 +189,11 @@ class zincVisitor(ParseTreeVisitor):
         return self.visitChildren(ctx)
 
 
+    # Visit a parse tree produced by zincParser#selectStatement.
+    def visitSelectStatement(self, ctx:zincParser.SelectStatementContext):
+        return self.visitChildren(ctx)
+
+
     # Visit a parse tree produced by zincParser#channelSendStatement.
     def visitChannelSendStatement(self, ctx:zincParser.ChannelSendStatementContext):
         return self.visitChildren(ctx)
@@ -236,11 +241,6 @@ class zincVisitor(ParseTreeVisitor):
 
     # Visit a parse tree produced by zincParser#primaryExpr.
     def visitPrimaryExpr(self, ctx:zincParser.PrimaryExprContext):
-        return self.visitChildren(ctx)
-
-
-    # Visit a parse tree produced by zincParser#selectExpr.
-    def visitSelectExpr(self, ctx:zincParser.SelectExprContext):
         return self.visitChildren(ctx)
 
 
@@ -344,13 +344,18 @@ class zincVisitor(ParseTreeVisitor):
         return self.visitChildren(ctx)
 
 
-    # Visit a parse tree produced by zincParser#selectExpression.
-    def visitSelectExpression(self, ctx:zincParser.SelectExpressionContext):
+    # Visit a parse tree produced by zincParser#selectReceiveCase.
+    def visitSelectReceiveCase(self, ctx:zincParser.SelectReceiveCaseContext):
         return self.visitChildren(ctx)
 
 
-    # Visit a parse tree produced by zincParser#selectCase.
-    def visitSelectCase(self, ctx:zincParser.SelectCaseContext):
+    # Visit a parse tree produced by zincParser#selectSendCase.
+    def visitSelectSendCase(self, ctx:zincParser.SelectSendCaseContext):
+        return self.visitChildren(ctx)
+
+
+    # Visit a parse tree produced by zincParser#selectDefaultCase.
+    def visitSelectDefaultCase(self, ctx:zincParser.SelectDefaultCaseContext):
         return self.visitChildren(ctx)
 
 

@@ -1,0 +1,18 @@
+fn main() {
+    primary = chan(1)
+    backup = chan(1)
+
+    primary <- 1
+
+    select {
+        case primary <- 2 {
+            print("primary")
+        }
+        case backup <- 3 {
+            print("backup")
+        }
+    }
+
+    print(<- primary)
+    print(<- backup)
+}

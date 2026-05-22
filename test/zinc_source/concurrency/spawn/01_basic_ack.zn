@@ -1,0 +1,10 @@
+fn acknowledge(done) {
+    done <- "ok"
+}
+
+fn main() {
+    done = chan()
+    spawn acknowledge(done)
+    status = <-done
+    print("{status}")
+}

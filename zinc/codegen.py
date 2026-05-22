@@ -3,6 +3,8 @@
 import re
 from dataclasses import dataclass, field
 
+from antlr4 import ParserRuleContext
+
 from zinc.parser.zincVisitor import zincVisitor
 from zinc.parser.zincParser import zincParser as ZincParser
 from zinc.atlas import Atlas, FunctionInstance, StructInstance, ConstInstance, StructFieldInfo, StructMethodInfo
@@ -90,6 +92,8 @@ class CodeGenVisitor(zincVisitor):
         self._expected_set_info: SetTypeInfo | None = None
         self._expected_tuple_info: TupleTypeInfo | None = None
         self._spawn_handles_var: str | None = None
+        self._select_counter = 0
+        self._current_channel_params: set[str] = set()
 
     def generate(self) -> RustProgram:
         """Main entry point - generate Rust code for all reachable code."""
@@ -109,6 +113,7 @@ class CodeGenVisitor(zincVisitor):
                 self._current_function = func.mangled_name
                 self._current_module = func.module_id
                 self._declared_vars.clear()
+                self._current_channel_params = set()
                 main_body = self._generate_function_body(func)
             else:
                 functions.append(self._generate_function(func))
@@ -218,6 +223,75 @@ class CodeGenVisitor(zincVisitor):
                                 if method and method.self_mutability == "&mut self":
                                     self._mut_struct_vars.add(target_text)
 
+    def _node_requires_async(self, node, function_name: str | None) -> bool:
+        """Return True when a parse subtree requires async Rust lowering."""
+        if isinstance(node, ZincParser.SelectStatementContext):
+            return True
+        if isinstance(node, ZincParser.ChannelReceiveExprContext):
+            return True
+        if isinstance(node, ZincParser.AwaitExprContext):
+            return True
+        if isinstance(node, ZincParser.ChannelSendStatementContext):
+            chan_info = self._channel_infos.get(node.IDENTIFIER().getText())
+            return bool(chan_info and chan_info.is_bounded)
+        if isinstance(node, ZincParser.FunctionCallExprContext):
+            key = (function_name, node.getSourceInterval())
+            mangled = self._specialization_map.get(key)
+            if mangled and mangled in self.atlas.functions and self.atlas.functions[mangled].is_async:
+                return True
+
+        if isinstance(node, ParserRuleContext):
+            for i in range(node.getChildCount()):
+                child = node.getChild(i)
+                if isinstance(child, ParserRuleContext) and self._node_requires_async(child, function_name):
+                    return True
+        return False
+
+    def _channel_sender_expr(self, name: str, clone: bool = False) -> str:
+        """Render the Rust sender endpoint for a Zinc channel value."""
+        if name in self._current_channel_params:
+            base = name
+        elif name in self._channel_infos:
+            base = f"{name}_tx"
+        else:
+            base = name
+        return f"{base}.clone()" if clone else base
+
+    def _channel_receiver_expr(self, name: str) -> str:
+        """Render the Rust receiver endpoint for a Zinc channel value."""
+        if name in self._current_channel_params:
+            return name
+        if name in self._channel_infos:
+            return f"{name}_rx"
+        return name
+
+    def _render_channel_value(self, channel_name: str, expr_ctx) -> str:
+        """Render a channel payload with the channel element type's ownership rules."""
+        value = self.visit(expr_ctx)
+        chan_info = self._channel_infos.get(channel_name)
+        target_type = chan_info.element_type if chan_info else self._get_expr_type(expr_ctx)
+        return self._coerce_owned(value, target_type, expr_ctx)
+
+    def _render_scoped_block(self, block_ctx, prelude: list[str] | None = None, local_names: set[str] | None = None) -> list[str]:
+        """Render a block while keeping block-local declarations out of outer scopes."""
+        previous_declared = set(self._declared_vars)
+        if local_names:
+            self._declared_vars.update(local_names)
+        try:
+            body = self._generate_block(block_ctx)
+        finally:
+            self._declared_vars = previous_declared
+        if prelude:
+            return [*prelude, *body]
+        return body
+
+    def _append_block_lines(self, lines: list[str], stmts: list[str], indent: int) -> None:
+        """Append rendered statements with a fixed indentation level."""
+        prefix = "    " * indent
+        for stmt in stmts:
+            for line in stmt.split("\n"):
+                lines.append(f"{prefix}{line}")
+
     def _generate_imports(self) -> list[str]:
         """Generate import statements based on what's used."""
         imports = []
@@ -236,7 +310,7 @@ class CodeGenVisitor(zincVisitor):
         async_funcs = {
             name
             for name, func in self.atlas.functions.items()
-            if func.is_async or self._block_contains_spawn(func.ctx.block())
+            if func.is_async or self._node_requires_async(func.ctx.block(), name)
         }
 
         changed = True
@@ -382,6 +456,7 @@ class CodeGenVisitor(zincVisitor):
         self._current_function = func.mangled_name
         self._current_module = func.module_id
         self._declared_vars.clear()
+        self._current_channel_params = set()
         ctx: ZincParser.FunctionDeclarationContext = func.ctx
 
         # Get parameter names and types from func.arg_types
@@ -395,6 +470,7 @@ class CodeGenVisitor(zincVisitor):
                         # Use first channel info (all should have same element type)
                         chan_info = func.arg_channel_infos[i][0]
                         type_str = chan_info.to_rust_sender()
+                        self._current_channel_params.add(param_name)
                     # Check if this is an array parameter with element type info
                     elif i in func.arg_array_infos:
                         arr_info = func.arg_array_infos[i]
@@ -1023,6 +1099,14 @@ class CodeGenVisitor(zincVisitor):
                 # Convert string literal to String::from() for String parameters
                 if param_type == BaseType.STRING and arg.startswith('"'):
                     processed.append(f"String::from({arg})")
+                elif param_type == BaseType.CHANNEL and i in func.arg_channel_infos:
+                    arg_ctx = arg_ctxs[i] if arg_ctxs and i < len(arg_ctxs) else None
+                    if isinstance(arg_ctx, ZincParser.PrimaryExprContext):
+                        primary = arg_ctx.primaryExpression()
+                        if primary and primary.IDENTIFIER():
+                            processed.append(self._channel_sender_expr(primary.IDENTIFIER().getText(), clone=True))
+                            continue
+                    processed.append(f"{arg}.clone()")
                 # Pass arrays by reference
                 elif param_type == BaseType.ARRAY and i in func.arg_array_infos:
                     arr_info = func.arg_array_infos[i]
@@ -1200,15 +1284,12 @@ class CodeGenVisitor(zincVisitor):
 
     def visitChannelReceiveExpr(self, ctx: ZincParser.ChannelReceiveExprContext) -> str:
         """Visit channel receive expression."""
-        # Get the channel variable name and use _rx suffix
         chan_expr = ctx.expression()
         if isinstance(chan_expr, ZincParser.PrimaryExprContext):
             primary = chan_expr.primaryExpression()
             if primary and primary.IDENTIFIER():
                 chan_name = primary.IDENTIFIER().getText()
-                # Check if this is a channel we created (in main)
-                if chan_name in self._channel_infos:
-                    return f"{chan_name}_rx.recv().await.unwrap()"
+                return f"{self._channel_receiver_expr(chan_name)}.recv().await.unwrap()"
         receiver = self.visit(chan_expr)
         return f"{receiver}.recv().await.unwrap()"
 
@@ -1267,15 +1348,22 @@ class CodeGenVisitor(zincVisitor):
                 primary = callee.primaryExpression()
                 if primary and primary.IDENTIFIER() and primary.IDENTIFIER().getText() == "chan":
                     var_name = target
+                    capacity = None
+                    if expr.argumentList() and expr.argumentList().expression():
+                        capacity = self.visit(expr.argumentList().expression(0))
                     # Look up channel info to get element type
                     if var_name in self._channel_infos:
                         chan_info = self._channel_infos[var_name]
                         elem_type = type_to_rust(chan_info.element_type)
                         self._declared_vars.add(var_name)
+                        if chan_info.is_bounded and capacity is not None:
+                            return f"let ({var_name}_tx, mut {var_name}_rx) = tokio::sync::mpsc::channel::<{elem_type}>({capacity});"
                         return f"let ({var_name}_tx, mut {var_name}_rx) = tokio::sync::mpsc::unbounded_channel::<{elem_type}>();"
                     else:
                         # Fallback - unknown element type
                         self._declared_vars.add(var_name)
+                        if capacity is not None:
+                            return f"let ({var_name}_tx, mut {var_name}_rx) = tokio::sync::mpsc::channel({capacity});"
                         return f"let ({var_name}_tx, mut {var_name}_rx) = tokio::sync::mpsc::unbounded_channel();"
 
         target_symbol = None
@@ -1450,6 +1538,142 @@ class CodeGenVisitor(zincVisitor):
         lines.append("}")
         return "\n".join(lines)
 
+    def _next_select_id(self) -> int:
+        """Return a unique id for generated select helper names."""
+        select_id = self._select_counter
+        self._select_counter += 1
+        return select_id
+
+    def _render_select_case_body(self, block_ctx, binding_name: str | None = None, binding_source: str | None = None) -> list[str]:
+        """Render a select case body, keeping header bindings local to the case."""
+        prelude: list[str] = []
+        local_names: set[str] | None = None
+        if binding_name and binding_source:
+            prelude.append(f"let {binding_name} = {binding_source};")
+            local_names = {binding_name}
+        return self._render_scoped_block(block_ctx, prelude=prelude, local_names=local_names)
+
+    def _render_select_without_default(self, case_ctxs: list, select_id: int) -> str:
+        """Lower a blocking select to tokio::select!."""
+        lines = ["tokio::select! {"]
+        for branch_index, case_ctx in enumerate(case_ctxs):
+            if isinstance(case_ctx, ZincParser.SelectReceiveCaseContext):
+                binding_name = case_ctx.IDENTIFIER(0).getText()
+                channel_name = case_ctx.IDENTIFIER(1).getText()
+                recv_name = f"__zinc_select_value_{select_id}_{branch_index}"
+                receiver = self._channel_receiver_expr(channel_name)
+                body = self._render_select_case_body(case_ctx.block(), binding_name, recv_name)
+                lines.append(f"    {recv_name} = async {{ {receiver}.recv().await.unwrap() }} => {{")
+                self._append_block_lines(lines, body, 2)
+                lines.append("    },")
+                continue
+
+            channel_name = case_ctx.IDENTIFIER().getText()
+            sender = self._channel_sender_expr(channel_name)
+            value = self._render_channel_value(channel_name, case_ctx.expression())
+            chan_info = self._channel_infos.get(channel_name)
+            body = self._render_select_case_body(case_ctx.block())
+            if chan_info and chan_info.is_bounded:
+                result_name = f"__zinc_select_result_{select_id}_{branch_index}"
+                lines.append(f"    {result_name} = {sender}.send({value}) => {{")
+                lines.append(f"        {result_name}.unwrap();")
+            else:
+                lines.append(f"    _ = async {{ {sender}.send({value}).unwrap(); }} => {{")
+            self._append_block_lines(lines, body, 2)
+            lines.append("    },")
+        lines.append("}")
+        return "\n".join(lines)
+
+    def _render_select_with_default(self, case_ctxs: list, default_case, select_id: int) -> str:
+        """Lower a non-blocking select with default using explicit probe order."""
+        default_body = self._render_select_case_body(default_case.block())
+        if not case_ctxs:
+            lines = ["{"]
+            self._append_block_lines(lines, default_body, 1)
+            lines.append("}")
+            return "\n".join(lines)
+
+        label = f"'__zinc_select_{select_id}"
+        static_name = f"__ZINC_SELECT_STATE_{select_id}"
+        start_name = f"__zinc_select_start_{select_id}"
+        offset_name = f"__zinc_select_offset_{select_id}"
+        case_count = len(case_ctxs)
+
+        lines = [
+            f"static {static_name}: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);",
+            f"let {start_name} = {static_name}.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % {case_count};",
+            f"{label}: {{",
+            f"    for {offset_name} in 0..{case_count} {{",
+            f"        match ({start_name} + {offset_name}) % {case_count} {{",
+        ]
+
+        for branch_index, case_ctx in enumerate(case_ctxs):
+            lines.append(f"            {branch_index} => {{")
+            if isinstance(case_ctx, ZincParser.SelectReceiveCaseContext):
+                binding_name = case_ctx.IDENTIFIER(0).getText()
+                channel_name = case_ctx.IDENTIFIER(1).getText()
+                value_name = f"__zinc_select_value_{select_id}_{branch_index}"
+                receiver = self._channel_receiver_expr(channel_name)
+                body = self._render_select_case_body(case_ctx.block(), binding_name, value_name)
+                lines.append(f"                match {receiver}.try_recv() {{")
+                lines.append(f"                    Ok({value_name}) => {{")
+                self._append_block_lines(lines, body, 6)
+                lines.append(f"                        break {label};")
+                lines.append("                    },")
+                lines.append("                    Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {},")
+                lines.append('                    Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => panic!("select receive on closed channel"),')
+                lines.append("                }")
+            else:
+                channel_name = case_ctx.IDENTIFIER().getText()
+                sender = self._channel_sender_expr(channel_name)
+                value = self._render_channel_value(channel_name, case_ctx.expression())
+                chan_info = self._channel_infos.get(channel_name)
+                body = self._render_select_case_body(case_ctx.block())
+                if chan_info and chan_info.is_bounded:
+                    lines.append(f"                match {sender}.try_send({value}) {{")
+                    lines.append("                    Ok(()) => {")
+                    self._append_block_lines(lines, body, 6)
+                    lines.append(f"                        break {label};")
+                    lines.append("                    },")
+                    lines.append("                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {},")
+                    lines.append('                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => panic!("select send on closed channel"),')
+                    lines.append("                }")
+                else:
+                    lines.append(f"                match {sender}.send({value}) {{")
+                    lines.append("                    Ok(()) => {")
+                    self._append_block_lines(lines, body, 6)
+                    lines.append(f"                        break {label};")
+                    lines.append("                    },")
+                    lines.append('                    Err(_) => panic!("select send on closed channel"),')
+                    lines.append("                }")
+            lines.append("            }")
+
+        lines.extend([
+            "            _ => unreachable!(),",
+            "        }",
+            "    }",
+        ])
+        self._append_block_lines(lines, default_body, 1)
+        lines.append("}")
+        return "\n".join(lines)
+
+    def visitSelectStatement(self, ctx: ZincParser.SelectStatementContext) -> str:
+        """Visit a select statement."""
+        select_id = self._next_select_id()
+        cases = list(ctx.selectCase())
+        default_case = next(
+            (case_ctx for case_ctx in cases if isinstance(case_ctx, ZincParser.SelectDefaultCaseContext)),
+            None,
+        )
+        non_default_cases = [
+            case_ctx
+            for case_ctx in cases
+            if not isinstance(case_ctx, ZincParser.SelectDefaultCaseContext)
+        ]
+        if default_case is not None:
+            return self._render_select_with_default(non_default_cases, default_case, select_id)
+        return self._render_select_without_default(non_default_cases, select_id)
+
     def visitReturnStatement(self, ctx: ZincParser.ReturnStatementContext) -> str:
         """Visit return statement."""
         if ctx.expression():
@@ -1505,14 +1729,13 @@ class CodeGenVisitor(zincVisitor):
         if ctx.argumentList():
             for i, arg in enumerate(ctx.argumentList().expression()):
                 arg_code = self.visit(arg)
-                # Check if this argument is a channel - use _tx suffix
                 if isinstance(arg, ZincParser.PrimaryExprContext):
                     primary = arg.primaryExpression()
                     if primary and primary.IDENTIFIER():
                         var_name = primary.IDENTIFIER().getText()
                         if var_name in self._channel_infos:
                             arg_code = f"__zinc_spawn_arg_{i}"
-                            setup.append(f"let {arg_code} = {var_name}_tx.clone();")
+                            setup.append(f"let {arg_code} = {self._channel_sender_expr(var_name, clone=True)};")
                 args.append(arg_code)
 
         # Look up mangled name from specialization map (scoped by current function)
@@ -1532,8 +1755,12 @@ class CodeGenVisitor(zincVisitor):
 
     def visitChannelSendStatement(self, ctx: ZincParser.ChannelSendStatementContext) -> str:
         """Visit channel send statement."""
-        sender = ctx.IDENTIFIER().getText()
-        value = self.visit(ctx.expression())
+        channel_name = ctx.IDENTIFIER().getText()
+        sender = self._channel_sender_expr(channel_name)
+        value = self._render_channel_value(channel_name, ctx.expression())
+        chan_info = self._channel_infos.get(channel_name)
+        if chan_info and chan_info.is_bounded:
+            return f"{sender}.send({value}).await.unwrap();"
         return f"{sender}.send({value}).unwrap();"
 
     def visitExpressionStatement(self, ctx: ZincParser.ExpressionStatementContext) -> str:

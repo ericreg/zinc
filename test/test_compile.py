@@ -22,7 +22,13 @@ RUST_SRC_DIR = RUST_SOURCE_DIR / "src"  # Cargo src directory
 OUTPUT_DIR = TEST_DIR / "output"
 CARGO_TOML = RUST_SOURCE_DIR / "Cargo.toml"
 NON_DETERMINISTIC_FOLDER = "non_deterministic"
-NON_DETERMINISTIC_TESTS = {"bounded_channels"}
+COMPILE_ERROR_GROUPS = (
+    "collections",
+    "tuples",
+    "iterations",
+    "modules",
+    "concurrency",
+)
 
 
 def is_entry_fixture(relative: Path) -> bool:
@@ -125,7 +131,7 @@ def compile_zinc(source_path: Path) -> str:
 def is_nondeterministic_test(test_path: str) -> bool:
     """Check if a test should use non-deterministic comparison."""
     parts = Path(test_path).parts
-    return NON_DETERMINISTIC_FOLDER in parts or test_path in NON_DETERMINISTIC_TESTS
+    return NON_DETERMINISTIC_FOLDER in parts
 
 
 def lines_as_multiset(text: str) -> Counter[str]:
@@ -212,24 +218,10 @@ def assert_compile_error_files(group: str) -> None:
             raise AssertionError(f"{source_path}: {exc}") from exc
 
 
-def test_collection_compile_errors() -> None:
-    """Invalid collection fixtures fail during Zinc type resolution."""
-    assert_compile_error_files("collections")
-
-
-def test_tuple_iteration_compile_errors() -> None:
-    """Invalid tuple and dict iteration fixtures fail during Zinc type resolution."""
-    assert_compile_error_files("tuples")
-
-
-def test_iteration_compile_errors() -> None:
-    """Invalid iteration fixtures fail during Zinc type resolution."""
-    assert_compile_error_files("iterations")
-
-
-def test_module_compile_errors() -> None:
-    """Invalid module fixtures fail during package loading or Zinc resolution."""
-    assert_compile_error_files("modules")
+@pytest.mark.parametrize("group", COMPILE_ERROR_GROUPS, ids=list(COMPILE_ERROR_GROUPS))
+def test_compile_error_group(group: str) -> None:
+    """Each negative fixture group fails during package loading or Zinc resolution."""
+    assert_compile_error_files(group)
 
 
 def test_missing_pkg_toml(tmp_path: Path) -> None:

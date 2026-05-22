@@ -128,10 +128,9 @@ class ChannelTypeInfo:
 
     def to_rust_type_suffix(self) -> str:
         """Generate type suffix for mangled names (no special chars)."""
-        elem = type_to_rust(self.element_type)
         if self.is_bounded:
-            return f"Sender{elem}"
-        return f"UnboundedSender{elem}"
+            return "Sender"
+        return "UnboundedSender"
 
 
 @dataclass

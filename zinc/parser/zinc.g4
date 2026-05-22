@@ -26,6 +26,7 @@ statement
     | breakStatement
     | continueStatement
     | spawnStatement
+    | selectStatement
     | block
     ;
 
@@ -186,6 +187,10 @@ spawnStatement
     : 'spawn' expression '(' argumentList? ')'
     ;
 
+selectStatement
+    : 'select' '{' selectCase+ '}'
+    ;
+
 channelSendStatement
     : IDENTIFIER '<-' expression
     ;
@@ -210,7 +215,6 @@ expression
     | expression ('==' | '!=') expression                       # equalityExpr
     | expression ('and' | '&&') expression                      # logicalAndExpr
     | expression ('or' | '||') expression                       # logicalOrExpr
-    | selectExpression                                          # selectExpr
     | lambdaExpression                                          # lambdaExpr
     | '(' expression ')'                                        # parenExpr
     ;
@@ -276,13 +280,10 @@ argumentList
     : expression (',' expression)*
     ;
 
-selectExpression
-    : 'select' '{' selectCase+ '}'
-    ;
-
 selectCase
-    : 'case' 'await' expression block
-    | 'case' expression block
+    : 'case' IDENTIFIER '=' '<-' IDENTIFIER block               # selectReceiveCase
+    | 'case' IDENTIFIER '<-' expression block                   # selectSendCase
+    | 'default' block                                           # selectDefaultCase
     ;
 
 lambdaExpression
@@ -319,6 +320,7 @@ NOT         : 'not';
 SELF        : 'self';
 SELECT      : 'select';
 CASE        : 'case';
+DEFAULT     : 'default';
 SPAWN       : 'spawn';
 
 // --- Literals ---

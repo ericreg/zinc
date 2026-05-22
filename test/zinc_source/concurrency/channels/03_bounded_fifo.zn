@@ -1,0 +1,11 @@
+fn main() {
+    values = chan(3)
+
+    values <- 1
+    values <- 2
+    values <- 3
+
+    print(<-values)
+    print(<-values)
+    print(<-values)
+}

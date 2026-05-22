@@ -1,0 +1,14 @@
+fn emit(values) {
+    values <- 1
+    values <- 2
+    values <- 3
+}
+
+fn main() {
+    values = chan(2)
+    spawn emit(values)
+
+    print(<-values)
+    print(<-values)
+    print(<-values)
+}

@@ -150,6 +150,7 @@ class Atlas:
         arg_types: list[BaseType],
         ctx: ParserRuleContext,
         caller_mangled: str | None = None,
+        arg_channel_infos: dict[int, ChannelTypeInfo] | None = None,
         arg_array_infos: dict[int, ArrayTypeInfo] | None = None,
         arg_dict_infos: dict[int, DictTypeInfo] | None = None,
         arg_set_infos: dict[int, SetTypeInfo] | None = None,
@@ -159,6 +160,7 @@ class Atlas:
         mangled = self._mangle_name(
             qualified_name,
             arg_types,
+            arg_channel_infos,
             arg_array_infos,
             arg_dict_infos,
             arg_set_infos,
@@ -173,6 +175,10 @@ class Atlas:
                 mangled_name=mangled,
                 ctx=ctx,
                 arg_types=list(arg_types),
+                arg_channel_infos={
+                    index: [info]
+                    for index, info in (arg_channel_infos or {}).items()
+                },
                 arg_array_infos=arg_array_infos or {},
                 arg_dict_infos=arg_dict_infos or {},
                 arg_set_infos=arg_set_infos or {},
@@ -189,6 +195,7 @@ class Atlas:
         self,
         qualified_name: str,
         arg_types: list[BaseType],
+        arg_channel_infos: dict[int, ChannelTypeInfo] | None = None,
         arg_array_infos: dict[int, ArrayTypeInfo] | None = None,
         arg_dict_infos: dict[int, DictTypeInfo] | None = None,
         arg_set_infos: dict[int, SetTypeInfo] | None = None,
@@ -201,7 +208,9 @@ class Atlas:
 
         type_parts = []
         for i, base_type in enumerate(arg_types):
-            if base_type == BaseType.ARRAY and arg_array_infos and i in arg_array_infos:
+            if base_type == BaseType.CHANNEL and arg_channel_infos and i in arg_channel_infos:
+                type_parts.append(arg_channel_infos[i].to_rust_type_suffix())
+            elif base_type == BaseType.ARRAY and arg_array_infos and i in arg_array_infos:
                 type_parts.append(arg_array_infos[i].to_rust_type_suffix())
             elif base_type == BaseType.DICT and arg_dict_infos and i in arg_dict_infos:
                 type_parts.append(arg_dict_infos[i].to_rust_type_suffix())

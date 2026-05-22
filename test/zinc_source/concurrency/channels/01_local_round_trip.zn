@@ -1,0 +1,6 @@
+fn main() {
+    values = chan()
+    values <- 5
+    value = <-values
+    print("{value}")
+}

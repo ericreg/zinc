@@ -1,0 +1,19 @@
+fn double(out, value) {
+    out <- value * 2
+}
+
+fn triple(out, value) {
+    out <- value * 3
+}
+
+fn main() {
+    doubles = chan()
+    triples = chan()
+    source = 5
+
+    spawn double(doubles, source)
+    spawn triple(triples, source)
+
+    print(<-doubles)
+    print(<-triples)
+}

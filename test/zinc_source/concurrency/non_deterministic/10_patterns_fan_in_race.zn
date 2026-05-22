@@ -1,0 +1,30 @@
+fn send_left(out) {
+    out <- "left"
+}
+
+fn send_right(out) {
+    out <- "right"
+}
+
+fn main() {
+    left = chan()
+    right = chan()
+    merged = chan()
+
+    spawn send_left(left)
+    spawn send_right(right)
+
+    for i in 0..2 {
+        select {
+            case msg = <-left {
+                merged <- msg
+            }
+            case msg = <-right {
+                merged <- msg
+            }
+        }
+    }
+
+    print(<-merged)
+    print(<-merged)
+}

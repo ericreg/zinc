@@ -1,0 +1,11 @@
+// expected-error: 'value' is not a channel
+
+fn main() {
+    value = 1
+
+    select {
+        case msg = <-value {
+            print("{msg}")
+        }
+    }
+}

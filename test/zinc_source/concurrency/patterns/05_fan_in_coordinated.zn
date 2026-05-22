@@ -1,0 +1,25 @@
+fn send_left(out) {
+    out <- 1
+}
+
+fn send_right(out) {
+    out <- 2
+}
+
+fn main() {
+    left = chan()
+    right = chan()
+    merged = chan()
+
+    spawn send_left(left)
+    spawn send_right(right)
+
+    left_value = <-left
+    right_value = <-right
+
+    merged <- left_value
+    merged <- right_value
+
+    print(<-merged)
+    print(<-merged)
+}

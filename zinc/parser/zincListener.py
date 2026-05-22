@@ -1,4 +1,4 @@
-# Generated from zinc.g4 by ANTLR 4.13.2
+# Generated from zinc/parser/zinc.g4 by ANTLR 4.13.2
 from antlr4 import *
 if "." in __name__:
     from .zincParser import zincParser
@@ -332,6 +332,15 @@ class zincListener(ParseTreeListener):
         pass
 
 
+    # Enter a parse tree produced by zincParser#selectStatement.
+    def enterSelectStatement(self, ctx:zincParser.SelectStatementContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#selectStatement.
+    def exitSelectStatement(self, ctx:zincParser.SelectStatementContext):
+        pass
+
+
     # Enter a parse tree produced by zincParser#channelSendStatement.
     def enterChannelSendStatement(self, ctx:zincParser.ChannelSendStatementContext):
         pass
@@ -419,15 +428,6 @@ class zincListener(ParseTreeListener):
 
     # Exit a parse tree produced by zincParser#primaryExpr.
     def exitPrimaryExpr(self, ctx:zincParser.PrimaryExprContext):
-        pass
-
-
-    # Enter a parse tree produced by zincParser#selectExpr.
-    def enterSelectExpr(self, ctx:zincParser.SelectExprContext):
-        pass
-
-    # Exit a parse tree produced by zincParser#selectExpr.
-    def exitSelectExpr(self, ctx:zincParser.SelectExprContext):
         pass
 
 
@@ -611,21 +611,30 @@ class zincListener(ParseTreeListener):
         pass
 
 
-    # Enter a parse tree produced by zincParser#selectExpression.
-    def enterSelectExpression(self, ctx:zincParser.SelectExpressionContext):
+    # Enter a parse tree produced by zincParser#selectReceiveCase.
+    def enterSelectReceiveCase(self, ctx:zincParser.SelectReceiveCaseContext):
         pass
 
-    # Exit a parse tree produced by zincParser#selectExpression.
-    def exitSelectExpression(self, ctx:zincParser.SelectExpressionContext):
+    # Exit a parse tree produced by zincParser#selectReceiveCase.
+    def exitSelectReceiveCase(self, ctx:zincParser.SelectReceiveCaseContext):
         pass
 
 
-    # Enter a parse tree produced by zincParser#selectCase.
-    def enterSelectCase(self, ctx:zincParser.SelectCaseContext):
+    # Enter a parse tree produced by zincParser#selectSendCase.
+    def enterSelectSendCase(self, ctx:zincParser.SelectSendCaseContext):
         pass
 
-    # Exit a parse tree produced by zincParser#selectCase.
-    def exitSelectCase(self, ctx:zincParser.SelectCaseContext):
+    # Exit a parse tree produced by zincParser#selectSendCase.
+    def exitSelectSendCase(self, ctx:zincParser.SelectSendCaseContext):
+        pass
+
+
+    # Enter a parse tree produced by zincParser#selectDefaultCase.
+    def enterSelectDefaultCase(self, ctx:zincParser.SelectDefaultCaseContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#selectDefaultCase.
+    def exitSelectDefaultCase(self, ctx:zincParser.SelectDefaultCaseContext):
         pass
 
 

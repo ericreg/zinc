@@ -1,0 +1,5 @@
+// expected-error: chan\(\) capacity must be an integer
+
+fn main() {
+    values = chan(true)
+}

@@ -260,15 +260,16 @@ fn main() {
 
 Handle multiple channel operations:
 
-```rust
-loop {
-    select {
-        case await event1() {
-            // handle event 1
-        }
-        case await event2() {
-            // handle event 2
-        }
+```zinc
+select {
+    case msg = <-messages {
+        print("{msg}")
+    }
+    case work <- 1 {
+        print("sent")
+    }
+    default {
+        print("idle")
     }
 }
 ```

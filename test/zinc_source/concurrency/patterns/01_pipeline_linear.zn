@@ -1,0 +1,16 @@
+fn source(out) {
+    out <- 5
+}
+
+fn main() {
+    stage1 = chan()
+    stage2 = chan()
+
+    spawn source(stage1)
+
+    value = <-stage1
+    stage2 <- value * 2
+    result = <-stage2
+
+    print("{result}")
+}

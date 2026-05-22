@@ -1,0 +1,11 @@
+// expected-error: cannot receive from channel parameter
+
+fn helper(values) {
+    value = <-values
+    print("{value}")
+}
+
+fn main() {
+    values = chan()
+    helper(values)
+}

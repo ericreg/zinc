@@ -1,2 +1,5 @@
 - support importing and module definitions
 - scratch docker image
+- go select
+- inheritance, mixin's, decorators
+- the best parts of functional programming

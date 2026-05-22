@@ -19,14 +19,6 @@ name = "basic_dynamic_type"
 path = "src/basic_dynamic_type.rs"
 
 [[bin]]
-name = "bounded_channels"
-path = "src/bounded_channels.rs"
-
-[[bin]]
-name = "channels"
-path = "src/channels.rs"
-
-[[bin]]
 name = "collections_01_dict_literal"
 path = "src/collections/01_dict_literal.rs"
 
@@ -53,6 +45,126 @@ path = "src/collections/06_collection_parameters.rs"
 [[bin]]
 name = "collections_07_collection_returns"
 path = "src/collections/07_collection_returns.rs"
+
+[[bin]]
+name = "concurrency_channels_01_local_round_trip"
+path = "src/concurrency/channels/01_local_round_trip.rs"
+
+[[bin]]
+name = "concurrency_channels_02_spawn_parameter_round_trip"
+path = "src/concurrency/channels/02_spawn_parameter_round_trip.rs"
+
+[[bin]]
+name = "concurrency_channels_03_bounded_fifo"
+path = "src/concurrency/channels/03_bounded_fifo.rs"
+
+[[bin]]
+name = "concurrency_channels_04_bounded_send_unblocks"
+path = "src/concurrency/channels/04_bounded_send_unblocks.rs"
+
+[[bin]]
+name = "concurrency_non_deterministic_01_spawn_print_race"
+path = "src/concurrency/non_deterministic/01_spawn_print_race.rs"
+
+[[bin]]
+name = "concurrency_non_deterministic_02_spawn_completion_race"
+path = "src/concurrency/non_deterministic/02_spawn_completion_race.rs"
+
+[[bin]]
+name = "concurrency_non_deterministic_03_spawn_helper_completion_race"
+path = "src/concurrency/non_deterministic/03_spawn_helper_completion_race.rs"
+
+[[bin]]
+name = "concurrency_non_deterministic_04_spawn_loop_completion_race"
+path = "src/concurrency/non_deterministic/04_spawn_loop_completion_race.rs"
+
+[[bin]]
+name = "concurrency_non_deterministic_05_spawn_nested_completion_race"
+path = "src/concurrency/non_deterministic/05_spawn_nested_completion_race.rs"
+
+[[bin]]
+name = "concurrency_non_deterministic_06_spawn_return_completion_race"
+path = "src/concurrency/non_deterministic/06_spawn_return_completion_race.rs"
+
+[[bin]]
+name = "concurrency_non_deterministic_07_channel_multi_sender_order"
+path = "src/concurrency/non_deterministic/07_channel_multi_sender_order.rs"
+
+[[bin]]
+name = "concurrency_non_deterministic_08_select_multiple_ready_receives"
+path = "src/concurrency/non_deterministic/08_select_multiple_ready_receives.rs"
+
+[[bin]]
+name = "concurrency_non_deterministic_09_bounded_backpressure_interleaving"
+path = "src/concurrency/non_deterministic/09_bounded_backpressure_interleaving.rs"
+
+[[bin]]
+name = "concurrency_non_deterministic_10_patterns_fan_in_race"
+path = "src/concurrency/non_deterministic/10_patterns_fan_in_race.rs"
+
+[[bin]]
+name = "concurrency_patterns_01_pipeline_linear"
+path = "src/concurrency/patterns/01_pipeline_linear.rs"
+
+[[bin]]
+name = "concurrency_patterns_02_tee_broadcast"
+path = "src/concurrency/patterns/02_tee_broadcast.rs"
+
+[[bin]]
+name = "concurrency_patterns_03_request_reply"
+path = "src/concurrency/patterns/03_request_reply.rs"
+
+[[bin]]
+name = "concurrency_patterns_04_worker_pool_sum"
+path = "src/concurrency/patterns/04_worker_pool_sum.rs"
+
+[[bin]]
+name = "concurrency_patterns_05_fan_in_coordinated"
+path = "src/concurrency/patterns/05_fan_in_coordinated.rs"
+
+[[bin]]
+name = "concurrency_patterns_06_fan_out_coordinated"
+path = "src/concurrency/patterns/06_fan_out_coordinated.rs"
+
+[[bin]]
+name = "concurrency_select_01_receive_preloaded"
+path = "src/concurrency/select/01_receive_preloaded.rs"
+
+[[bin]]
+name = "concurrency_select_02_send_bounded_ready_choice"
+path = "src/concurrency/select/02_send_bounded_ready_choice.rs"
+
+[[bin]]
+name = "concurrency_select_03_default_idle"
+path = "src/concurrency/select/03_default_idle.rs"
+
+[[bin]]
+name = "concurrency_select_04_binding_shadow"
+path = "src/concurrency/select/04_binding_shadow.rs"
+
+[[bin]]
+name = "concurrency_select_05_helper_async"
+path = "src/concurrency/select/05_helper_async.rs"
+
+[[bin]]
+name = "concurrency_select_06_mixed_send_receive"
+path = "src/concurrency/select/06_mixed_send_receive.rs"
+
+[[bin]]
+name = "concurrency_spawn_01_basic_ack"
+path = "src/concurrency/spawn/01_basic_ack.rs"
+
+[[bin]]
+name = "concurrency_spawn_02_helper_waits_for_child"
+path = "src/concurrency/spawn/02_helper_waits_for_child.rs"
+
+[[bin]]
+name = "concurrency_spawn_03_nested_spawn_chain"
+path = "src/concurrency/spawn/03_nested_spawn_chain.rs"
+
+[[bin]]
+name = "concurrency_spawn_04_loop_collects_all"
+path = "src/concurrency/spawn/04_loop_collects_all.rs"
 
 [[bin]]
 name = "const_test"
@@ -341,34 +453,6 @@ path = "src/monomorphization/19_generic_with_arrays.rs"
 [[bin]]
 name = "monomorphization_20_generic_with_channels"
 path = "src/monomorphization/20_generic_with_channels.rs"
-
-[[bin]]
-name = "non_deterministic_spawn"
-path = "src/non_deterministic/spawn.rs"
-
-[[bin]]
-name = "non_deterministic_spawn_channel_multi_sender"
-path = "src/non_deterministic/spawn_channel_multi_sender.rs"
-
-[[bin]]
-name = "non_deterministic_spawn_completion"
-path = "src/non_deterministic/spawn_completion.rs"
-
-[[bin]]
-name = "non_deterministic_spawn_helper_completion"
-path = "src/non_deterministic/spawn_helper_completion.rs"
-
-[[bin]]
-name = "non_deterministic_spawn_loop_completion"
-path = "src/non_deterministic/spawn_loop_completion.rs"
-
-[[bin]]
-name = "non_deterministic_spawn_nested_completion"
-path = "src/non_deterministic/spawn_nested_completion.rs"
-
-[[bin]]
-name = "non_deterministic_spawn_return_completion"
-path = "src/non_deterministic/spawn_return_completion.rs"
 
 [[bin]]
 name = "reassign_type"
