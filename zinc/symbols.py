@@ -226,10 +226,21 @@ class SymbolTableVisitor(zincVisitor):
         if return_type is None:
             return BaseType.VOID
         mapping = {
+            "i8": BaseType.INTEGER,
+            "i16": BaseType.INTEGER,
             "i32": BaseType.INTEGER,
             "i64": BaseType.INTEGER,
+            "i128": BaseType.INTEGER,
+            "u8": BaseType.INTEGER,
+            "u16": BaseType.INTEGER,
+            "u32": BaseType.INTEGER,
+            "u64": BaseType.INTEGER,
+            "u128": BaseType.INTEGER,
+            "f8": BaseType.FLOAT,
+            "f16": BaseType.FLOAT,
             "f32": BaseType.FLOAT,
             "f64": BaseType.FLOAT,
+            "f128": BaseType.FLOAT,
             "String": BaseType.STRING,
             "string": BaseType.STRING,
             "bool": BaseType.BOOLEAN,
@@ -525,10 +536,21 @@ class SymbolTableVisitor(zincVisitor):
                 type_ann = field_ctx.type_().getText()
                 # Map to BaseType
                 type_map = {
+                    "i8": BaseType.INTEGER,
+                    "i16": BaseType.INTEGER,
                     "i32": BaseType.INTEGER,
                     "i64": BaseType.INTEGER,
+                    "i128": BaseType.INTEGER,
+                    "u8": BaseType.INTEGER,
+                    "u16": BaseType.INTEGER,
+                    "u32": BaseType.INTEGER,
+                    "u64": BaseType.INTEGER,
+                    "u128": BaseType.INTEGER,
+                    "f8": BaseType.FLOAT,
+                    "f16": BaseType.FLOAT,
                     "f32": BaseType.FLOAT,
                     "f64": BaseType.FLOAT,
+                    "f128": BaseType.FLOAT,
                     "string": BaseType.STRING,
                     "bool": BaseType.BOOLEAN,
                 }
@@ -1064,10 +1086,21 @@ class SymbolTableVisitor(zincVisitor):
         if type_name is None:
             return BaseType.UNKNOWN
         mapping = {
+            "i8": BaseType.INTEGER,
+            "i16": BaseType.INTEGER,
             "i32": BaseType.INTEGER,
             "i64": BaseType.INTEGER,
+            "i128": BaseType.INTEGER,
+            "u8": BaseType.INTEGER,
+            "u16": BaseType.INTEGER,
+            "u32": BaseType.INTEGER,
+            "u64": BaseType.INTEGER,
+            "u128": BaseType.INTEGER,
+            "f8": BaseType.FLOAT,
+            "f16": BaseType.FLOAT,
             "f32": BaseType.FLOAT,
             "f64": BaseType.FLOAT,
+            "f128": BaseType.FLOAT,
             "String": BaseType.STRING,
             "string": BaseType.STRING,
             "bool": BaseType.BOOLEAN,

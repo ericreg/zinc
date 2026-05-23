@@ -72,10 +72,21 @@ class StructFieldInfo:
         """Get Rust type string for this field."""
         if self.type_annotation:
             mapping = {
+                "i8": "i8",
+                "i16": "i16",
                 "i32": "i32",
                 "i64": "i64",
+                "i128": "i128",
+                "u8": "u8",
+                "u16": "u16",
+                "u32": "u32",
+                "u64": "u64",
+                "u128": "u128",
+                "f8": "f8",
+                "f16": "f16",
                 "f32": "f32",
                 "f64": "f64",
+                "f128": "f128",
                 "string": "String",
                 "bool": "bool",
             }
@@ -89,10 +100,21 @@ class StructFieldInfo:
                 return f"String::from({self.default_value})"
             return self.default_value
         defaults = {
+            "i8": "0",
+            "i16": "0",
             "i32": "0",
             "i64": "0",
+            "i128": "0",
+            "u8": "0",
+            "u16": "0",
+            "u32": "0",
+            "u64": "0",
+            "u128": "0",
+            "f8": "0.0",
+            "f16": "0.0",
             "f32": "0.0",
             "f64": "0.0",
+            "f128": "0.0",
             "String": "String::new()",
             "bool": "false",
         }

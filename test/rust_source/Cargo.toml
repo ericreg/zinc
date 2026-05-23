@@ -507,6 +507,10 @@ name = "structs_12_composition_imported"
 path = "src/structs/12_composition_imported.rs"
 
 [[bin]]
+name = "structs_13_base_types"
+path = "src/structs/13_base_types.rs"
+
+[[bin]]
 name = "tuples_01_literal_index"
 path = "src/tuples/01_literal_index.rs"
 

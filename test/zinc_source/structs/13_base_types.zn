@@ -1,0 +1,112 @@
+// Test: Explicit base-type annotations across stable primitive widths
+
+struct BaseTypes {
+    signed8: i8
+    signed16: i16
+    signed32: i32
+    signed64: i64
+    signed128: i128
+    unsigned8: u8
+    unsigned16: u16
+    unsigned32: u32
+    unsigned64: u64
+    unsigned128: u128
+    float32: f32
+    float64: f64
+    text: string
+    flag: bool
+
+    fn new(
+        signed8: i8,
+        signed16: i16,
+        signed32: i32,
+        signed64: i64,
+        signed128: i128,
+        unsigned8: u8,
+        unsigned16: u16,
+        unsigned32: u32,
+        unsigned64: u64,
+        unsigned128: u128,
+        float32: f32,
+        float64: f64,
+        text: string,
+        flag: bool
+    ) {
+        return BaseTypes {
+            signed8: signed8
+            signed16: signed16
+            signed32: signed32
+            signed64: signed64
+            signed128: signed128
+            unsigned8: unsigned8
+            unsigned16: unsigned16
+            unsigned32: unsigned32
+            unsigned64: unsigned64
+            unsigned128: unsigned128
+            float32: float32
+            float64: float64
+            text: text
+            flag: flag
+        }
+    }
+
+    fn signed8_value() {
+        return self.signed8
+    }
+
+    fn unsigned128_value() {
+        return self.unsigned128
+    }
+
+    fn float32_value() {
+        return self.float32
+    }
+
+    fn float64_value() {
+        return self.float64
+    }
+
+    fn flag_value() {
+        return self.flag
+    }
+}
+
+fn main() {
+    values = BaseTypes.new(
+        -8,
+        -16,
+        -32,
+        -64,
+        -128,
+        8,
+        16,
+        32,
+        64,
+        128,
+        3.25,
+        6.5,
+        "hello",
+        true
+    )
+
+    print(values.signed8)
+    print(values.signed16)
+    print(values.signed32)
+    print(values.signed64)
+    print(values.signed128)
+    print(values.unsigned8)
+    print(values.unsigned16)
+    print(values.unsigned32)
+    print(values.unsigned64)
+    print(values.unsigned128)
+    print(values.float32)
+    print(values.float64)
+    print(values.text)
+    print(values.flag)
+
+    print(values.signed8_value())
+    print(values.unsigned128_value())
+    print(values.float32_value())
+    print(values.float64_value())
+    print(values.flag_value())
+}

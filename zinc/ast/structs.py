@@ -231,7 +231,26 @@ class StaticMethodCallExpr(Expression):
 
 # Helper functions
 
-KNOWN_TYPES = {"i32", "i64", "f32", "f64", "string", "bool", "String"}
+KNOWN_TYPES = {
+    "i8",
+    "i16",
+    "i32",
+    "i64",
+    "i128",
+    "u8",
+    "u16",
+    "u32",
+    "u64",
+    "u128",
+    "f8",
+    "f16",
+    "f32",
+    "f64",
+    "f128",
+    "string",
+    "bool",
+    "String",
+}
 
 
 def is_known_type(identifier: str) -> bool:
@@ -242,10 +261,21 @@ def is_known_type(identifier: str) -> bool:
 def zinc_type_to_rust(zinc_type: str) -> str:
     """Convert Zinc type name to Rust."""
     mapping = {
+        "i8": "i8",
+        "i16": "i16",
         "i32": "i32",
         "i64": "i64",
+        "i128": "i128",
+        "u8": "u8",
+        "u16": "u16",
+        "u32": "u32",
+        "u64": "u64",
+        "u128": "u128",
+        "f8": "f8",
+        "f16": "f16",
         "f32": "f32",
         "f64": "f64",
+        "f128": "f128",
         "string": "String",
         "bool": "bool",
     }
@@ -255,10 +285,21 @@ def zinc_type_to_rust(zinc_type: str) -> str:
 def zinc_type_to_base(zinc_type: str) -> BaseType:
     """Convert Zinc type name to BaseType."""
     mapping = {
+        "i8": BaseType.INTEGER,
+        "i16": BaseType.INTEGER,
         "i32": BaseType.INTEGER,
         "i64": BaseType.INTEGER,
+        "i128": BaseType.INTEGER,
+        "u8": BaseType.INTEGER,
+        "u16": BaseType.INTEGER,
+        "u32": BaseType.INTEGER,
+        "u64": BaseType.INTEGER,
+        "u128": BaseType.INTEGER,
+        "f8": BaseType.FLOAT,
+        "f16": BaseType.FLOAT,
         "f32": BaseType.FLOAT,
         "f64": BaseType.FLOAT,
+        "f128": BaseType.FLOAT,
         "string": BaseType.STRING,
         "bool": BaseType.BOOLEAN,
     }
