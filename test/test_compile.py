@@ -29,6 +29,7 @@ COMPILE_ERROR_GROUPS = (
     "modules",
     "concurrency",
     "structs",
+    "callables",
 )
 
 

@@ -285,7 +285,7 @@
       "patterns": [
         {
           "name": "meta.type.annotation.parameter.zinc",
-          "match": "(?<=[\\(,|])\\s*([A-Za-z_][A-Za-z0-9_]*)(\\s*:\\s*)(\\[[^\\n\\]]+\\]|\\([^\\n\\)]*\\)\\s*->\\s*[^,\\)\\n]+|\\([^\\n\\)]+\\)|[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*(?:\\s*<[^\\n{};=]+>)?)(?=\\s*(?:[,\\)|]))",
+          "match": "(?<=[\\(,])\\s*([A-Za-z_][A-Za-z0-9_]*)(\\s*:\\s*)(\\[[^\\n\\]]+\\]|\\([^\\n\\)]*\\)\\s*->\\s*[^,\\)\\n]+|\\([^\\n\\)]+\\)|[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*(?:\\s*<[^\\n{};=]+>)?)(?=\\s*(?:[,\\)|]))",
           "captures": {
             "1": { "name": "variable.parameter.zinc" },
             "2": { "name": "punctuation.separator.type.zinc" },
@@ -434,8 +434,8 @@
           "match": "[()]"
         },
         {
-          "name": "punctuation.definition.lambda.zinc",
-          "match": "\\|"
+          "name": "meta.lambda.zinc",
+          "match": "\\bfn(?=\\s*\\()"
         }
       ]
     },

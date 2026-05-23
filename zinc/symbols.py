@@ -12,6 +12,8 @@ from zinc.ast.types import (
     is_mutating_method,
     type_to_rust,
     promote_numeric,
+    CallableTarget,
+    CallableTypeInfo,
     ChannelTypeInfo,
     ArrayTypeInfo,
     DictTypeInfo,
@@ -53,6 +55,7 @@ class Symbol:
     dict_info: DictTypeInfo | None = None
     set_info: SetTypeInfo | None = None
     tuple_info: TupleTypeInfo | None = None
+    callable_info: CallableTypeInfo | None = None
 
 
 class SymbolTable:
@@ -184,6 +187,7 @@ class SymbolTableVisitor(zincVisitor):
         self._current_return_dict_info: DictTypeInfo | None = None
         self._current_return_set_info: SetTypeInfo | None = None
         self._current_return_tuple_info: TupleTypeInfo | None = None
+        self._current_return_callable_info: CallableTypeInfo | None = None
         # Maps (caller_function, call_site_interval) -> mangled name for CodeGen to use
         # Scoped by caller function to handle different specializations of the same generic
         self.specialization_map: dict[tuple[str | None, tuple[int, int]], str] = {}
@@ -194,6 +198,8 @@ class SymbolTableVisitor(zincVisitor):
         self._iterating_dict_stack: list[set[str]] = []
         self._struct_analysis_cache: dict[str, StructInstance] = {}
         self._struct_analysis_stack: list[str] = []
+        self._struct_symbol_bindings: dict[str, str] = {}
+        self._lambda_counter = 0
 
     def _resolve_const_symbol(self, path: list[str]) -> ConstInstance | None:
         """Resolve a const path in the current module."""
@@ -287,10 +293,15 @@ class SymbolTableVisitor(zincVisitor):
 
         # Phase 2: Re-resolve in callees-first order to get correct return types
         # for function call expressions
-        order = self.atlas.topological_order()  # callees first
-        for mangled_name in order:
-            func = self.atlas.functions[mangled_name]
-            self._resolve_function(func)
+        while True:
+            before = tuple(self.atlas.functions.keys())
+            order = self.atlas.topological_order()  # callees first
+            for mangled_name in order:
+                func = self.atlas.functions[mangled_name]
+                self._resolve_function(func)
+            after = tuple(self.atlas.functions.keys())
+            if after == before:
+                break
 
         return self.symbols
 
@@ -530,31 +541,19 @@ class SymbolTableVisitor(zincVisitor):
             type_ann = None
             default_val = None
             resolved_type = BaseType.UNKNOWN
+            callable_info = None
 
             # Field can have type annotation OR default value expression
             if field_ctx.type_():
                 type_ann = field_ctx.type_().getText()
-                # Map to BaseType
-                type_map = {
-                    "i8": BaseType.INTEGER,
-                    "i16": BaseType.INTEGER,
-                    "i32": BaseType.INTEGER,
-                    "i64": BaseType.INTEGER,
-                    "i128": BaseType.INTEGER,
-                    "u8": BaseType.INTEGER,
-                    "u16": BaseType.INTEGER,
-                    "u32": BaseType.INTEGER,
-                    "u64": BaseType.INTEGER,
-                    "u128": BaseType.INTEGER,
-                    "f8": BaseType.FLOAT,
-                    "f16": BaseType.FLOAT,
-                    "f32": BaseType.FLOAT,
-                    "f64": BaseType.FLOAT,
-                    "f128": BaseType.FLOAT,
-                    "string": BaseType.STRING,
-                    "bool": BaseType.BOOLEAN,
-                }
-                resolved_type = type_map.get(type_ann.lower(), BaseType.UNKNOWN)
+                (
+                    resolved_type,
+                    _array_info,
+                    _dict_info,
+                    _set_info,
+                    _tuple_info,
+                    callable_info,
+                ) = self._type_metadata_from_type_ctx(field_ctx.type_())
             elif field_ctx.expression():
                 default_val = field_ctx.expression().getText()
                 # Try to infer type from literal
@@ -571,6 +570,7 @@ class SymbolTableVisitor(zincVisitor):
                     is_private=name.startswith("_"),
                     is_const=is_const,
                     resolved_type=resolved_type,
+                    callable_info=callable_info if field_ctx.type_() else None,
                     source_struct_qualified_name=source_struct_qualified_name,
                 )
             )
@@ -1108,6 +1108,187 @@ class SymbolTableVisitor(zincVisitor):
         }
         return mapping.get(type_name, BaseType.UNKNOWN)
 
+    def _type_metadata_from_type_ctx(
+        self,
+        type_ctx,
+    ) -> tuple[
+        BaseType,
+        ArrayTypeInfo | None,
+        DictTypeInfo | None,
+        SetTypeInfo | None,
+        TupleTypeInfo | None,
+        CallableTypeInfo | None,
+    ]:
+        """Resolve a parsed type annotation into Zinc base and rich metadata."""
+        if type_ctx is None:
+            return BaseType.UNKNOWN, None, None, None, None, None
+
+        if type_ctx.tupleType():
+            tuple_ctx = type_ctx.tupleType()
+            element_types: list[BaseType] = []
+            element_tuple_infos: dict[int, TupleTypeInfo] = {}
+            element_callable_infos: dict[int, CallableTypeInfo] = {}
+            for i, element_ctx in enumerate(tuple_ctx.type_()):
+                (
+                    element_type,
+                    _element_array,
+                    _element_dict,
+                    _element_set,
+                    element_tuple,
+                    element_callable,
+                ) = self._type_metadata_from_type_ctx(element_ctx)
+                element_types.append(element_type)
+                if element_tuple is not None:
+                    element_tuple_infos[i] = element_tuple
+                if element_callable is not None:
+                    element_callable_infos[i] = element_callable
+            return (
+                BaseType.TUPLE,
+                None,
+                None,
+                None,
+                TupleTypeInfo(
+                    element_types=element_types,
+                    element_tuple_infos=element_tuple_infos,
+                    element_callable_infos=element_callable_infos,
+                ),
+                None,
+            )
+
+        if type_ctx.LBRACK():
+            (
+                element_type,
+                _nested_array,
+                _nested_dict,
+                _nested_set,
+                element_tuple,
+                element_callable,
+            ) = self._type_metadata_from_type_ctx(type_ctx.type_())
+            return (
+                BaseType.ARRAY,
+                ArrayTypeInfo(
+                    element_type=element_type,
+                    element_tuple_info=element_tuple,
+                    element_callable_info=element_callable,
+                ),
+                None,
+                None,
+                None,
+                None,
+            )
+
+        if type_ctx.RARROW():
+            param_types: list[BaseType] = []
+            param_array_infos: dict[int, ArrayTypeInfo] = {}
+            param_dict_infos: dict[int, DictTypeInfo] = {}
+            param_set_infos: dict[int, SetTypeInfo] = {}
+            param_tuple_infos: dict[int, TupleTypeInfo] = {}
+            param_callable_infos: dict[int, CallableTypeInfo] = {}
+            param_ctxs = list(type_ctx.typeList().type_()) if type_ctx.typeList() else []
+            for i, param_ctx in enumerate(param_ctxs):
+                (
+                    param_type,
+                    param_array,
+                    param_dict,
+                    param_set,
+                    param_tuple,
+                    param_callable,
+                ) = self._type_metadata_from_type_ctx(param_ctx)
+                param_types.append(param_type)
+                if param_array is not None:
+                    param_array_infos[i] = param_array
+                if param_dict is not None:
+                    param_dict_infos[i] = param_dict
+                if param_set is not None:
+                    param_set_infos[i] = param_set
+                if param_tuple is not None:
+                    param_tuple_infos[i] = param_tuple
+                if param_callable is not None:
+                    param_callable_infos[i] = param_callable
+
+            (
+                return_type,
+                _return_array,
+                return_dict,
+                return_set,
+                return_tuple,
+                return_callable,
+            ) = self._type_metadata_from_type_ctx(type_ctx.type_())
+            return (
+                BaseType.CALLABLE,
+                None,
+                None,
+                None,
+                None,
+                CallableTypeInfo(
+                    param_types=param_types,
+                    param_array_infos=param_array_infos,
+                    param_dict_infos=param_dict_infos,
+                    param_set_infos=param_set_infos,
+                    param_tuple_infos=param_tuple_infos,
+                    param_callable_infos=param_callable_infos,
+                    return_type=return_type,
+                    return_dict_info=return_dict,
+                    return_set_info=return_set,
+                    return_tuple_info=return_tuple,
+                    return_callable_info=return_callable,
+                ),
+            )
+
+        if type_ctx.qualifiedName():
+            type_name = type_ctx.qualifiedName().getText()
+            base_type = self._type_name_to_base(type_name)
+            type_list = type_ctx.typeList()
+            if type_list and base_type == BaseType.UNKNOWN:
+                generic_name = type_name.lower()
+                args = list(type_list.type_())
+                if generic_name in {"dict", "sort_dict"} and len(args) == 2:
+                    (
+                        key_type,
+                        _key_array,
+                        _key_dict,
+                        _key_set,
+                        _key_tuple,
+                        key_callable,
+                    ) = self._type_metadata_from_type_ctx(args[0])
+                    (
+                        value_type,
+                        _value_array,
+                        _value_dict,
+                        _value_set,
+                        _value_tuple,
+                        value_callable,
+                    ) = self._type_metadata_from_type_ctx(args[1])
+                    return (
+                        BaseType.DICT,
+                        None,
+                        DictTypeInfo(
+                            key_type=key_type,
+                            value_type=value_type,
+                            key_callable_info=key_callable,
+                            value_callable_info=value_callable,
+                            kind=generic_name,
+                        ),
+                        None,
+                        None,
+                        None,
+                    )
+                if generic_name in {"set", "sort_set"} and len(args) == 1:
+                    (element_type, _, _, _, _, _) = self._type_metadata_from_type_ctx(args[0])
+                    return (
+                        BaseType.SET,
+                        None,
+                        None,
+                        SetTypeInfo(element_type=element_type, kind=generic_name),
+                        None,
+                        None,
+                    )
+            if base_type == BaseType.UNKNOWN:
+                return BaseType.STRUCT, None, None, None, None, None
+            return base_type, None, None, None, None, None
+
+        return BaseType.UNKNOWN, None, None, None, None, None
+
     def _assignment_types_compatible(self, expected: BaseType, actual: BaseType) -> bool:
         """Return True when an assignment is compatible under Zinc's simple rules."""
         if expected == BaseType.UNKNOWN or actual == BaseType.UNKNOWN:
@@ -1133,6 +1314,8 @@ class SymbolTableVisitor(zincVisitor):
         return DictTypeInfo(
             key_type=info.key_type,
             value_type=info.value_type,
+            key_callable_info=self._copy_callable_info(info.key_callable_info),
+            value_callable_info=self._copy_callable_info(info.value_callable_info),
             kind=info.kind,
             is_mutated=info.is_mutated,
         )
@@ -1154,6 +1337,7 @@ class SymbolTableVisitor(zincVisitor):
         return ArrayTypeInfo(
             element_type=info.element_type,
             element_tuple_info=self._copy_tuple_info(info.element_tuple_info),
+            element_callable_info=self._copy_callable_info(info.element_callable_info),
             is_mutated=info.is_mutated,
         )
 
@@ -1168,7 +1352,105 @@ class SymbolTableVisitor(zincVisitor):
                 for i, nested in info.element_tuple_infos.items()
                 if (copied := self._copy_tuple_info(nested)) is not None
             },
+            element_callable_infos={
+                i: copied
+                for i, nested in info.element_callable_infos.items()
+                if (copied := self._copy_callable_info(nested)) is not None
+            },
         )
+
+    def _copy_callable_info(self, info: CallableTypeInfo | None) -> CallableTypeInfo | None:
+        """Copy callable metadata recursively."""
+        if info is None:
+            return None
+        return CallableTypeInfo(
+            param_types=list(info.param_types),
+            param_array_infos={
+                i: copied
+                for i, nested in info.param_array_infos.items()
+                if (copied := self._copy_array_info(nested)) is not None
+            },
+            param_dict_infos={
+                i: copied
+                for i, nested in info.param_dict_infos.items()
+                if (copied := self._copy_dict_info(nested)) is not None
+            },
+            param_set_infos={
+                i: copied
+                for i, nested in info.param_set_infos.items()
+                if (copied := self._copy_set_info(nested)) is not None
+            },
+            param_tuple_infos={
+                i: copied
+                for i, nested in info.param_tuple_infos.items()
+                if (copied := self._copy_tuple_info(nested)) is not None
+            },
+            param_callable_infos={
+                i: copied
+                for i, nested in info.param_callable_infos.items()
+                if (copied := self._copy_callable_info(nested)) is not None
+            },
+            return_type=info.return_type,
+            return_dict_info=self._copy_dict_info(info.return_dict_info),
+            return_set_info=self._copy_set_info(info.return_set_info),
+            return_tuple_info=self._copy_tuple_info(info.return_tuple_info),
+            return_callable_info=self._copy_callable_info(info.return_callable_info),
+            targets=tuple(info.targets),
+        )
+
+    def _merge_callable_info(
+        self,
+        current: CallableTypeInfo | None,
+        incoming: CallableTypeInfo | None,
+        label: str,
+    ) -> CallableTypeInfo | None:
+        """Merge callable metadata, requiring compatible signatures and unioning targets."""
+        if incoming is None:
+            return current
+        if current is None:
+            return self._copy_callable_info(incoming)
+        try:
+            return current.merge_targets_from(incoming)
+        except ValueError as exc:
+            if len(current.param_types) != len(incoming.param_types):
+                raise ZincTypeError(f"incompatible callable signatures for {label}") from exc
+            merged = self._copy_callable_info(current) or CallableTypeInfo()
+            for i, incoming_type in enumerate(incoming.param_types):
+                current_type = merged.param_types[i]
+                if current_type == BaseType.UNKNOWN:
+                    merged.param_types[i] = incoming_type
+                elif incoming_type == BaseType.UNKNOWN:
+                    pass
+                elif current_type != incoming_type:
+                    promoted = promote_numeric(current_type, incoming_type)
+                    if promoted == BaseType.UNKNOWN:
+                        raise ZincTypeError(f"incompatible callable signatures for {label}") from exc
+                    merged.param_types[i] = promoted
+                merged_nested = self._merge_callable_info(
+                    merged.param_callable_infos.get(i),
+                    incoming.param_callable_infos.get(i),
+                    label,
+                )
+                if merged_nested is not None:
+                    merged.param_callable_infos[i] = merged_nested
+            if merged.return_type == BaseType.UNKNOWN:
+                merged.return_type = incoming.return_type
+            elif incoming.return_type not in {BaseType.UNKNOWN, merged.return_type}:
+                promoted = promote_numeric(merged.return_type, incoming.return_type)
+                if promoted == BaseType.UNKNOWN:
+                    raise ZincTypeError(f"incompatible callable signatures for {label}") from exc
+                merged.return_type = promoted
+            merged.return_callable_info = self._merge_callable_info(
+                merged.return_callable_info,
+                incoming.return_callable_info,
+                label,
+            )
+            seen = {target.storage_key() for target in merged.targets}
+            for target in incoming.targets:
+                if target.storage_key() not in seen:
+                    merged.targets = (*merged.targets, target)
+                    seen.add(target.storage_key())
+            return merged
 
     def _is_channel_constructor_call(self, expr_ctx) -> bool:
         """Return True when an expression is a direct chan(...) call."""
@@ -1206,6 +1488,8 @@ class SymbolTableVisitor(zincVisitor):
         """Merge dict key or set element types, rejecting floats for Rust container keys."""
         if incoming == BaseType.FLOAT:
             raise ZincTypeError(f"{label} cannot be a float in v1")
+        if incoming == BaseType.CALLABLE:
+            raise ZincTypeError(f"{label} cannot be a callable in v1")
         if current == BaseType.UNKNOWN:
             return incoming
         if incoming == BaseType.UNKNOWN or incoming == current:
@@ -1214,6 +1498,12 @@ class SymbolTableVisitor(zincVisitor):
 
     def _merge_value_type(self, current: BaseType, incoming: BaseType, label: str) -> BaseType:
         """Merge value types with int/float promotion."""
+        if current == BaseType.CALLABLE or incoming == BaseType.CALLABLE:
+            if current == BaseType.UNKNOWN:
+                return incoming
+            if incoming == BaseType.UNKNOWN or incoming == current:
+                return current
+            raise ZincTypeError(f"mixed {label} types are not supported")
         merged = promote_numeric(current, incoming)
         if merged == BaseType.UNKNOWN and current != BaseType.UNKNOWN and incoming != BaseType.UNKNOWN:
             raise ZincTypeError(f"mixed {label} types are not supported")
@@ -1229,6 +1519,11 @@ class SymbolTableVisitor(zincVisitor):
             raise ZincTypeError("function return paths use different dict kinds")
         current.key_type = self._merge_key_type(current.key_type, incoming.key_type, "dict key")
         current.value_type = self._merge_value_type(current.value_type, incoming.value_type, "dict value")
+        current.value_callable_info = self._merge_callable_info(
+            current.value_callable_info,
+            incoming.value_callable_info,
+            "dict value",
+        )
         return current
 
     def _merge_set_info(self, current: SetTypeInfo | None, incoming: SetTypeInfo | None) -> SetTypeInfo | None:
@@ -1260,6 +1555,18 @@ class SymbolTableVisitor(zincVisitor):
                     incoming.element_tuple_infos.get(i),
                 ) or TupleTypeInfo()
                 continue
+            if current_type == BaseType.CALLABLE or incoming_type == BaseType.CALLABLE:
+                if current_type != BaseType.CALLABLE or incoming_type != BaseType.CALLABLE:
+                    raise ZincTypeError("tuple return paths use incompatible element types")
+                merged_callable = self._merge_callable_info(
+                    current.element_callable_infos.get(i),
+                    incoming.element_callable_infos.get(i),
+                    "tuple element",
+                )
+                if merged_callable is not None:
+                    current.element_callable_infos[i] = merged_callable
+                current.element_types[i] = BaseType.CALLABLE
+                continue
             merged = promote_numeric(current_type, incoming_type)
             if merged == BaseType.UNKNOWN and current_type != BaseType.UNKNOWN and incoming_type != BaseType.UNKNOWN:
                 raise ZincTypeError("tuple return paths use incompatible element types")
@@ -1268,7 +1575,13 @@ class SymbolTableVisitor(zincVisitor):
 
     def _tuple_info_from_dict_info(self, info: DictTypeInfo) -> TupleTypeInfo:
         """Build the item tuple type for dict iteration."""
-        return TupleTypeInfo(element_types=[info.key_type, info.value_type])
+        callable_infos: dict[int, CallableTypeInfo] = {}
+        if info.value_callable_info is not None:
+            callable_infos[1] = self._copy_callable_info(info.value_callable_info) or info.value_callable_info
+        return TupleTypeInfo(
+            element_types=[info.key_type, info.value_type],
+            element_callable_infos=callable_infos,
+        )
 
     def _binding_tokens(self, ctx) -> list:
         """Return identifier tokens from a binding/destructuring context."""
@@ -1312,6 +1625,12 @@ class SymbolTableVisitor(zincVisitor):
                             if symbol and symbol.resolved_type == BaseType.DICT:
                                 return name
         return None
+
+    def _struct_qualified_name_for_symbol(self, symbol: Symbol | None) -> str | None:
+        """Return the concrete struct type bound to a symbol, if known."""
+        if symbol is None:
+            return None
+        return self._struct_symbol_bindings.get(symbol.unique_name)
 
     def _is_iterating_dict(self, name: str) -> bool:
         """Check whether a dict variable is currently being iterated."""
@@ -1362,6 +1681,7 @@ class SymbolTableVisitor(zincVisitor):
         self._current_return_dict_info = None
         self._current_return_set_info = None
         self._current_return_tuple_info = None
+        self._current_return_callable_info = None
 
         # Use mangled name for scope so symbols are per-specialization
         self.symbols.enter_scope(func.mangled_name)
@@ -1406,6 +1726,19 @@ class SymbolTableVisitor(zincVisitor):
                     param_symbol.set_info = self._copy_set_info(func.arg_set_infos[i])
                 if param_type == BaseType.TUPLE and i in func.arg_tuple_infos:
                     param_symbol.tuple_info = self._copy_tuple_info(func.arg_tuple_infos[i])
+                if param_type == BaseType.CALLABLE and i in func.arg_callable_infos:
+                    param_symbol.callable_info = self._copy_callable_info(func.arg_callable_infos[i])
+                elif param_ctx.type_():
+                    (
+                        annotated_type,
+                        _array_info,
+                        _dict_info,
+                        _set_info,
+                        _tuple_info,
+                        annotated_callable,
+                    ) = self._type_metadata_from_type_ctx(param_ctx.type_())
+                    if annotated_type == BaseType.CALLABLE and annotated_callable is not None:
+                        param_symbol.callable_info = annotated_callable
 
         # Visit function body (skip parameter list since we handled it)
         if hasattr(ctx, "block"):
@@ -1418,6 +1751,7 @@ class SymbolTableVisitor(zincVisitor):
         func.return_dict_info = self._copy_dict_info(self._current_return_dict_info)
         func.return_set_info = self._copy_set_info(self._current_return_set_info)
         func.return_tuple_info = self._copy_tuple_info(self._current_return_tuple_info)
+        func.return_callable_info = self._copy_callable_info(self._current_return_callable_info)
 
         # Update array parameter mutation info
         for i, param_name in enumerate(param_names):
@@ -1433,6 +1767,14 @@ class SymbolTableVisitor(zincVisitor):
                 param_symbol = self.symbols.lookup_by_id(param_name)
                 if param_symbol and param_symbol.is_mutated:
                     func.arg_set_infos[i].is_mutated = True
+            if i < len(func.arg_types) and func.arg_types[i] == BaseType.CALLABLE:
+                param_symbol = self.symbols.lookup_by_id(param_name)
+                if param_symbol and param_symbol.callable_info:
+                    func.arg_callable_infos[i] = self._merge_callable_info(
+                        func.arg_callable_infos.get(i),
+                        param_symbol.callable_info,
+                        f"function parameter '{param_name}'",
+                    ) or CallableTypeInfo()
 
         self.symbols.exit_scope()
         self._current_function = None
@@ -1468,6 +1810,265 @@ class SymbolTableVisitor(zincVisitor):
                     f"cannot infer type for empty {symbol.set_info.kind} '{symbol.id}'"
                 )
 
+    def _ensure_lambda_registered(self, ctx: ZincParser.LambdaExpressionContext) -> str:
+        """Register a lambda body as a synthetic top-level function if needed."""
+        if self._current_module is None:
+            raise ZincTypeError("lambda expressions require a module context")
+        start, stop = ctx.getSourceInterval()
+        name = f"__lambda_{start}_{stop}"
+        qualified_name = self.module_graph.qualified_name(self._current_module, name)
+        if qualified_name not in self.atlas.function_defs:
+            self._validate_lambda_no_capture(ctx)
+            self.atlas.function_defs[qualified_name] = ctx
+        return qualified_name
+
+    def _validate_lambda_no_capture(self, ctx: ZincParser.LambdaExpressionContext) -> None:
+        """Reject references to enclosing locals, params, and self inside lambdas."""
+        local_names: set[str] = set()
+        if ctx.parameterList():
+            local_names.update(
+                param_ctx.IDENTIFIER().getText()
+                for param_ctx in ctx.parameterList().parameter()
+            )
+
+        top_level_names: set[str] = set()
+        if self._current_module is not None:
+            module = self.module_graph.get_module(self._current_module)
+            top_level_names.update(module.symbols.keys())
+            top_level_names.update(module.injected_symbols.keys())
+        top_level_names.update({"print", "chan", "dict", "sort_dict", "set", "sort_set"})
+
+        def walk(node) -> None:
+            if node is None:
+                return
+            if isinstance(node, ZincParser.PrimaryExpressionContext):
+                if node.getText() == "self":
+                    raise ZincTypeError("lambda expressions cannot capture 'self'")
+                if node.IDENTIFIER():
+                    name = node.IDENTIFIER().getText()
+                    if name not in local_names and name not in top_level_names:
+                        raise ZincTypeError(
+                            f"lambda expressions cannot capture outer variable '{name}'"
+                        )
+            if isinstance(node, ZincParser.VariableAssignmentContext):
+                target = node.assignmentTarget()
+                if target.IDENTIFIER():
+                    local_names.add(target.IDENTIFIER().getText())
+                elif target.tupleAssignmentTarget():
+                    local_names.update(
+                        token.getText()
+                        for token in target.tupleAssignmentTarget().getTokens(ZincParser.IDENTIFIER)
+                    )
+            if isinstance(node, ZincParser.ForStatementContext):
+                binding = node.forBinding()
+                if binding.IDENTIFIER():
+                    local_names.add(binding.IDENTIFIER().getText())
+                elif binding.tupleAssignmentTarget():
+                    local_names.update(
+                        token.getText()
+                        for token in binding.tupleAssignmentTarget().getTokens(ZincParser.IDENTIFIER)
+                    )
+            if hasattr(node, "getChildCount"):
+                for i in range(node.getChildCount()):
+                    child = node.getChild(i)
+                    if isinstance(child, ParserRuleContext):
+                        walk(child)
+
+        walk(ctx.block())
+
+    def _callable_info_from_function_ctx(
+        self,
+        ctx,
+        target: CallableTarget,
+    ) -> CallableTypeInfo:
+        """Build callable metadata from a function or lambda parse node."""
+        param_types: list[BaseType] = []
+        param_array_infos: dict[int, ArrayTypeInfo] = {}
+        param_dict_infos: dict[int, DictTypeInfo] = {}
+        param_set_infos: dict[int, SetTypeInfo] = {}
+        param_tuple_infos: dict[int, TupleTypeInfo] = {}
+        param_callable_infos: dict[int, CallableTypeInfo] = {}
+        if hasattr(ctx, "parameterList") and ctx.parameterList():
+            for i, param_ctx in enumerate(ctx.parameterList().parameter()):
+                if param_ctx.type_():
+                    (
+                        param_type,
+                        param_array,
+                        param_dict,
+                        param_set,
+                        param_tuple,
+                        param_callable,
+                    ) = self._type_metadata_from_type_ctx(param_ctx.type_())
+                else:
+                    param_type = BaseType.UNKNOWN
+                    param_array = None
+                    param_dict = None
+                    param_set = None
+                    param_tuple = None
+                    param_callable = None
+                param_types.append(param_type)
+                if param_array is not None:
+                    param_array_infos[i] = param_array
+                if param_dict is not None:
+                    param_dict_infos[i] = param_dict
+                if param_set is not None:
+                    param_set_infos[i] = param_set
+                if param_tuple is not None:
+                    param_tuple_infos[i] = param_tuple
+                if param_callable is not None:
+                    param_callable_infos[i] = param_callable
+        return CallableTypeInfo(
+            param_types=param_types,
+            param_array_infos=param_array_infos,
+            param_dict_infos=param_dict_infos,
+            param_set_infos=param_set_infos,
+            param_tuple_infos=param_tuple_infos,
+            param_callable_infos=param_callable_infos,
+            return_type=BaseType.UNKNOWN,
+            targets=(target,),
+        )
+
+    def _callable_info_from_method(
+        self,
+        method: StructMethodInfo,
+        target: CallableTarget,
+    ) -> CallableTypeInfo:
+        """Build callable metadata from analyzed struct-method metadata."""
+        param_types: list[BaseType] = []
+        for _name, type_ann, resolved in method.parameters:
+            param_types.append(self._type_name_to_base(resolved or type_ann))
+        return CallableTypeInfo(
+            param_types=param_types,
+            return_type=self._method_return_base_type(method.return_type),
+            targets=(target,),
+        )
+
+    def _callable_info_from_symbol_path(self, path: list[str]) -> CallableTypeInfo | None:
+        """Resolve a value-position path as a callable reference, if possible."""
+        if self._current_module is None:
+            return None
+
+        resolved_function = self.module_graph.resolve_function_path(self._current_module, path)
+        if resolved_function is not None:
+            if resolved_function.ctx.parentCtx and isinstance(
+                resolved_function.ctx.parentCtx, ZincParser.StatementContext
+            ) and resolved_function.ctx.parentCtx.asyncFunctionDeclaration():
+                raise ZincTypeError("async functions cannot be used as callable values")
+            target = CallableTarget(
+                kind="function",
+                qualified_name=resolved_function.qualified_name,
+                display_name=".".join(path),
+            )
+            return self._callable_info_from_function_ctx(resolved_function.ctx, target)
+
+        static_target = self.module_graph.resolve_static_method_target(self._current_module, path)
+        if static_target is not None:
+            struct_symbol, method_name = static_target
+            struct = self.atlas.structs.get(struct_symbol.qualified_name)
+            if struct is None:
+                return None
+            method = next((candidate for candidate in struct.methods if candidate.name == method_name), None)
+            if method is None:
+                return None
+            target = CallableTarget(
+                kind="static_method",
+                qualified_name=f"{struct_symbol.qualified_name}::{method_name}",
+                display_name=".".join(path),
+                receiver_struct_qualified_name=struct_symbol.qualified_name,
+            )
+            return self._callable_info_from_method(method, target)
+
+        return None
+
+    def _callable_return_info_from_function(self, func: FunctionInstance) -> CallableTypeInfo:
+        """Convert a resolved function specialization into a callable signature."""
+        return CallableTypeInfo(
+            param_types=list(func.arg_types),
+            param_array_infos={
+                index: self._copy_array_info(info)
+                for index, info in func.arg_array_infos.items()
+                if self._copy_array_info(info) is not None
+            },
+            param_dict_infos={
+                index: self._copy_dict_info(info)
+                for index, info in func.arg_dict_infos.items()
+                if self._copy_dict_info(info) is not None
+            },
+            param_set_infos={
+                index: self._copy_set_info(info)
+                for index, info in func.arg_set_infos.items()
+                if self._copy_set_info(info) is not None
+            },
+            param_tuple_infos={
+                index: self._copy_tuple_info(info)
+                for index, info in func.arg_tuple_infos.items()
+                if self._copy_tuple_info(info) is not None
+            },
+            param_callable_infos={
+                index: self._copy_callable_info(info)
+                for index, info in func.arg_callable_infos.items()
+                if self._copy_callable_info(info) is not None
+            },
+            return_type=func.return_type,
+            return_dict_info=self._copy_dict_info(func.return_dict_info),
+            return_set_info=self._copy_set_info(func.return_set_info),
+            return_tuple_info=self._copy_tuple_info(func.return_tuple_info),
+            return_callable_info=self._copy_callable_info(func.return_callable_info),
+        )
+
+    def _refine_callable_signature(
+        self,
+        callable_info: CallableTypeInfo,
+        arg_types: list[BaseType],
+        arg_array_infos: dict[int, ArrayTypeInfo],
+        arg_dict_infos: dict[int, DictTypeInfo],
+        arg_set_infos: dict[int, SetTypeInfo],
+        arg_tuple_infos: dict[int, TupleTypeInfo],
+        arg_callable_infos: dict[int, CallableTypeInfo],
+        return_type: BaseType,
+        return_dict_info: DictTypeInfo | None,
+        return_set_info: SetTypeInfo | None,
+        return_tuple_info: TupleTypeInfo | None,
+        return_callable_info: CallableTypeInfo | None,
+    ) -> None:
+        """Refine an abstract callable signature from an indirect call site."""
+        if len(callable_info.param_types) != len(arg_types):
+            raise ZincTypeError("indirect call arity mismatch")
+
+        for i, arg_type in enumerate(arg_types):
+            current = callable_info.param_types[i]
+            if current == BaseType.UNKNOWN:
+                callable_info.param_types[i] = arg_type
+            elif current != BaseType.UNKNOWN and current != arg_type:
+                if promote_numeric(current, arg_type) == BaseType.UNKNOWN:
+                    raise ZincTypeError("indirect call uses incompatible callable arguments")
+            if arg_type == BaseType.ARRAY and i in arg_array_infos and i not in callable_info.param_array_infos:
+                callable_info.param_array_infos[i] = self._copy_array_info(arg_array_infos[i])
+            if arg_type == BaseType.DICT and i in arg_dict_infos and i not in callable_info.param_dict_infos:
+                callable_info.param_dict_infos[i] = self._copy_dict_info(arg_dict_infos[i])
+            if arg_type == BaseType.SET and i in arg_set_infos and i not in callable_info.param_set_infos:
+                callable_info.param_set_infos[i] = self._copy_set_info(arg_set_infos[i])
+            if arg_type == BaseType.TUPLE and i in arg_tuple_infos and i not in callable_info.param_tuple_infos:
+                callable_info.param_tuple_infos[i] = self._copy_tuple_info(arg_tuple_infos[i])
+            if arg_type == BaseType.CALLABLE and i in arg_callable_infos:
+                merged_nested = self._merge_callable_info(
+                    callable_info.param_callable_infos.get(i),
+                    arg_callable_infos[i],
+                    "callable parameter",
+                )
+                if merged_nested is not None:
+                    callable_info.param_callable_infos[i] = merged_nested
+
+        if callable_info.return_type == BaseType.UNKNOWN:
+            callable_info.return_type = return_type
+            callable_info.return_dict_info = self._copy_dict_info(return_dict_info)
+            callable_info.return_set_info = self._copy_set_info(return_set_info)
+            callable_info.return_tuple_info = self._copy_tuple_info(return_tuple_info)
+            callable_info.return_callable_info = self._copy_callable_info(return_callable_info)
+        elif callable_info.return_type != return_type:
+            if promote_numeric(callable_info.return_type, return_type) == BaseType.UNKNOWN:
+                raise ZincTypeError("indirect call targets disagree on return type")
+
     def visitLiteral(self, ctx: ZincParser.LiteralContext) -> BaseType:
         """Visit a literal and create a symbol for it."""
         text = ctx.getText()
@@ -1493,9 +2094,13 @@ class SymbolTableVisitor(zincVisitor):
                     interval=ctx.getSourceInterval(),
                 )
                 temp.element_type = symbol.element_type
-                temp.dict_info = symbol.dict_info
-                temp.set_info = symbol.set_info
-                temp.tuple_info = symbol.tuple_info
+                temp.dict_info = self._copy_dict_info(symbol.dict_info)
+                temp.set_info = self._copy_set_info(symbol.set_info)
+                temp.tuple_info = self._copy_tuple_info(symbol.tuple_info)
+                temp.callable_info = symbol.callable_info
+                struct_qualified_name = self._struct_qualified_name_for_symbol(symbol)
+                if struct_qualified_name is not None:
+                    self._struct_symbol_bindings[temp.unique_name] = struct_qualified_name
                 return symbol.resolved_type
 
             const_symbol = None
@@ -1511,6 +2116,16 @@ class SymbolTableVisitor(zincVisitor):
                     interval=ctx.getSourceInterval(),
                 )
                 return const_symbol.resolved_type
+
+            callable_info = self._callable_info_from_symbol_path([name])
+            if callable_info is not None:
+                temp = self.symbols.define_temp(
+                    resolved_type=BaseType.CALLABLE,
+                    interval=ctx.getSourceInterval(),
+                )
+                temp.callable_info = callable_info
+                return BaseType.CALLABLE
+
             self.symbols.define_temp(
                 resolved_type=BaseType.UNKNOWN,
                 interval=ctx.getSourceInterval(),
@@ -1542,6 +2157,26 @@ class SymbolTableVisitor(zincVisitor):
         )
         return BaseType.UNKNOWN
 
+    def visitLambdaExpr(self, ctx: ZincParser.LambdaExprContext) -> BaseType:
+        """Visit an inline lambda expression."""
+        return self.visit(ctx.lambdaExpression())
+
+    def visitLambdaExpression(self, ctx: ZincParser.LambdaExpressionContext) -> BaseType:
+        """Register a lambda as a synthetic callable target."""
+        qualified_name = self._ensure_lambda_registered(ctx)
+        target = CallableTarget(
+            kind="lambda",
+            qualified_name=qualified_name,
+            display_name="<lambda>",
+        )
+        callable_info = self._callable_info_from_function_ctx(ctx, target)
+        temp = self.symbols.define_temp(
+            resolved_type=BaseType.CALLABLE,
+            interval=ctx.getSourceInterval(),
+        )
+        temp.callable_info = callable_info
+        return BaseType.CALLABLE
+
     def visitPrimaryExpr(self, ctx: ZincParser.PrimaryExprContext) -> BaseType:
         """Visit primary expression wrapper."""
         return self.visit(ctx.primaryExpression())
@@ -1550,25 +2185,31 @@ class SymbolTableVisitor(zincVisitor):
         """Handle parenthesized expressions."""
         inner_type = self.visit(ctx.expression())
         inner_symbol = self._expr_symbol(ctx.expression())
-        self.symbols.define_temp(
+        temp = self.symbols.define_temp(
             resolved_type=inner_type,
             interval=ctx.getSourceInterval(),
-        ).tuple_info = self._copy_tuple_info(inner_symbol.tuple_info) if inner_symbol else None
+        )
+        temp.tuple_info = self._copy_tuple_info(inner_symbol.tuple_info) if inner_symbol else None
+        temp.callable_info = self._copy_callable_info(inner_symbol.callable_info) if inner_symbol else None
         return inner_type
 
     def visitTupleLiteral(self, ctx: ZincParser.TupleLiteralContext) -> BaseType:
         """Visit tuple literal and infer element types."""
         element_types: list[BaseType] = []
         element_tuple_infos: dict[int, TupleTypeInfo] = {}
+        element_callable_infos: dict[int, CallableTypeInfo] = {}
         for i, expr_ctx in enumerate(ctx.expression()):
             element_type = self.visit(expr_ctx)
             element_types.append(element_type)
-            if element_type == BaseType.TUPLE:
-                expr_symbol = self._expr_symbol(expr_ctx)
-                if expr_symbol and expr_symbol.tuple_info:
-                    copied = self._copy_tuple_info(expr_symbol.tuple_info)
-                    if copied:
-                        element_tuple_infos[i] = copied
+            expr_symbol = self._expr_symbol(expr_ctx)
+            if element_type == BaseType.TUPLE and expr_symbol and expr_symbol.tuple_info:
+                copied = self._copy_tuple_info(expr_symbol.tuple_info)
+                if copied:
+                    element_tuple_infos[i] = copied
+            if element_type == BaseType.CALLABLE and expr_symbol and expr_symbol.callable_info:
+                copied_callable = self._copy_callable_info(expr_symbol.callable_info)
+                if copied_callable:
+                    element_callable_infos[i] = copied_callable
 
         symbol = self.symbols.define_temp(
             resolved_type=BaseType.TUPLE,
@@ -1577,6 +2218,7 @@ class SymbolTableVisitor(zincVisitor):
         symbol.tuple_info = TupleTypeInfo(
             element_types=element_types,
             element_tuple_infos=element_tuple_infos,
+            element_callable_infos=element_callable_infos,
         )
         return BaseType.TUPLE
 
@@ -1662,14 +2304,16 @@ class SymbolTableVisitor(zincVisitor):
         """Visit array literal and infer element type from first element."""
         element_type = None
         element_tuple_info = None
+        element_callable_info = None
         for expr_ctx in ctx.expression():
             expr_type = self.visit(expr_ctx)
             if element_type is None:
                 element_type = expr_type
-                if expr_type == BaseType.TUPLE:
-                    expr_symbol = self._expr_symbol(expr_ctx)
-                    if expr_symbol and expr_symbol.tuple_info:
-                        element_tuple_info = self._copy_tuple_info(expr_symbol.tuple_info)
+                expr_symbol = self._expr_symbol(expr_ctx)
+                if expr_type == BaseType.TUPLE and expr_symbol and expr_symbol.tuple_info:
+                    element_tuple_info = self._copy_tuple_info(expr_symbol.tuple_info)
+                if expr_type == BaseType.CALLABLE and expr_symbol and expr_symbol.callable_info:
+                    element_callable_info = self._copy_callable_info(expr_symbol.callable_info)
         symbol = self.symbols.define_temp(
             resolved_type=BaseType.ARRAY,
             interval=ctx.getSourceInterval(),
@@ -1678,6 +2322,7 @@ class SymbolTableVisitor(zincVisitor):
         if element_type is not None:
             symbol.element_type = element_type
             symbol.tuple_info = element_tuple_info
+            symbol.callable_info = element_callable_info
         return BaseType.ARRAY
 
     def visitCollectionLiteral(self, ctx: ZincParser.CollectionLiteralContext) -> BaseType:
@@ -1688,11 +2333,21 @@ class SymbolTableVisitor(zincVisitor):
         if ctx.dictEntry():
             key_type = BaseType.UNKNOWN
             value_type = BaseType.UNKNOWN
+            value_callable_info = None
             for entry_ctx in ctx.dictEntry():
                 entry_key_type = self.visit(entry_ctx.expression(0))
                 entry_value_type = self.visit(entry_ctx.expression(1))
                 key_type = self._merge_key_type(key_type, entry_key_type, "dict key")
                 value_type = self._merge_value_type(value_type, entry_value_type, "dict value")
+                if entry_key_type == BaseType.CALLABLE:
+                    raise ZincTypeError("callables cannot be used as dict keys")
+                if entry_value_type == BaseType.CALLABLE:
+                    value_symbol = self._expr_symbol(entry_ctx.expression(1))
+                    value_callable_info = self._merge_callable_info(
+                        value_callable_info,
+                        value_symbol.callable_info if value_symbol else None,
+                        "dict value",
+                    )
 
             symbol = self.symbols.define_temp(
                 resolved_type=BaseType.DICT,
@@ -1701,6 +2356,7 @@ class SymbolTableVisitor(zincVisitor):
             symbol.dict_info = DictTypeInfo(
                 key_type=key_type,
                 value_type=value_type,
+                value_callable_info=value_callable_info,
                 kind="dict",
             )
             return BaseType.DICT
@@ -1709,6 +2365,8 @@ class SymbolTableVisitor(zincVisitor):
         for expr_ctx in ctx.expression():
             expr_type = self.visit(expr_ctx)
             element_type = self._merge_key_type(element_type, expr_type, "set element")
+            if expr_type == BaseType.CALLABLE:
+                raise ZincTypeError("callables cannot be used as set elements")
 
         symbol = self.symbols.define_temp(
             resolved_type=BaseType.SET,
@@ -1728,6 +2386,7 @@ class SymbolTableVisitor(zincVisitor):
         # Try to get element type from the array
         element_type = BaseType.UNKNOWN
         tuple_info = None
+        callable_info = None
         if arr_type == BaseType.ARRAY:
             arr_ctx = ctx.expression(0)
             # Look up the array symbol to get element type
@@ -1740,6 +2399,8 @@ class SymbolTableVisitor(zincVisitor):
                         element_type = arr_symbol.element_type
                         if element_type == BaseType.TUPLE:
                             tuple_info = self._copy_tuple_info(arr_symbol.tuple_info)
+                        if element_type == BaseType.CALLABLE:
+                            callable_info = arr_symbol.callable_info
         elif arr_type == BaseType.DICT:
             dict_ctx = ctx.expression(0)
             key_type = self.visit(ctx.expression(1))
@@ -1751,12 +2412,14 @@ class SymbolTableVisitor(zincVisitor):
                     dict_symbol = self.symbols.lookup_by_id(dict_name)
                     if dict_symbol and dict_symbol.dict_info:
                         element_type = dict_symbol.dict_info.value_type
+                        callable_info = dict_symbol.dict_info.value_callable_info
             else:
                 dict_symbol = self.symbols.lookup_by_interval(
                     dict_ctx.getSourceInterval(), self._current_function
                 )
                 if dict_symbol and dict_symbol.dict_info:
                     element_type = dict_symbol.dict_info.value_type
+                    callable_info = dict_symbol.dict_info.value_callable_info
         elif arr_type == BaseType.SET:
             raise ZincTypeError("sets do not support index access")
         elif arr_type == BaseType.TUPLE:
@@ -1773,12 +2436,15 @@ class SymbolTableVisitor(zincVisitor):
                 interval=ctx.getSourceInterval(),
             )
             symbol.tuple_info = self._copy_tuple_info(tuple_info.element_tuple_infos.get(index))
+            symbol.callable_info = tuple_info.element_callable_infos.get(index)
             return element_type
 
-        self.symbols.define_temp(
+        temp = self.symbols.define_temp(
             resolved_type=element_type,
             interval=ctx.getSourceInterval(),
-        ).tuple_info = tuple_info if element_type == BaseType.TUPLE else None
+        )
+        temp.tuple_info = tuple_info if element_type == BaseType.TUPLE else None
+        temp.callable_info = callable_info if element_type == BaseType.CALLABLE else None
         return element_type
 
     def visitRangeExpr(self, ctx: ZincParser.RangeExprContext) -> BaseType:
@@ -1793,7 +2459,9 @@ class SymbolTableVisitor(zincVisitor):
 
     def visitMemberAccessExpr(self, ctx: ZincParser.MemberAccessExprContext) -> BaseType:
         """Handle member access."""
-        self.visit(ctx.expression())
+        receiver_type = self.visit(ctx.expression())
+        receiver_symbol = self._expr_symbol(ctx.expression())
+        member_name = ctx.IDENTIFIER().getText()
 
         if self._current_module is not None:
             path = extract_identifier_path(ctx)
@@ -1807,6 +2475,49 @@ class SymbolTableVisitor(zincVisitor):
                             interval=ctx.getSourceInterval(),
                         )
                         return resolved.resolved_type
+                callable_info = self._callable_info_from_symbol_path(path)
+                if callable_info is not None:
+                    temp = self.symbols.define_temp(
+                        resolved_type=BaseType.CALLABLE,
+                        interval=ctx.getSourceInterval(),
+                    )
+                    temp.callable_info = callable_info
+                    return BaseType.CALLABLE
+
+        if receiver_type == BaseType.STRUCT:
+            struct_qualified_name = self._struct_qualified_name_for_symbol(receiver_symbol)
+            if struct_qualified_name:
+                struct = self.atlas.structs.get(struct_qualified_name)
+                if struct:
+                    field = next((candidate for candidate in struct.fields if candidate.name == member_name), None)
+                    if field is not None:
+                        temp = self.symbols.define_temp(
+                            resolved_type=field.resolved_type,
+                            interval=ctx.getSourceInterval(),
+                        )
+                        temp.callable_info = self._copy_callable_info(field.callable_info)
+                        return field.resolved_type
+                    method = next((candidate for candidate in struct.methods if candidate.name == member_name), None)
+                    receiver_name = None
+                    if isinstance(ctx.expression(), ZincParser.PrimaryExprContext):
+                        primary = ctx.expression().primaryExpression()
+                        if primary and primary.IDENTIFIER():
+                            receiver_name = primary.IDENTIFIER().getText()
+                    if method is not None and receiver_name:
+                        target = CallableTarget(
+                            kind="bound_method",
+                            qualified_name=f"{struct_qualified_name}::{member_name}",
+                            display_name=f"{receiver_name}.{member_name}",
+                            receiver_name=receiver_name,
+                            receiver_struct_qualified_name=struct_qualified_name,
+                            receiver_mutability=method.self_mutability,
+                        )
+                        temp = self.symbols.define_temp(
+                            resolved_type=BaseType.CALLABLE,
+                            interval=ctx.getSourceInterval(),
+                        )
+                        temp.callable_info = self._callable_info_from_method(method, target)
+                        return BaseType.CALLABLE
 
         self.symbols.define_temp(
             resolved_type=BaseType.UNKNOWN,
@@ -1826,6 +2537,7 @@ class SymbolTableVisitor(zincVisitor):
         arg_dict_infos: dict[int, DictTypeInfo] = {}
         arg_set_infos: dict[int, SetTypeInfo] = {}
         arg_tuple_infos: dict[int, TupleTypeInfo] = {}
+        arg_callable_infos: dict[int, CallableTypeInfo] = {}
         if ctx.argumentList():
             for i, arg_expr in enumerate(ctx.argumentList().expression()):
                 arg_exprs.append(arg_expr)
@@ -1847,6 +2559,7 @@ class SymbolTableVisitor(zincVisitor):
                         arg_array_infos[i] = ArrayTypeInfo(
                             element_type=arg_symbol.element_type,
                             element_tuple_info=self._copy_tuple_info(arg_symbol.tuple_info),
+                            element_callable_info=self._copy_callable_info(arg_symbol.callable_info),
                         )
                     elif isinstance(arg_expr, ZincParser.PrimaryExprContext):
                         primary = arg_expr.primaryExpression()
@@ -1857,6 +2570,7 @@ class SymbolTableVisitor(zincVisitor):
                                 arg_array_infos[i] = ArrayTypeInfo(
                                     element_type=arr_symbol.element_type,
                                     element_tuple_info=self._copy_tuple_info(arr_symbol.tuple_info),
+                                    element_callable_info=self._copy_callable_info(arr_symbol.callable_info),
                                 )
                 elif arg_type == BaseType.DICT:
                     arg_symbol = self.symbols.lookup_by_interval(
@@ -1888,6 +2602,10 @@ class SymbolTableVisitor(zincVisitor):
                         copied = self._copy_tuple_info(arg_symbol.tuple_info)
                         if copied:
                             arg_tuple_infos[i] = copied
+                elif arg_type == BaseType.CALLABLE:
+                    arg_symbol = self._expr_symbol(arg_expr)
+                    if arg_symbol and arg_symbol.callable_info:
+                        arg_callable_infos[i] = self._copy_callable_info(arg_symbol.callable_info) or CallableTypeInfo()
 
         callee_ctx = ctx.expression()
 
@@ -1969,16 +2687,32 @@ class SymbolTableVisitor(zincVisitor):
                                 arg_symbol = self._expr_symbol(arg_exprs[0])
                                 if arg_symbol and arg_symbol.tuple_info:
                                     var_symbol.tuple_info = self._copy_tuple_info(arg_symbol.tuple_info)
+                            if arg_types[0] == BaseType.CALLABLE:
+                                arg_symbol = self._expr_symbol(arg_exprs[0])
+                                var_symbol.callable_info = self._merge_callable_info(
+                                    var_symbol.callable_info,
+                                    arg_symbol.callable_info if arg_symbol else None,
+                                    "array element",
+                                )
 
                         if var_symbol.resolved_type == BaseType.DICT and var_symbol.dict_info:
                             dict_info = var_symbol.dict_info
                             if method_name == "insert":
                                 if len(arg_types) != 2:
                                     raise ZincTypeError("dict.insert() expects key and value arguments")
+                                if arg_types[0] == BaseType.CALLABLE:
+                                    raise ZincTypeError("callables cannot be used as dict keys")
                                 dict_info.key_type = self._merge_key_type(dict_info.key_type, arg_types[0], "dict key")
                                 dict_info.value_type = self._merge_value_type(
                                     dict_info.value_type, arg_types[1], "dict value"
                                 )
+                                if arg_types[1] == BaseType.CALLABLE:
+                                    value_symbol = self._expr_symbol(arg_exprs[1])
+                                    dict_info.value_callable_info = self._merge_callable_info(
+                                        dict_info.value_callable_info,
+                                        value_symbol.callable_info if value_symbol else None,
+                                        "dict value",
+                                    )
                             elif method_name in {"get", "contains_key", "remove"}:
                                 if len(arg_types) != 1:
                                     raise ZincTypeError(f"dict.{method_name}() expects one key argument")
@@ -2003,6 +2737,7 @@ class SymbolTableVisitor(zincVisitor):
                                     interval=ctx.getSourceInterval(),
                                 )
                                 symbol.element_type = dict_info.value_type
+                                symbol.callable_info = self._copy_callable_info(dict_info.value_callable_info)
                                 return BaseType.ARRAY
                             elif method_name == "items":
                                 if arg_types:
@@ -2016,10 +2751,11 @@ class SymbolTableVisitor(zincVisitor):
                                 return BaseType.ARRAY
 
                             if method_name == "get":
-                                self.symbols.define_temp(
+                                temp = self.symbols.define_temp(
                                     resolved_type=dict_info.value_type,
                                     interval=ctx.getSourceInterval(),
                                 )
+                                temp.callable_info = self._copy_callable_info(dict_info.value_callable_info)
                                 return dict_info.value_type
                             if method_name in {"insert", "remove", "clear"}:
                                 self.symbols.define_temp(
@@ -2033,6 +2769,8 @@ class SymbolTableVisitor(zincVisitor):
                             if method_name in {"push", "insert", "contains", "remove"}:
                                 if len(arg_types) != 1:
                                     raise ZincTypeError(f"set.{method_name}() expects one element argument")
+                                if arg_types[0] == BaseType.CALLABLE:
+                                    raise ZincTypeError("callables cannot be used as set elements")
                                 set_info.element_type = self._merge_key_type(
                                     set_info.element_type, arg_types[0], "set element"
                                 )
@@ -2046,6 +2784,134 @@ class SymbolTableVisitor(zincVisitor):
                                     interval=ctx.getSourceInterval(),
                                 )
                                 return BaseType.VOID
+
+        callee_symbol = self._expr_symbol(callee_ctx)
+        is_bare_top_level_function = False
+        is_direct_static_method = False
+        if self._current_module is not None:
+            path = extract_identifier_path(callee_ctx)
+            if path:
+                is_direct_static_method = (
+                    self.module_graph.resolve_static_method_target(self._current_module, path) is not None
+                )
+                if len(path) == 1:
+                    local_symbol = self.symbols.lookup_by_id(path[0])
+                    is_bare_top_level_function = (
+                        self.module_graph.resolve_function_path(self._current_module, path) is not None
+                        and local_symbol is None
+                    )
+        if (
+            callee_symbol
+            and callee_symbol.resolved_type == BaseType.CALLABLE
+            and callee_symbol.callable_info
+            and not is_bare_top_level_function
+            and not is_direct_static_method
+        ):
+            callable_info = callee_symbol.callable_info
+            if len(callable_info.param_types) != len(arg_types):
+                raise ZincTypeError("indirect call arity mismatch")
+
+            return_type = BaseType.UNKNOWN
+            return_dict_info = None
+            return_set_info = None
+            return_tuple_info = None
+            return_callable_info = None
+
+            for target in callable_info.targets:
+                candidate_type = BaseType.UNKNOWN
+                candidate_dict_info = None
+                candidate_set_info = None
+                candidate_tuple_info = None
+                candidate_callable_info = None
+
+                if target.kind in {"function", "lambda"}:
+                    func_def = self.atlas.function_defs.get(target.qualified_name)
+                    if func_def is None:
+                        raise ZincTypeError(f"unknown callable target '{target.display_name}'")
+                    if BaseType.UNKNOWN not in arg_types:
+                        mangled = self.atlas.add_specialization(
+                            target.qualified_name,
+                            arg_types,
+                            func_def,
+                            self._current_function,
+                            arg_channel_infos,
+                            arg_array_infos,
+                            arg_dict_infos,
+                            arg_set_infos,
+                            arg_tuple_infos,
+                            arg_callable_infos,
+                        )
+                        func_instance = self.atlas.functions.get(mangled)
+                        if func_instance:
+                            if func_instance.return_type != BaseType.VOID:
+                                candidate_type = func_instance.return_type
+                                candidate_dict_info = func_instance.return_dict_info
+                                candidate_set_info = func_instance.return_set_info
+                                candidate_tuple_info = func_instance.return_tuple_info
+                                candidate_callable_info = func_instance.return_callable_info
+                else:
+                    struct_qualified_name = (
+                        target.receiver_struct_qualified_name
+                        or target.qualified_name.partition("::")[0]
+                    )
+                    method_name = target.qualified_name.rpartition("::")[2]
+                    struct = self.atlas.structs.get(struct_qualified_name)
+                    if struct is None:
+                        raise ZincTypeError(f"unknown callable target '{target.display_name}'")
+                    method = next((candidate for candidate in struct.methods if candidate.name == method_name), None)
+                    if method is None:
+                        raise ZincTypeError(f"unknown callable target '{target.display_name}'")
+                    candidate_type = self._method_return_base_type(method.return_type)
+
+                if candidate_type == BaseType.UNKNOWN:
+                    continue
+                if return_type == BaseType.UNKNOWN:
+                    return_type = candidate_type
+                    return_dict_info = self._copy_dict_info(candidate_dict_info)
+                    return_set_info = self._copy_set_info(candidate_set_info)
+                    return_tuple_info = self._copy_tuple_info(candidate_tuple_info)
+                    return_callable_info = self._copy_callable_info(candidate_callable_info)
+                    continue
+                promoted = promote_numeric(return_type, candidate_type)
+                if promoted == BaseType.UNKNOWN and candidate_type != return_type:
+                    raise ZincTypeError("indirect call targets disagree on return type")
+                return_type = promoted
+                if return_type == BaseType.DICT:
+                    return_dict_info = self._merge_dict_info(return_dict_info, candidate_dict_info)
+                if return_type == BaseType.SET:
+                    return_set_info = self._merge_set_info(return_set_info, candidate_set_info)
+                if return_type == BaseType.TUPLE:
+                    return_tuple_info = self._merge_tuple_info(return_tuple_info, candidate_tuple_info)
+                if return_type == BaseType.CALLABLE:
+                    return_callable_info = self._merge_callable_info(
+                        return_callable_info,
+                        candidate_callable_info,
+                        "callable return",
+                    )
+
+            self._refine_callable_signature(
+                callable_info,
+                arg_types,
+                arg_array_infos,
+                arg_dict_infos,
+                arg_set_infos,
+                arg_tuple_infos,
+                arg_callable_infos,
+                return_type,
+                return_dict_info,
+                return_set_info,
+                return_tuple_info,
+                return_callable_info,
+            )
+            temp = self.symbols.define_temp(
+                resolved_type=return_type,
+                interval=ctx.getSourceInterval(),
+            )
+            temp.dict_info = self._copy_dict_info(return_dict_info)
+            temp.set_info = self._copy_set_info(return_set_info)
+            temp.tuple_info = self._copy_tuple_info(return_tuple_info)
+            temp.callable_info = return_callable_info
+            return return_type
 
         path = extract_identifier_path(callee_ctx)
         if path and self._current_module is not None:
@@ -2079,6 +2945,7 @@ class SymbolTableVisitor(zincVisitor):
                         arg_dict_infos,
                         arg_set_infos,
                         arg_tuple_infos,
+                        arg_callable_infos,
                     )
                     key = (self._current_function, ctx.getSourceInterval())
                     self.specialization_map[key] = mangled
@@ -2098,6 +2965,7 @@ class SymbolTableVisitor(zincVisitor):
                         temp.dict_info = self._copy_dict_info(func_instance.return_dict_info)
                         temp.set_info = self._copy_set_info(func_instance.return_set_info)
                         temp.tuple_info = self._copy_tuple_info(func_instance.return_tuple_info)
+                        temp.callable_info = func_instance.return_callable_info
                         return func_instance.return_type
 
             if len(path) == 1:
@@ -2139,16 +3007,19 @@ class SymbolTableVisitor(zincVisitor):
         for field_ctx in ctx.fieldInit():
             self.visit(field_ctx.expression())
 
+        resolved_struct = None
         if self._current_module is not None:
             resolved_struct = self.module_graph.resolve_struct_path(
                 self._current_module, struct_path_from_ctx(ctx)
             )
             if resolved_struct is None:
                 raise ZincTypeError(f"unknown struct '{ctx.qualifiedName().getText()}'")
-        self.symbols.define_temp(
+        temp = self.symbols.define_temp(
             resolved_type=BaseType.STRUCT,
             interval=ctx.getSourceInterval(),
         )
+        if resolved_struct is not None:
+            self._struct_symbol_bindings[temp.unique_name] = resolved_struct.qualified_name
         return BaseType.STRUCT
 
     def visitVariableAssignment(self, ctx: ZincParser.VariableAssignmentContext) -> None:
@@ -2205,6 +3076,12 @@ class SymbolTableVisitor(zincVisitor):
             )
             if expr_symbol and expr_symbol.tuple_info:
                 expr_tuple_info = self._copy_tuple_info(expr_symbol.tuple_info)
+            expr_callable_info = (
+                expr_symbol.callable_info
+                if expr_type == BaseType.CALLABLE and expr_symbol
+                else self._copy_callable_info(expr_symbol.callable_info) if expr_symbol else None
+            )
+            expr_struct_qualified_name = self._struct_qualified_name_for_symbol(expr_symbol)
 
             if existing is None:
                 # First assignment - create new symbol
@@ -2224,6 +3101,10 @@ class SymbolTableVisitor(zincVisitor):
                     new_sym.set_info = expr_set_info
                 if expr_tuple_info:
                     new_sym.tuple_info = expr_tuple_info
+                if expr_callable_info:
+                    new_sym.callable_info = expr_callable_info
+                if expr_struct_qualified_name:
+                    self._struct_symbol_bindings[new_sym.unique_name] = expr_struct_qualified_name
             elif existing.resolved_type != expr_type:
                 # Type change - create shadow symbol
                 new_sym = self.symbols.define(
@@ -2241,6 +3122,10 @@ class SymbolTableVisitor(zincVisitor):
                     new_sym.set_info = expr_set_info
                 if expr_tuple_info:
                     new_sym.tuple_info = expr_tuple_info
+                if expr_callable_info:
+                    new_sym.callable_info = expr_callable_info
+                if expr_struct_qualified_name:
+                    self._struct_symbol_bindings[new_sym.unique_name] = expr_struct_qualified_name
             elif expr_type == BaseType.DICT:
                 if expr_dict_info:
                     if existing.dict_info is None:
@@ -2320,6 +3205,18 @@ class SymbolTableVisitor(zincVisitor):
                     resolved_type=expr_type,
                     interval=target.getSourceInterval(),
                 )
+            elif expr_type == BaseType.CALLABLE:
+                existing.callable_info = self._merge_callable_info(
+                    existing.callable_info,
+                    expr_callable_info,
+                    f"variable '{var_name}'",
+                )
+                existing.is_mutated = True
+                temp = self.symbols.define_temp(
+                    resolved_type=expr_type,
+                    interval=target.getSourceInterval(),
+                )
+                temp.callable_info = self._copy_callable_info(existing.callable_info)
             elif (
                 expr_type == BaseType.ARRAY
                 and existing.element_type is not None
@@ -2337,6 +3234,14 @@ class SymbolTableVisitor(zincVisitor):
             else:
                 # Same type reassignment - mark original as mutated
                 existing.is_mutated = True
+                if expr_type == BaseType.ARRAY:
+                    existing.callable_info = self._merge_callable_info(
+                        existing.callable_info,
+                        expr_callable_info,
+                        f"array '{var_name}'",
+                    )
+                if expr_type == BaseType.STRUCT and expr_struct_qualified_name:
+                    self._struct_symbol_bindings[existing.unique_name] = expr_struct_qualified_name
                 # Still create entry in _by_interval for this assignment
                 self.symbols.define_temp(
                     resolved_type=expr_type,
@@ -2366,6 +3271,7 @@ class SymbolTableVisitor(zincVisitor):
                 element_type = tuple_info.element_types[i]
                 existing = self.symbols.lookup_by_id(var_name)
                 new_tuple_info = self._copy_tuple_info(tuple_info.element_tuple_infos.get(i))
+                new_callable_info = self._copy_callable_info(tuple_info.element_callable_infos.get(i))
                 if existing is None or existing.resolved_type != element_type:
                     new_sym = self.symbols.define(
                         id=var_name,
@@ -2375,15 +3281,19 @@ class SymbolTableVisitor(zincVisitor):
                         is_shadow=existing is not None,
                     )
                     new_sym.tuple_info = new_tuple_info
+                    new_sym.callable_info = new_callable_info
                 else:
                     existing.is_mutated = True
                     if new_tuple_info:
                         existing.tuple_info = new_tuple_info
+                    if new_callable_info:
+                        existing.callable_info = new_callable_info
                     temp = self.symbols.define_temp(
                         resolved_type=element_type,
                         interval=token.getSourceInterval(),
                     )
                     temp.tuple_info = new_tuple_info
+                    temp.callable_info = new_callable_info
         elif target.indexAccess():
             index_access = target.indexAccess()
             collection_ctx = index_access.expression(0)
@@ -2441,12 +3351,21 @@ class SymbolTableVisitor(zincVisitor):
                 self._current_return_tuple_info = self._merge_tuple_info(
                     self._current_return_tuple_info, expr_symbol.tuple_info
                 )
+            if return_type == BaseType.CALLABLE and expr_symbol:
+                self._current_return_callable_info = self._merge_callable_info(
+                    self._current_return_callable_info, expr_symbol.callable_info, "function return"
+                )
             if self._current_return_type == BaseType.VOID:
                 self._current_return_type = return_type
             elif return_type != BaseType.UNKNOWN and return_type != self._current_return_type:
                 # Promote int+float -> float when return paths disagree
                 if {self._current_return_type, return_type} == {BaseType.INTEGER, BaseType.FLOAT}:
                     self._current_return_type = BaseType.FLOAT
+                elif (
+                    self._current_return_type == BaseType.CALLABLE
+                    and return_type == BaseType.CALLABLE
+                ):
+                    pass
 
     def visitIfStatement(self, ctx: ZincParser.IfStatementContext) -> None:
         """Visit if/else statement."""
@@ -2612,6 +3531,7 @@ class SymbolTableVisitor(zincVisitor):
         # Collect argument types and track channel arguments
         arg_types: list[BaseType] = []
         arg_channel_infos: dict[int, ChannelTypeInfo] = {}
+        arg_callable_infos: dict[int, CallableTypeInfo] = {}
         if ctx.argumentList():
             for i, arg_expr in enumerate(ctx.argumentList().expression()):
                 arg_type = self.visit(arg_expr)
@@ -2623,6 +3543,10 @@ class SymbolTableVisitor(zincVisitor):
                         chan_var = arg_primary.IDENTIFIER().getText()
                         if chan_var in self._channel_infos:
                             arg_channel_infos[i] = self._channel_infos[chan_var]
+                elif arg_type == BaseType.CALLABLE:
+                    arg_symbol = self._expr_symbol(arg_expr)
+                    if arg_symbol and arg_symbol.callable_info:
+                        arg_callable_infos[i] = self._copy_callable_info(arg_symbol.callable_info) or CallableTypeInfo()
 
         resolved_function = self.module_graph.resolve_function_path(self._current_module, path)
         if resolved_function is None or resolved_function.name in ("print", "chan"):
@@ -2638,6 +3562,7 @@ class SymbolTableVisitor(zincVisitor):
             func_def,
             self._current_function,
             arg_channel_infos,
+            arg_callable_infos=arg_callable_infos,
         )
         key = (self._current_function, ctx.getSourceInterval())
         self.specialization_map[key] = mangled

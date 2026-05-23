@@ -11,6 +11,7 @@ from sortedcontainers import SortedDict, SortedSet
 from zinc.ast.types import (
     ArrayTypeInfo,
     BaseType,
+    CallableTypeInfo,
     ChannelTypeInfo,
     DictTypeInfo,
     SetTypeInfo,
@@ -50,10 +51,13 @@ class FunctionInstance:
     arg_set_infos: dict[int, SetTypeInfo] = field(default_factory=dict)
     # Rich type info for tuple arguments (arg_index -> TupleTypeInfo)
     arg_tuple_infos: dict[int, TupleTypeInfo] = field(default_factory=dict)
+    # Rich type info for callable arguments (arg_index -> CallableTypeInfo)
+    arg_callable_infos: dict[int, CallableTypeInfo] = field(default_factory=dict)
     # Rich type info for collection return values
     return_dict_info: DictTypeInfo | None = None
     return_set_info: SetTypeInfo | None = None
     return_tuple_info: TupleTypeInfo | None = None
+    return_callable_info: CallableTypeInfo | None = None
 
 
 @dataclass
@@ -66,10 +70,13 @@ class StructFieldInfo:
     is_private: bool = False
     is_const: bool = False
     resolved_type: BaseType = field(default=BaseType.UNKNOWN)
+    callable_info: CallableTypeInfo | None = None
     source_struct_qualified_name: str | None = None
 
     def rust_type(self) -> str:
         """Get Rust type string for this field."""
+        if self.callable_info is not None:
+            return self.callable_info.rust_type_name()
         if self.type_annotation:
             mapping = {
                 "i8": "i8",
@@ -190,6 +197,7 @@ class Atlas:
         arg_dict_infos: dict[int, DictTypeInfo] | None = None,
         arg_set_infos: dict[int, SetTypeInfo] | None = None,
         arg_tuple_infos: dict[int, TupleTypeInfo] | None = None,
+        arg_callable_infos: dict[int, CallableTypeInfo] | None = None,
     ) -> str:
         """Create a new function specialization and return its mangled name."""
         mangled = self._mangle_name(
@@ -200,6 +208,7 @@ class Atlas:
             arg_dict_infos,
             arg_set_infos,
             arg_tuple_infos,
+            arg_callable_infos,
         )
         if mangled not in self.functions:
             module_id, name = ModuleGraph.split_qualified_name(qualified_name)
@@ -218,8 +227,31 @@ class Atlas:
                 arg_dict_infos=arg_dict_infos or {},
                 arg_set_infos=arg_set_infos or {},
                 arg_tuple_infos=arg_tuple_infos or {},
+                arg_callable_infos={
+                    index: info.copy() for index, info in (arg_callable_infos or {}).items()
+                },
             )
             self.calls[mangled] = SortedSet()
+        elif arg_callable_infos:
+            instance = self.functions[mangled]
+            for index, info in arg_callable_infos.items():
+                existing = instance.arg_callable_infos.get(index)
+                if existing is None:
+                    instance.arg_callable_infos[index] = info.copy()
+                else:
+                    try:
+                        instance.arg_callable_infos[index] = existing.merge_targets_from(info)
+                    except ValueError:
+                        def specificity(callable_info: CallableTypeInfo) -> int:
+                            unknowns = sum(
+                                1 for base_type in callable_info.param_types if base_type == BaseType.UNKNOWN
+                            )
+                            if callable_info.return_type == BaseType.UNKNOWN:
+                                unknowns += 1
+                            return unknowns
+
+                        chosen = existing if specificity(existing) <= specificity(info) else info
+                        instance.arg_callable_infos[index] = chosen.copy()
 
         if caller_mangled and caller_mangled in self.calls:
             self.calls[caller_mangled].add(mangled)
@@ -235,6 +267,7 @@ class Atlas:
         arg_dict_infos: dict[int, DictTypeInfo] | None = None,
         arg_set_infos: dict[int, SetTypeInfo] | None = None,
         arg_tuple_infos: dict[int, TupleTypeInfo] | None = None,
+        arg_callable_infos: dict[int, CallableTypeInfo] | None = None,
     ) -> str:
         """Generate a flattened Rust symbol name."""
         base_name = self.module_graph.rust_base_name(qualified_name)
@@ -253,6 +286,8 @@ class Atlas:
                 type_parts.append(arg_set_infos[i].to_rust_type_suffix())
             elif base_type == BaseType.TUPLE and arg_tuple_infos and i in arg_tuple_infos:
                 type_parts.append(arg_tuple_infos[i].to_rust_type_suffix())
+            elif base_type == BaseType.CALLABLE and arg_callable_infos and i in arg_callable_infos:
+                type_parts.append(arg_callable_infos[i].to_rust_type_suffix())
             else:
                 type_parts.append(type_to_rust(base_type))
 

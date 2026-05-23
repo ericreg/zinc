@@ -300,7 +300,7 @@ selectCase
     ;
 
 lambdaExpression
-    : '|' parameterList? '|' (expression | block)
+    : 'fn' '(' parameterList? ')' block
     ;
 
 // ============================================================================

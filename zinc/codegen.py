@@ -9,7 +9,17 @@ from zinc.parser.zincVisitor import zincVisitor
 from zinc.parser.zincParser import zincParser as ZincParser
 from zinc.atlas import Atlas, FunctionInstance, StructInstance, ConstInstance, StructFieldInfo, StructMethodInfo
 from zinc.symbols import SymbolTable, SymbolKind
-from zinc.ast.types import BaseType, type_to_rust, ChannelTypeInfo, DictTypeInfo, SetTypeInfo, TupleTypeInfo
+from zinc.ast.types import (
+    ArrayTypeInfo,
+    BaseType,
+    CallableTarget,
+    CallableTypeInfo,
+    ChannelTypeInfo,
+    DictTypeInfo,
+    SetTypeInfo,
+    TupleTypeInfo,
+    type_to_rust,
+)
 from zinc.modules import extract_identifier_path, struct_path_from_ctx
 
 
@@ -95,16 +105,23 @@ class CodeGenVisitor(zincVisitor):
         self._spawn_handles_var: str | None = None
         self._select_counter = 0
         self._current_channel_params: set[str] = set()
+        self._boxed_struct_vars: set[tuple[str | None, str]] = set()
+        self._callable_signatures: dict[str, CallableTypeInfo] = {}
 
     def generate(self) -> RustProgram:
         """Main entry point - generate Rust code for all reachable code."""
         # Pre-scan to determine which struct vars need mut
         self._prescan_for_mut_vars()
+        self._collect_callable_signatures()
         self._mark_async_functions()
 
         imports = self._generate_imports()
         consts = [self._generate_const(c) for c in self.atlas.consts.values()]
-        structs = [self._generate_struct(s) for s in self.atlas.structs.values()]
+        callable_enums = [
+            self._generate_callable_enum(info)
+            for _, info in sorted(self._callable_signatures.items())
+        ]
+        structs = [*callable_enums, *[self._generate_struct(s) for s in self.atlas.structs.values()]]
         functions = []
         main_body = []
 
@@ -130,14 +147,15 @@ class CodeGenVisitor(zincVisitor):
 
     def _prescan_for_mut_vars(self) -> None:
         """Scan all code to find struct variables that call &mut self methods."""
-        main_func = self.atlas.functions.get(self.atlas.main.mangled_name)
-        if main_func:
-            previous_module = self._current_module
-            self._current_module = main_func.module_id
-            try:
-                self._prescan_block(main_func.ctx.block())
-            finally:
-                self._current_module = previous_module
+        previous_module = self._current_module
+        previous_function = self._current_function
+        for func in self.atlas.functions.values():
+            self._current_module = func.module_id
+            self._current_function = func.mangled_name
+            if hasattr(func.ctx, "block"):
+                self._prescan_block(func.ctx.block())
+        self._current_module = previous_module
+        self._current_function = previous_function
 
     def _prescan_block(self, block_ctx) -> None:
         """Recursively scan a block for struct assignments and method calls."""
@@ -155,10 +173,12 @@ class CodeGenVisitor(zincVisitor):
                 expr = var_ctx.expression()
                 struct_name = self._detect_struct_assignment(expr)
                 if struct_name:
-                    self._struct_instance_vars[var_name] = struct_name
+                    self._struct_instance_vars[f"{self._current_function}:{var_name}"] = struct_name
                 # Track if variable is assigned a compile-time literal value
                 elif self._is_compile_time_literal_expr(expr):
                     self._literal_vars.add(var_name)
+
+        self._prescan_callable_escapes(stmt_ctx)
 
         # Track method calls that require mut
         if stmt_ctx.expressionStatement():
@@ -175,6 +195,30 @@ class CodeGenVisitor(zincVisitor):
             self._prescan_block(stmt_ctx.whileStatement().block())
         if stmt_ctx.loopStatement():
             self._prescan_block(stmt_ctx.loopStatement().block())
+
+    def _prescan_callable_escapes(self, node) -> None:
+        """Collect struct receivers whose bound methods escape as callable values."""
+        if node is None:
+            return
+        if isinstance(node, ZincParser.MemberAccessExprContext) and self._current_function is not None:
+            parent = node.parentCtx
+            is_direct_call = (
+                isinstance(parent, ZincParser.FunctionCallExprContext)
+                and parent.expression() is node
+            )
+            if not is_direct_call:
+                symbol = self.symbols.lookup_by_interval(
+                    node.getSourceInterval(), self._current_function
+                )
+                if symbol and symbol.callable_info:
+                    for target in symbol.callable_info.targets:
+                        if target.kind == "bound_method" and target.receiver_name:
+                            self._boxed_struct_vars.add((self._current_function, target.receiver_name))
+        if hasattr(node, "getChildCount"):
+            for i in range(node.getChildCount()):
+                child = node.getChild(i)
+                if isinstance(child, ParserRuleContext):
+                    self._prescan_callable_escapes(child)
 
     def _detect_struct_assignment(self, expr_ctx) -> str | None:
         """Detect if expression assigns a struct instance, return struct name."""
@@ -216,8 +260,9 @@ class CodeGenVisitor(zincVisitor):
                     primary = target_ctx.primaryExpression()
                     if primary and primary.IDENTIFIER():
                         target_text = primary.IDENTIFIER().getText()
-                        if target_text in self._struct_instance_vars:
-                            struct_name = self._struct_instance_vars[target_text]
+                        key = f"{self._current_function}:{target_text}"
+                        if key in self._struct_instance_vars:
+                            struct_name = self._struct_instance_vars[key]
                             struct = self.atlas.structs.get(struct_name)
                             if struct:
                                 method = next((m for m in struct.methods if m.name == method_name), None)
@@ -297,14 +342,314 @@ class CodeGenVisitor(zincVisitor):
         """Generate import statements based on what's used."""
         imports = []
         collections: set[str] = set()
+        needs_rc_refcell = bool(self._boxed_struct_vars)
         for symbol in self.symbols.all_symbols():
             if symbol.dict_info:
                 collections.add(symbol.dict_info.rust_container())
             if symbol.set_info:
                 collections.add(symbol.set_info.rust_container())
+        for info in self._callable_signatures.values():
+            for dict_info in info.param_dict_infos.values():
+                collections.add(dict_info.rust_container())
+            for set_info in info.param_set_infos.values():
+                collections.add(set_info.rust_container())
+            if info.return_dict_info:
+                collections.add(info.return_dict_info.rust_container())
+            if info.return_set_info:
+                collections.add(info.return_set_info.rust_container())
         if collections:
             imports.append(f"use std::collections::{{{', '.join(sorted(collections))}}};")
+        if needs_rc_refcell:
+            imports.append("use std::cell::RefCell;")
+            imports.append("use std::rc::Rc;")
         return imports
+
+    def _register_callable_info(self, info: CallableTypeInfo | None) -> None:
+        """Collect a concrete callable signature and all nested callable signatures."""
+        if info is None:
+            return
+        key = info.rust_type_name()
+        existing = self._callable_signatures.get(key)
+        if existing is None:
+            self._callable_signatures[key] = info.copy()
+        else:
+            self._callable_signatures[key] = existing.merge_targets_from(info)
+
+        for nested in info.param_callable_infos.values():
+            self._register_callable_info(nested)
+        self._register_callable_info(info.return_callable_info)
+        for array_info in info.param_array_infos.values():
+            self._register_callable_info(array_info.element_callable_info)
+        for dict_info in info.param_dict_infos.values():
+            self._register_callable_info(dict_info.key_callable_info)
+            self._register_callable_info(dict_info.value_callable_info)
+        for tuple_info in info.param_tuple_infos.values():
+            for nested in tuple_info.element_callable_infos.values():
+                self._register_callable_info(nested)
+        if info.return_dict_info:
+            self._register_callable_info(info.return_dict_info.key_callable_info)
+            self._register_callable_info(info.return_dict_info.value_callable_info)
+        if info.return_tuple_info:
+            for nested in info.return_tuple_info.element_callable_infos.values():
+                self._register_callable_info(nested)
+
+    def _collect_callable_signatures(self) -> None:
+        """Collect every callable signature that needs a Rust enum."""
+        self._callable_signatures = {}
+        for struct in self.atlas.structs.values():
+            for field in struct.fields:
+                self._register_callable_info(field.callable_info)
+        for func in self.atlas.functions.values():
+            for info in func.arg_callable_infos.values():
+                self._register_callable_info(info)
+            self._register_callable_info(func.return_callable_info)
+        for symbol in self.symbols.all_symbols():
+            if symbol.kind not in {SymbolKind.VARIABLE, SymbolKind.PARAMETER}:
+                continue
+            self._register_callable_info(symbol.callable_info)
+            if symbol.dict_info:
+                self._register_callable_info(symbol.dict_info.key_callable_info)
+                self._register_callable_info(symbol.dict_info.value_callable_info)
+            if symbol.tuple_info:
+                for nested in symbol.tuple_info.element_callable_infos.values():
+                    self._register_callable_info(nested)
+        self._prune_abstract_callable_signatures()
+
+    def _prune_abstract_callable_signatures(self) -> None:
+        """Drop abstract callable signatures when a concrete version exists for the same target set."""
+        grouped: dict[tuple[tuple, int], list[CallableTypeInfo]] = {}
+        for info in self._callable_signatures.values():
+            target_key = tuple(sorted(target.storage_key() for target in info.targets))
+            grouped.setdefault((target_key, len(info.param_types)), []).append(info)
+
+        keep: dict[str, CallableTypeInfo] = {}
+        for infos in grouped.values():
+            has_concrete = any(
+                all(base_type != BaseType.UNKNOWN for base_type in info.param_types)
+                and info.return_type != BaseType.UNKNOWN
+                for info in infos
+            )
+            for info in infos:
+                is_abstract = (
+                    any(base_type == BaseType.UNKNOWN for base_type in info.param_types)
+                    or info.return_type == BaseType.UNKNOWN
+                )
+                if is_abstract and has_concrete:
+                    continue
+                keep[info.rust_type_name()] = info
+        self._callable_signatures = keep
+
+    def _callable_variant_name(self, info: CallableTypeInfo, target: CallableTarget) -> str:
+        """Return the stable enum variant name for a callable target."""
+        registry_info = self._callable_signatures.get(info.rust_type_name(), info)
+        ordered = sorted(registry_info.targets, key=lambda item: item.storage_key())
+        for index, candidate in enumerate(ordered):
+            if candidate.storage_key() == target.storage_key():
+                return f"V{index}"
+        raise KeyError(f"unknown callable target: {target.display_name}")
+
+    def _type_with_metadata_to_rust(
+        self,
+        base_type: BaseType,
+        *,
+        array_info: ArrayTypeInfo | None = None,
+        dict_info: DictTypeInfo | None = None,
+        set_info: SetTypeInfo | None = None,
+        tuple_info: TupleTypeInfo | None = None,
+        callable_info: CallableTypeInfo | None = None,
+        as_reference: bool = False,
+    ) -> str:
+        """Render a full Zinc type including rich metadata."""
+        if base_type == BaseType.ARRAY and array_info:
+            return array_info.to_rust_type(as_reference=as_reference)
+        if base_type == BaseType.DICT and dict_info:
+            return dict_info.to_rust_type(as_reference=as_reference)
+        if base_type == BaseType.SET and set_info:
+            return set_info.to_rust_type(as_reference=as_reference)
+        if base_type == BaseType.TUPLE and tuple_info:
+            return tuple_info.to_rust_type()
+        if base_type == BaseType.CALLABLE and callable_info:
+            return callable_info.rust_type_name()
+        if base_type == BaseType.VOID:
+            return "()"
+        return type_to_rust(base_type)
+
+    def _callable_param_rust_type(self, info: CallableTypeInfo, index: int) -> str:
+        """Render the Rust type for a callable parameter slot."""
+        return self._type_with_metadata_to_rust(
+            info.param_types[index],
+            array_info=info.param_array_infos.get(index),
+            dict_info=info.param_dict_infos.get(index),
+            set_info=info.param_set_infos.get(index),
+            tuple_info=info.param_tuple_infos.get(index),
+            callable_info=info.param_callable_infos.get(index),
+            as_reference=info.param_types[index] in {BaseType.ARRAY, BaseType.DICT, BaseType.SET},
+        )
+
+    def _callable_return_rust_type(self, info: CallableTypeInfo) -> str:
+        """Render the Rust return type for a callable signature."""
+        return self._type_with_metadata_to_rust(
+            info.return_type,
+            dict_info=info.return_dict_info,
+            set_info=info.return_set_info,
+            tuple_info=info.return_tuple_info,
+            callable_info=info.return_callable_info,
+            as_reference=False,
+        )
+
+    def _callable_dispatch_target(self, info: CallableTypeInfo, target: CallableTarget) -> str:
+        """Render the Rust callable target for a dispatcher arm."""
+        if target.kind in {"function", "lambda"}:
+            return self.atlas._mangle_name(
+                target.qualified_name,
+                info.param_types,
+                arg_array_infos=info.param_array_infos,
+                arg_dict_infos=info.param_dict_infos,
+                arg_set_infos=info.param_set_infos,
+                arg_tuple_infos=info.param_tuple_infos,
+                arg_callable_infos=info.param_callable_infos,
+            )
+        if target.kind == "static_method":
+            struct_qualified_name = target.receiver_struct_qualified_name or target.qualified_name.rpartition("::")[0]
+            method_name = target.qualified_name.rpartition("::")[2]
+            struct = self.atlas.structs[struct_qualified_name]
+            return f"{self._struct_rust_name(struct)}::{method_name}"
+        if target.kind == "bound_method":
+            return target.qualified_name.rpartition("::")[2]
+        raise KeyError(f"unknown callable target kind: {target.kind}")
+
+    def _callable_variant_payload_type(self, target: CallableTarget) -> str | None:
+        """Return the Rust payload type for a callable enum variant."""
+        if target.kind != "bound_method":
+            return None
+        struct_qualified_name = target.receiver_struct_qualified_name
+        if struct_qualified_name is None:
+            return None
+        struct = self.atlas.structs.get(struct_qualified_name)
+        if struct is None:
+            return None
+        return f"Rc<RefCell<{self._struct_rust_name(struct)}>>"
+
+    def _generate_callable_enum(self, info: CallableTypeInfo) -> str:
+        """Generate a Rust enum and dispatcher for one callable signature."""
+        ordered_targets = sorted(info.targets, key=lambda target: target.storage_key())
+        lines = ["#[derive(Clone)]", f"enum {info.rust_type_name()} {{"]
+        for target in ordered_targets:
+            variant_name = self._callable_variant_name(info, target)
+            payload_type = self._callable_variant_payload_type(target)
+            if payload_type:
+                lines.append(f"    {variant_name}({payload_type}),")
+            else:
+                lines.append(f"    {variant_name},")
+        lines.append("}")
+        lines.append("")
+        lines.append(f"impl {info.rust_type_name()} {{")
+        params = [
+            f"arg_{index}: {self._callable_param_rust_type(info, index)}"
+            for index in range(len(info.param_types))
+        ]
+        ret_type = self._callable_return_rust_type(info)
+        ret_suffix = "" if ret_type == "()" else f" -> {ret_type}"
+        lines.append(f"    fn call(&self, {', '.join(params)}){ret_suffix} {{")
+        lines.append("        match self {")
+        for target in ordered_targets:
+            variant_name = self._callable_variant_name(info, target)
+            args = ", ".join(f"arg_{index}" for index in range(len(info.param_types)))
+            if target.kind == "bound_method":
+                method_name = self._callable_dispatch_target(info, target)
+                borrow = "borrow_mut" if target.receiver_mutability == "&mut self" else "borrow"
+                call_expr = f"receiver.{borrow}().{method_name}({args})"
+                if ret_type == "()":
+                    lines.append(f"            Self::{variant_name}(receiver) => {{ {call_expr}; }}")
+                else:
+                    lines.append(f"            Self::{variant_name}(receiver) => {call_expr},")
+            else:
+                callee = self._callable_dispatch_target(info, target)
+                call_expr = f"{callee}({args})"
+                if ret_type == "()":
+                    lines.append(f"            Self::{variant_name} => {{ {call_expr}; }}")
+                else:
+                    lines.append(f"            Self::{variant_name} => {call_expr},")
+        lines.append("        }")
+        lines.append("    }")
+        lines.append("}")
+        return "\n".join(lines)
+
+    def _boxed_struct_key(self, name: str) -> tuple[str | None, str]:
+        """Return the lookup key for a possibly boxed struct variable."""
+        return (self._current_function, name)
+
+    def _render_callable_value(self, info: CallableTypeInfo) -> str:
+        """Render a direct callable value expression as an enum constructor."""
+        if len(info.targets) != 1:
+            raise ValueError("direct callable expressions must resolve to a single target")
+        target = info.targets[0]
+        variant_name = self._callable_variant_name(info, target)
+        if target.kind == "bound_method":
+            receiver_name = target.receiver_name or ""
+            return f"{info.rust_type_name()}::{variant_name}({receiver_name}.clone())"
+        return f"{info.rust_type_name()}::{variant_name}"
+
+    def _render_callable_value_for_signature(
+        self,
+        info: CallableTypeInfo,
+        expected_info: CallableTypeInfo,
+    ) -> str:
+        """Render a direct callable value using an expected concrete signature."""
+        if len(info.targets) != 1:
+            raise ValueError("direct callable expressions must resolve to a single target")
+        target = info.targets[0]
+        variant_name = self._callable_variant_name(expected_info, target)
+        if target.kind == "bound_method":
+            receiver_name = target.receiver_name or ""
+            return f"{expected_info.rust_type_name()}::{variant_name}({receiver_name}.clone())"
+        return f"{expected_info.rust_type_name()}::{variant_name}"
+
+    def _process_callable_args(
+        self,
+        callable_info: CallableTypeInfo,
+        args: list[str],
+        arg_ctxs: list | None = None,
+    ) -> list[str]:
+        """Process indirect-call arguments using a callable signature."""
+        processed: list[str] = []
+        for i, arg in enumerate(args):
+            if i < len(callable_info.param_types):
+                param_type = callable_info.param_types[i]
+                if param_type == BaseType.STRING and arg.startswith('"'):
+                    processed.append(f"String::from({arg})")
+                elif param_type == BaseType.ARRAY and i in callable_info.param_array_infos:
+                    arr_info = callable_info.param_array_infos[i]
+                    processed.append(f"&mut {arg}" if arr_info.is_mutated else f"&{arg}")
+                elif param_type == BaseType.DICT and i in callable_info.param_dict_infos:
+                    dict_info = callable_info.param_dict_infos[i]
+                    processed.append(f"&mut {arg}" if dict_info.is_mutated else f"&{arg}")
+                elif param_type == BaseType.SET and i in callable_info.param_set_infos:
+                    set_info = callable_info.param_set_infos[i]
+                    processed.append(f"&mut {arg}" if set_info.is_mutated else f"&{arg}")
+                elif param_type == BaseType.CALLABLE and i in callable_info.param_callable_infos:
+                    arg_ctx = arg_ctxs[i] if arg_ctxs and i < len(arg_ctxs) else None
+                    arg_symbol = self._get_expr_symbol(arg_ctx) if arg_ctx is not None else None
+                    is_local_callable = (
+                        isinstance(arg_ctx, ZincParser.PrimaryExprContext)
+                        and arg_ctx.primaryExpression()
+                        and arg_ctx.primaryExpression().IDENTIFIER()
+                        and arg_ctx.primaryExpression().IDENTIFIER().getText() in self._declared_vars
+                    )
+                    if arg_symbol and arg_symbol.callable_info and not is_local_callable:
+                        processed.append(
+                            self._render_callable_value_for_signature(
+                                arg_symbol.callable_info,
+                                callable_info.param_callable_infos[i],
+                            )
+                        )
+                    else:
+                        processed.append(f"{arg}.clone()")
+                else:
+                    processed.append(arg)
+            else:
+                processed.append(arg)
+        return processed
 
     def _mark_async_functions(self) -> None:
         """Mark functions that need async because they spawn or call async functions."""
@@ -503,6 +848,8 @@ class CodeGenVisitor(zincVisitor):
                     elif i in func.arg_tuple_infos:
                         tuple_info = func.arg_tuple_infos[i]
                         type_str = tuple_info.to_rust_type()
+                    elif i in func.arg_callable_infos:
+                        type_str = func.arg_callable_infos[i].rust_type_name()
                     else:
                         type_str = type_to_rust(func.arg_types[i])
                     params.append(f"{param_name}: {type_str}")
@@ -521,6 +868,8 @@ class CodeGenVisitor(zincVisitor):
                 return_type_str = f" -> {func.return_set_info.to_rust_type(as_reference=False)}"
             elif func.return_type == BaseType.TUPLE and func.return_tuple_info:
                 return_type_str = f" -> {func.return_tuple_info.to_rust_type()}"
+            elif func.return_type == BaseType.CALLABLE and func.return_callable_info:
+                return_type_str = f" -> {func.return_callable_info.rust_type_name()}"
             else:
                 return_type_str = f" -> {type_to_rust(func.return_type)}"
         else:
@@ -667,6 +1016,19 @@ class CodeGenVisitor(zincVisitor):
             return self.visit(ctx.literal())
         if ctx.IDENTIFIER():
             name = ctx.IDENTIFIER().getText()
+            expr_symbol = self._get_expr_symbol(ctx)
+            is_direct_call = (
+                isinstance(ctx.parentCtx, ZincParser.PrimaryExprContext)
+                and isinstance(ctx.parentCtx.parentCtx, ZincParser.FunctionCallExprContext)
+                and ctx.parentCtx.parentCtx.expression() is ctx.parentCtx
+            )
+            if (
+                expr_symbol
+                and expr_symbol.resolved_type == BaseType.CALLABLE
+                and name not in self._declared_vars
+                and not is_direct_call
+            ):
+                return self._render_callable_value(expr_symbol.callable_info)
             if self._current_module is not None:
                 const_symbol = self.module_graph.resolve_const_path(self._current_module, [name])
                 if const_symbol:
@@ -692,6 +1054,17 @@ class CodeGenVisitor(zincVisitor):
     def visitPrimaryExpr(self, ctx: ZincParser.PrimaryExprContext) -> str:
         """Visit primary expression wrapper."""
         return self.visit(ctx.primaryExpression())
+
+    def visitLambdaExpr(self, ctx: ZincParser.LambdaExprContext) -> str:
+        """Visit a lambda expression wrapper."""
+        return self.visit(ctx.lambdaExpression())
+
+    def visitLambdaExpression(self, ctx: ZincParser.LambdaExpressionContext) -> str:
+        """Render a lambda expression as a callable enum constructor."""
+        expr_symbol = self._get_expr_symbol(ctx)
+        if expr_symbol and expr_symbol.callable_info:
+            return self._render_callable_value(expr_symbol.callable_info)
+        return "__zinc_lambda_missing"
 
     def visitParenExpr(self, ctx: ZincParser.ParenExprContext) -> str:
         """Visit parenthesized expression."""
@@ -761,13 +1134,47 @@ class CodeGenVisitor(zincVisitor):
 
     def _get_expr_symbol(self, ctx):
         """Get the resolved symbol for an expression-like context."""
-        return self.symbols.lookup_by_interval(
+        symbol = self.symbols.lookup_by_interval(
             ctx.getSourceInterval(), self._current_function
         )
+        if symbol is not None:
+            return symbol
+        if isinstance(ctx, ZincParser.LambdaExprContext):
+            return self.symbols.lookup_by_interval(
+                ctx.lambdaExpression().getSourceInterval(), self._current_function
+            )
+        return None
+
+    def _lookup_local_symbol(self, name: str):
+        """Look up the latest resolved local/parameter symbol in the current function."""
+        prefix = f"{self._current_function}."
+        matches = [
+            symbol
+            for symbol in self.symbols.all_symbols()
+            if symbol.id == name and symbol.unique_name.startswith(prefix)
+        ]
+        return matches[-1] if matches else None
+
+    def _fallback_symbol_for_ctx(self, ctx):
+        """Prefer the latest local binding when the interval symbol is a stale temporary."""
+        if isinstance(ctx, ZincParser.PrimaryExprContext):
+            primary = ctx.primaryExpression()
+            if primary and primary.IDENTIFIER():
+                return self._lookup_local_symbol(primary.IDENTIFIER().getText())
+        return None
 
     def _get_dict_info(self, ctx) -> DictTypeInfo | None:
         """Get dict metadata for an expression."""
         symbol = self._get_expr_symbol(ctx)
+        if symbol and symbol.dict_info:
+            if (
+                symbol.dict_info.key_type != BaseType.UNKNOWN
+                or symbol.dict_info.value_type != BaseType.UNKNOWN
+            ):
+                return symbol.dict_info
+        fallback = self._fallback_symbol_for_ctx(ctx)
+        if fallback and fallback.dict_info:
+            return fallback.dict_info
         if symbol and symbol.dict_info:
             return symbol.dict_info
         return None
@@ -776,12 +1183,24 @@ class CodeGenVisitor(zincVisitor):
         """Get set metadata for an expression."""
         symbol = self._get_expr_symbol(ctx)
         if symbol and symbol.set_info:
+            if symbol.set_info.element_type != BaseType.UNKNOWN:
+                return symbol.set_info
+        fallback = self._fallback_symbol_for_ctx(ctx)
+        if fallback and fallback.set_info:
+            return fallback.set_info
+        if symbol and symbol.set_info:
             return symbol.set_info
         return None
 
     def _get_tuple_info(self, ctx) -> TupleTypeInfo | None:
         """Get tuple metadata for an expression."""
         symbol = self._get_expr_symbol(ctx)
+        if symbol and symbol.tuple_info:
+            if all(element != BaseType.UNKNOWN for element in symbol.tuple_info.element_types):
+                return symbol.tuple_info
+        fallback = self._fallback_symbol_for_ctx(ctx)
+        if fallback and fallback.tuple_info:
+            return fallback.tuple_info
         if symbol and symbol.tuple_info:
             return symbol.tuple_info
         return None
@@ -940,6 +1359,19 @@ class CodeGenVisitor(zincVisitor):
 
     def visitMemberAccessExpr(self, ctx: ZincParser.MemberAccessExprContext) -> str:
         """Visit member access - could be field access or static method reference."""
+        expr_symbol = self._get_expr_symbol(ctx)
+        is_direct_call = (
+            isinstance(ctx.parentCtx, ZincParser.FunctionCallExprContext)
+            and ctx.parentCtx.expression() is ctx
+        )
+        if (
+            expr_symbol
+            and expr_symbol.resolved_type == BaseType.CALLABLE
+            and expr_symbol.callable_info
+            and not is_direct_call
+        ):
+            return self._render_callable_value(expr_symbol.callable_info)
+
         if self._current_module is not None:
             path = extract_identifier_path(ctx)
             if path:
@@ -967,6 +1399,24 @@ class CodeGenVisitor(zincVisitor):
 
         # Regular member access (field or instance method)
         obj = self.visit(ctx.expression())
+        if isinstance(ctx.expression(), ZincParser.PrimaryExprContext):
+            primary = ctx.expression().primaryExpression()
+            if primary and primary.IDENTIFIER():
+                receiver_name = primary.IDENTIFIER().getText()
+                if self._boxed_struct_key(receiver_name) in self._boxed_struct_vars:
+                    field_expr = f"{receiver_name}.borrow().{ctx.IDENTIFIER().getText()}"
+                    expr_type = self._get_expr_type(ctx)
+                    if expr_type in {
+                        BaseType.STRING,
+                        BaseType.ARRAY,
+                        BaseType.DICT,
+                        BaseType.SET,
+                        BaseType.TUPLE,
+                        BaseType.CALLABLE,
+                        BaseType.STRUCT,
+                    }:
+                        return f"{field_expr}.clone()"
+                    return field_expr
         return f"{obj}.{ctx.IDENTIFIER().getText()}"
 
     def visitFunctionCallExpr(self, ctx: ZincParser.FunctionCallExprContext) -> str:
@@ -980,6 +1430,7 @@ class CodeGenVisitor(zincVisitor):
 
         # Get callee text first to check for static method
         callee = self.visit(callee_ctx)
+        callee_symbol = self._get_expr_symbol(callee_ctx)
 
         if callee == "print":
             return self._render_print_call(args)
@@ -1008,6 +1459,29 @@ class CodeGenVisitor(zincVisitor):
             if struct:
                 args = self._process_method_args(struct, method_name, args, arg_ctxs)
             return f"{callee}({', '.join(args)})"
+
+        if (
+            callee_symbol
+            and callee_symbol.resolved_type == BaseType.CALLABLE
+            and callee_symbol.callable_info
+            and not isinstance(callee_ctx, ZincParser.MemberAccessExprContext)
+        ):
+            is_bare_top_level_function = False
+            if isinstance(callee_ctx, ZincParser.PrimaryExprContext):
+                primary = callee_ctx.primaryExpression()
+                if primary and primary.IDENTIFIER():
+                    name = primary.IDENTIFIER().getText()
+                    is_bare_top_level_function = (
+                        name not in self._declared_vars
+                        and self._current_module is not None
+                        and self.module_graph.resolve_function_path(self._current_module, [name]) is not None
+                    )
+            if not is_bare_top_level_function:
+                args = self._process_callable_args(callee_symbol.callable_info, args, arg_ctxs)
+                callable_expr = callee
+                if isinstance(callee_ctx, ZincParser.MemberAccessExprContext):
+                    callable_expr = self._render_callable_value(callee_symbol.callable_info)
+                return f"{callable_expr}.call({', '.join(args)})"
 
         if self._current_module is not None:
             path = extract_identifier_path(callee_ctx)
@@ -1071,15 +1545,43 @@ class CodeGenVisitor(zincVisitor):
                     elem = self._borrow_lookup_key(args[0], info.element_type)
                     return f"{target}.{method_name}({elem})"
 
+            if receiver_type == BaseType.ARRAY and method_name == "push" and len(args) == 1:
+                receiver_symbol = self._get_expr_symbol(target_ctx)
+                if isinstance(target_ctx, ZincParser.PrimaryExprContext):
+                    primary = target_ctx.primaryExpression()
+                    if primary and primary.IDENTIFIER():
+                        receiver_symbol = self._lookup_local_symbol(primary.IDENTIFIER().getText()) or receiver_symbol
+                arg_ctx = arg_ctxs[0] if arg_ctxs else None
+                arg_symbol = self._get_expr_symbol(arg_ctx) if arg_ctx is not None else None
+                if (
+                    receiver_symbol
+                    and receiver_symbol.element_type == BaseType.CALLABLE
+                    and receiver_symbol.callable_info
+                    and arg_symbol
+                    and arg_symbol.callable_info
+                ):
+                    args[0] = self._render_callable_value_for_signature(
+                        arg_symbol.callable_info,
+                        receiver_symbol.callable_info,
+                    )
+
             if isinstance(target_ctx, ZincParser.PrimaryExprContext):
                 primary = target_ctx.primaryExpression()
                 if primary and primary.IDENTIFIER():
                     target_var = primary.IDENTIFIER().getText()
-                    if target_var in self._struct_instance_vars:
-                        struct_name = self._struct_instance_vars[target_var]
+                    key = f"{self._current_function}:{target_var}"
+                    if key in self._struct_instance_vars:
+                        struct_name = self._struct_instance_vars[key]
                         struct = self.atlas.structs.get(struct_name)
                         if struct:
                             args = self._process_method_args(struct, method_name, args, arg_ctxs)
+                            method = next((m for m in struct.methods if m.name == method_name), None)
+                            if self._boxed_struct_key(target_var) in self._boxed_struct_vars and method:
+                                borrow = "borrow_mut" if method.self_mutability == "&mut self" else "borrow"
+                                result = f"{target_var}.{borrow}().{method_name}({', '.join(args)})"
+                                if method_name == "len":
+                                    return f"({result} as i64)"
+                                return result
             result = f"{callee}({', '.join(args)})"
             # len() returns usize in Rust but Zinc treats all integers as i64
             if method_name == "len":
@@ -1145,6 +1647,24 @@ class CodeGenVisitor(zincVisitor):
                         processed.append(f"&mut {arg}")
                     else:
                         processed.append(f"&{arg}")
+                elif param_type == BaseType.CALLABLE and i in func.arg_callable_infos:
+                    arg_ctx = arg_ctxs[i] if arg_ctxs and i < len(arg_ctxs) else None
+                    arg_symbol = self._get_expr_symbol(arg_ctx) if arg_ctx is not None else None
+                    is_local_callable = (
+                        isinstance(arg_ctx, ZincParser.PrimaryExprContext)
+                        and arg_ctx.primaryExpression()
+                        and arg_ctx.primaryExpression().IDENTIFIER()
+                        and arg_ctx.primaryExpression().IDENTIFIER().getText() in self._declared_vars
+                    )
+                    if arg_symbol and arg_symbol.callable_info and not is_local_callable:
+                        processed.append(
+                            self._render_callable_value_for_signature(
+                                arg_symbol.callable_info,
+                                func.arg_callable_infos[i],
+                            )
+                        )
+                    else:
+                        processed.append(f"{arg}.clone()")
                 else:
                     processed.append(arg)
             else:
@@ -1415,6 +1935,22 @@ class CodeGenVisitor(zincVisitor):
             self._expected_dict_info = previous_dict_info
             self._expected_set_info = previous_set_info
             self._expected_tuple_info = previous_tuple_info
+
+        if target_ctx.IDENTIFIER():
+            boxed_key = self._boxed_struct_key(target)
+            if boxed_key in self._boxed_struct_vars:
+                if isinstance(expr, ZincParser.PrimaryExprContext):
+                    primary = expr.primaryExpression()
+                    if primary and primary.IDENTIFIER():
+                        source_name = primary.IDENTIFIER().getText()
+                        if self._boxed_struct_key(source_name) in self._boxed_struct_vars:
+                            value = f"{value}.clone()"
+                        else:
+                            value = f"Rc::new(RefCell::new({value}))"
+                    else:
+                        value = f"Rc::new(RefCell::new({value}))"
+                else:
+                    value = f"Rc::new(RefCell::new({value}))"
 
         if target_ctx.tupleAssignmentTarget():
             names = self._binding_names(target_ctx.tupleAssignmentTarget())
@@ -1721,6 +2257,19 @@ class CodeGenVisitor(zincVisitor):
                 self._expected_dict_info = previous_dict_info
                 self._expected_set_info = previous_set_info
                 self._expected_tuple_info = previous_tuple_info
+            if func and func.return_type == BaseType.CALLABLE and func.return_callable_info:
+                expr_symbol = self._get_expr_symbol(ctx.expression())
+                is_local_callable = (
+                    isinstance(ctx.expression(), ZincParser.PrimaryExprContext)
+                    and ctx.expression().primaryExpression()
+                    and ctx.expression().primaryExpression().IDENTIFIER()
+                    and ctx.expression().primaryExpression().IDENTIFIER().getText() in self._declared_vars
+                )
+                if expr_symbol and expr_symbol.callable_info and not is_local_callable:
+                    value = self._render_callable_value_for_signature(
+                        expr_symbol.callable_info,
+                        func.return_callable_info,
+                    )
             # Cast integer return values to f64 when function return type is float
             if func and func.return_type == BaseType.FLOAT:
                 expr_type = self._get_expr_type(ctx.expression())

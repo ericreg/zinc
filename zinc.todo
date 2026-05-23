@@ -1,9 +1,23 @@
 - support importing and module definitions
 - scratch docker image
-- composition only, decorators
+
+- decorators
 - multiline string
 - unsigned ints
+
+
+- how to we handle private fields in composition?
+- fuzz tests
+
+consider taking a dependency only on
+https://docs.rs/fixed-num/latest/fixed_num/
 
 metadata:
     name()
     self._fields <- added only if used
+
+
+write galv build cli
+add a formatter
+
+Do a "easy win" code reduction/simplification/cleanup pass.

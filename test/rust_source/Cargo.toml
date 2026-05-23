@@ -535,6 +535,26 @@ name = "tuples_06_nested_index"
 path = "src/tuples/06_nested_index.rs"
 
 [[bin]]
+name = "callables_01_named_function"
+path = "src/callables/01_named_function.rs"
+
+[[bin]]
+name = "callables_02_lambda_array"
+path = "src/callables/02_lambda_array.rs"
+
+[[bin]]
+name = "callables_03_bound_method"
+path = "src/callables/03_bound_method.rs"
+
+[[bin]]
+name = "callables_04_return_callable"
+path = "src/callables/04_return_callable.rs"
+
+[[bin]]
+name = "callables_05_static_method"
+path = "src/callables/05_static_method.rs"
+
+[[bin]]
 name = "variable_assignment"
 path = "src/variable_assignment.rs"
 
