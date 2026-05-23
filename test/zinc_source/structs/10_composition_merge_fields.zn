@@ -1,0 +1,45 @@
+// Test: Last-wins struct composition with local overrides
+
+struct File {
+    id: i32
+    path: string
+
+    fn source() {
+        return 1
+    }
+}
+
+struct Message {
+    id: i64
+    text: string
+
+    fn source() {
+        return 2
+    }
+}
+
+struct Item [ File, Message ] {
+    id: 99
+
+    fn label() {
+        return "local {self.id}"
+    }
+
+    fn describe() {
+        return "{self.id}:{self.path}:{self.text}"
+    }
+}
+
+fn main() {
+    item = Item {
+        path: "/tmp/data"
+        text: "payload"
+    }
+
+    print(item.id)
+    print(item.path)
+    print(item.text)
+    print(Item.source())
+    print(item.label())
+    print(item.describe())
+}

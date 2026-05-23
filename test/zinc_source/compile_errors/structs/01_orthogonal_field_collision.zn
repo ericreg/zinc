@@ -1,0 +1,17 @@
+// expected-error: orthogonal composition for 'Item' has duplicate field 'id'
+
+struct File {
+    id: i32
+}
+
+struct Message {
+    id: i64
+}
+
+struct Item [ File | Message ] {
+}
+
+fn main() {
+    item = Item { }
+    print(item.id)
+}

@@ -28,6 +28,7 @@ COMPILE_ERROR_GROUPS = (
     "iterations",
     "modules",
     "concurrency",
+    "structs",
 )
 
 

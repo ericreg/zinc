@@ -1,4 +1,4 @@
-# Generated from zinc/parser/zinc.g4 by ANTLR 4.13.2
+# Generated from zinc.g4 by ANTLR 4.13.2
 from antlr4 import *
 if "." in __name__:
     from .zincParser import zincParser
@@ -77,6 +77,33 @@ class zincListener(ParseTreeListener):
 
     # Exit a parse tree produced by zincParser#structDeclaration.
     def exitStructDeclaration(self, ctx:zincParser.StructDeclarationContext):
+        pass
+
+
+    # Enter a parse tree produced by zincParser#structComposition.
+    def enterStructComposition(self, ctx:zincParser.StructCompositionContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#structComposition.
+    def exitStructComposition(self, ctx:zincParser.StructCompositionContext):
+        pass
+
+
+    # Enter a parse tree produced by zincParser#orthogonalComposition.
+    def enterOrthogonalComposition(self, ctx:zincParser.OrthogonalCompositionContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#orthogonalComposition.
+    def exitOrthogonalComposition(self, ctx:zincParser.OrthogonalCompositionContext):
+        pass
+
+
+    # Enter a parse tree produced by zincParser#mergeComposition.
+    def enterMergeComposition(self, ctx:zincParser.MergeCompositionContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#mergeComposition.
+    def exitMergeComposition(self, ctx:zincParser.MergeCompositionContext):
         pass
 
 

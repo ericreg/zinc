@@ -1,0 +1,42 @@
+// Test: Copied static methods and constructor rewriting in composed structs
+
+struct File {
+    path: string
+
+    fn new(path) {
+        return File { path: path }
+    }
+
+    fn kind() {
+        return 1
+    }
+}
+
+struct Message {
+    text: string
+    timestamp: i64
+
+    fn with_text(text) {
+        return Message {
+            text: text
+            timestamp: 0
+        }
+    }
+}
+
+struct Item [ File, Message ] {
+}
+
+fn main() {
+    from_file = Item.new("/tmp/log.txt")
+    print(from_file.path)
+    print(from_file.text)
+    print(from_file.timestamp)
+
+    from_message = Item.with_text("hello")
+    print(from_message.path)
+    print(from_message.text)
+    print(from_message.timestamp)
+
+    print(Item.kind())
+}

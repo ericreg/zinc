@@ -1,0 +1,15 @@
+// expected-error: unknown struct composition source 'Missing' in 'Item'
+
+struct Base {
+    path: string
+}
+
+struct Item [ Base, Missing ] {
+}
+
+fn main() {
+    item = Item {
+        path: "a"
+    }
+    print(item.path)
+}

@@ -491,6 +491,22 @@ name = "structs_08_integration"
 path = "src/structs/08_integration.rs"
 
 [[bin]]
+name = "structs_09_composition_orthogonal"
+path = "src/structs/09_composition_orthogonal.rs"
+
+[[bin]]
+name = "structs_10_composition_merge_fields"
+path = "src/structs/10_composition_merge_fields.rs"
+
+[[bin]]
+name = "structs_11_composition_static_methods"
+path = "src/structs/11_composition_static_methods.rs"
+
+[[bin]]
+name = "structs_12_composition_imported"
+path = "src/structs/12_composition_imported.rs"
+
+[[bin]]
 name = "tuples_01_literal_index"
 path = "src/tuples/01_literal_index.rs"
 

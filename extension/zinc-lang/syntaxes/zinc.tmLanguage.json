@@ -8,6 +8,7 @@
     { "include": "#strings" },
     { "include": "#numbers" },
     { "include": "#imports" },
+    { "include": "#struct_compositions" },
     { "include": "#declarations" },
     { "include": "#types" },
     { "include": "#module_paths" },
@@ -152,6 +153,52 @@
         }
       ]
     },
+    "struct_compositions": {
+      "patterns": [
+        {
+          "name": "meta.struct.composition.zinc",
+          "begin": "\\b(struct)\\s+([A-Za-z_][A-Za-z0-9_]*)(\\s*)(\\[)",
+          "beginCaptures": {
+            "1": { "name": "keyword.declaration.struct.zinc" },
+            "2": { "name": "entity.name.type.struct.zinc" },
+            "4": { "name": "punctuation.section.brackets.begin.zinc" }
+          },
+          "end": "\\]",
+          "endCaptures": {
+            "0": { "name": "punctuation.section.brackets.end.zinc" }
+          },
+          "patterns": [
+            { "include": "#comments" },
+            { "include": "#composition_type_paths" },
+            {
+              "name": "punctuation.separator.composition.orthogonal.zinc",
+              "match": "\\|"
+            },
+            {
+              "name": "punctuation.separator.comma.zinc",
+              "match": ","
+            }
+          ]
+        }
+      ]
+    },
+    "composition_type_paths": {
+      "patterns": [
+        {
+          "name": "meta.path.composed-struct.zinc",
+          "match": "\\b([A-Za-z_][A-Za-z0-9_]*)(\\.)((?:[A-Za-z_][A-Za-z0-9_]*)(?:\\.[A-Za-z_][A-Za-z0-9_]*)*)\\b",
+          "captures": {
+            "1": { "name": "entity.name.namespace.zinc" },
+            "2": { "name": "punctuation.accessor.zinc" },
+            "3": { "name": "entity.name.type.struct.zinc" }
+          }
+        },
+        {
+          "name": "entity.name.type.struct.zinc",
+          "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b"
+        }
+      ]
+    },
     "imports": {
       "patterns": [
         {
@@ -238,7 +285,7 @@
       "patterns": [
         {
           "name": "meta.type.annotation.parameter.zinc",
-          "match": "(?<=[\\(,|])\\s*([A-Za-z_][A-Za-z0-9_]*)(\\s*:\\s*)(\\[[^\\n\\]]+\\]|\\([^\\n\\)]*\\)\\s*->\\s*[^,\\)\\n]+|\\([^\\n\\)]+\\)|[A-Za-z_][A-Za-z0-9_]*(?:\\s*<[^\\n{};=]+>)?)(?=\\s*(?:[,\\)|]))",
+          "match": "(?<=[\\(,|])\\s*([A-Za-z_][A-Za-z0-9_]*)(\\s*:\\s*)(\\[[^\\n\\]]+\\]|\\([^\\n\\)]*\\)\\s*->\\s*[^,\\)\\n]+|\\([^\\n\\)]+\\)|[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*(?:\\s*<[^\\n{};=]+>)?)(?=\\s*(?:[,\\)|]))",
           "captures": {
             "1": { "name": "variable.parameter.zinc" },
             "2": { "name": "punctuation.separator.type.zinc" },
@@ -247,7 +294,7 @@
         },
         {
           "name": "meta.type.annotation.field.zinc",
-          "match": "^\\s*(?:(const)\\s+)?([A-Za-z_][A-Za-z0-9_]*)(\\s*:\\s*)(\\[[^\\n\\]]+\\]|\\([^\\n\\)]*\\)\\s*->\\s*[^,\\)\\n]+|\\([^\\n\\)]+\\)|(?:i32|i64|f32|f64|string|bool)\\b|[A-Z][A-Za-z0-9_]*(?:\\s*<[^\\n{};=]+>)?)(?=\\s*(?://.*)?$)",
+          "match": "^\\s*(?:(const)\\s+)?([A-Za-z_][A-Za-z0-9_]*)(\\s*:\\s*)(\\[[^\\n\\]]+\\]|\\([^\\n\\)]*\\)\\s*->\\s*[^,\\)\\n]+|\\([^\\n\\)]+\\)|(?:i32|i64|f32|f64|string|bool)\\b|[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*(?:\\s*<[^\\n{};=]+>)?)(?=\\s*(?://.*)?$)",
           "captures": {
             "1": { "name": "storage.modifier.const.zinc" },
             "2": { "name": "variable.other.member.zinc" },
@@ -263,7 +310,7 @@
     },
     "struct_instantiations": {
       "name": "entity.name.type.struct.zinc",
-      "match": "\\b[A-Z][A-Za-z0-9_]*\\s*(?=\\{)"
+      "match": "\\b(?:[A-Z][A-Za-z0-9_]*|[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)+)\\s*(?=\\{)"
     },
     "constants": {
       "patterns": [

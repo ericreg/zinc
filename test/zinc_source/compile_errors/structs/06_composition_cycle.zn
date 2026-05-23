@@ -1,0 +1,20 @@
+// expected-error: cyclic struct composition is not supported
+
+struct BaseA {
+    a: i32
+}
+
+struct BaseB {
+    b: i32
+}
+
+struct A [ B, BaseA ] {
+}
+
+struct B [ A, BaseB ] {
+}
+
+fn main() {
+    value = A { }
+    print(value.a)
+}

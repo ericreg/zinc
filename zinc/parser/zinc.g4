@@ -54,7 +54,20 @@ constDeclaration
 
 // --- Struct Declaration ---
 structDeclaration
-    : 'struct' IDENTIFIER '{' structBody '}'
+    : 'struct' IDENTIFIER structComposition? '{' structBody '}'
+    ;
+
+structComposition
+    : '[' orthogonalComposition ']'
+    | '[' mergeComposition ']'
+    ;
+
+orthogonalComposition
+    : qualifiedName ('|' qualifiedName)+
+    ;
+
+mergeComposition
+    : qualifiedName (',' qualifiedName)+ ','?
     ;
 
 structBody

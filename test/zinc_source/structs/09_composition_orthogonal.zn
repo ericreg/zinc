@@ -1,0 +1,42 @@
+// Test: Orthogonal struct composition with disjoint fields and methods
+
+struct File {
+    path: string
+
+    fn file_label() {
+        return "file:{self.path}"
+    }
+}
+
+struct Message {
+    text: string
+    timestamp: i64
+
+    fn summary() {
+        return "{self.text}@{self.timestamp}"
+    }
+}
+
+struct Item [ File | Message ] {
+    owner_id: i32
+
+    fn owner() {
+        return self.owner_id
+    }
+}
+
+fn main() {
+    item = Item {
+        path: "/tmp/zinc.txt"
+        text: "hello"
+        timestamp: 7
+        owner_id: 42
+    }
+
+    print(item.path)
+    print(item.text)
+    print(item.timestamp)
+    print(item.owner())
+    print(item.file_label())
+    print(item.summary())
+}

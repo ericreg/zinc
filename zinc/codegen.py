@@ -86,6 +86,7 @@ class CodeGenVisitor(zincVisitor):
         self._mut_struct_vars: set[str] = set()  # vars that need `let mut`
         self._current_struct: str | None = None  # When generating struct method
         self._current_struct_fields: dict[str, StructFieldInfo] | None = None
+        self._current_constructor_owner: str | None = None
         # Track variables that hold compile-time literal values
         self._literal_vars: set[str] = set()
         self._expected_dict_info: DictTypeInfo | None = None
@@ -422,12 +423,19 @@ class CodeGenVisitor(zincVisitor):
 
         # Generate body
         previous_module = self._current_module
+        previous_constructor_owner = self._current_constructor_owner
         self._current_module = struct.module_id
+        if method.source_module_id is not None:
+            self._current_module = method.source_module_id
         self._current_struct = struct.qualified_name
         self._current_struct_fields = {f.name: f for f in struct.fields}
+        self._current_constructor_owner = (
+            method.constructor_owner_qualified_name or method.source_struct_qualified_name
+        )
         body_stmts = self._generate_block(method.body_ctx)
         self._current_struct = None
         self._current_struct_fields = None
+        self._current_constructor_owner = previous_constructor_owner
         self._current_module = previous_module
         self._declared_vars = previous_declared
 
@@ -1302,8 +1310,17 @@ class CodeGenVisitor(zincVisitor):
             struct_symbol = self.module_graph.resolve_struct_path(
                 self._current_module, struct_path_from_ctx(ctx)
             )
-            struct = self.atlas.structs.get(struct_symbol.qualified_name) if struct_symbol else None
-            name = self._struct_rust_name(struct) if struct else ctx.qualifiedName().getText()
+            if (
+                struct_symbol is not None
+                and self._current_struct is not None
+                and self._current_constructor_owner is not None
+                and struct_symbol.qualified_name == self._current_constructor_owner
+            ):
+                struct = self.atlas.structs.get(self._current_struct)
+                name = self._struct_rust_name(struct) if struct else ctx.qualifiedName().getText()
+            else:
+                struct = self.atlas.structs.get(struct_symbol.qualified_name) if struct_symbol else None
+                name = self._struct_rust_name(struct) if struct else ctx.qualifiedName().getText()
 
         # Get provided field values
         provided_fields: dict[str, str] = {}

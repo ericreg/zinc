@@ -7,3 +7,4 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 ## [Unreleased]
 
 - Initial release
+- Added syntax highlighting support for struct composition headers like `[A | B]` and `[A, B]`, including qualified composition paths.

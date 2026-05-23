@@ -1,0 +1,28 @@
+// expected-error: orthogonal composition for 'Item' has duplicate method 'label'
+
+struct File {
+    path: string
+
+    fn label() {
+        return self.path
+    }
+}
+
+struct Message {
+    text: string
+
+    fn label() {
+        return self.text
+    }
+}
+
+struct Item [ File | Message ] {
+}
+
+fn main() {
+    item = Item {
+        path: "a"
+        text: "b"
+    }
+    print(item.label())
+}

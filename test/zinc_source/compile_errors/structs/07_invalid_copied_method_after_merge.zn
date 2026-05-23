@@ -1,0 +1,21 @@
+// expected-error: composed method 'Item.bump' uses incompatible operand types
+
+struct IntId {
+    id: i32
+
+    fn bump() {
+        self.id = self.id + 1
+    }
+}
+
+struct StringId {
+    id: string
+}
+
+struct Item [ IntId, StringId ] {
+}
+
+fn main() {
+    item = Item { }
+    item.bump()
+}

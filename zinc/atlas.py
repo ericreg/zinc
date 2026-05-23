@@ -17,8 +17,15 @@ from zinc.ast.types import (
     TupleTypeInfo,
     type_to_rust,
 )
-from zinc.modules import ModuleGraph, extract_identifier_path, struct_path_from_ctx
+from zinc.modules import (
+    ModuleGraph,
+    extract_identifier_path,
+    struct_composition_from_ctx,
+    struct_path_from_ctx,
+)
 from zinc.parser.zincParser import zincParser as ZincParser
+
+CompositionMode = str
 
 
 @dataclass
@@ -59,6 +66,7 @@ class StructFieldInfo:
     is_private: bool = False
     is_const: bool = False
     resolved_type: BaseType = field(default=BaseType.UNKNOWN)
+    source_struct_qualified_name: str | None = None
 
     def rust_type(self) -> str:
         """Get Rust type string for this field."""
@@ -101,6 +109,9 @@ class StructMethodInfo:
     self_mutability: str | None = None
     return_type: str | None = None
     body_ctx: ParserRuleContext | None = None
+    source_struct_qualified_name: str | None = None
+    source_module_id: str | None = None
+    constructor_owner_qualified_name: str | None = None
 
 
 @dataclass
@@ -114,6 +125,8 @@ class StructInstance:
     methods_used: SortedSet[str] = field(default_factory=SortedSet)
     fields: list[StructFieldInfo] = field(default_factory=list)
     methods: list[StructMethodInfo] = field(default_factory=list)
+    composition_mode: CompositionMode | None = None
+    composition_sources: tuple[str, ...] = ()
 
 
 @dataclass
@@ -426,6 +439,39 @@ class AtlasBuilder:
 
         if self._current_function:
             self._struct_usages[self._current_function].add(qualified_name)
+
+        self._add_composition_source_usages(qualified_name, set())
+
+    def _add_composition_source_usages(self, qualified_name: str, seen: set[str]) -> None:
+        """Mark structs referenced by a composition clause as reachable too."""
+        if qualified_name in seen:
+            return
+        seen.add(qualified_name)
+
+        struct = self._struct_defs.get(qualified_name)
+        if struct is None:
+            return
+
+        composition = struct_composition_from_ctx(struct.ctx)
+        if composition is None:
+            return
+
+        for path in composition.source_paths:
+            source_symbol = self.module_graph.resolve_struct_path(struct.module_id, list(path))
+            if source_symbol is None:
+                continue
+            source_struct = self._struct_defs.get(source_symbol.qualified_name)
+            if source_struct is None:
+                continue
+            if source_symbol.qualified_name not in self._reachable_structs:
+                self._reachable_structs[source_symbol.qualified_name] = StructInstance(
+                    name=source_struct.name,
+                    qualified_name=source_struct.qualified_name,
+                    module_id=source_struct.module_id,
+                    ctx=source_struct.ctx,
+                    methods_used=SortedSet(),
+                )
+            self._add_composition_source_usages(source_symbol.qualified_name, seen)
 
     def _add_const_usage(self, qualified_name: str) -> None:
         """Record that a global constant is used."""

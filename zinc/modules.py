@@ -15,6 +15,7 @@ from zinc.parser.zincParser import zincParser as ZincParser
 
 
 TopLevelKind = Literal["function", "struct", "const"]
+CompositionMode = Literal["orthogonal", "merge"]
 
 PKG_FILE_NAME = "pkg.toml"
 
@@ -52,6 +53,14 @@ class LoadedModule:
     exports: dict[str, TopLevelSymbol]
     injected_symbols: dict[str, str] = field(default_factory=dict)
     alias_imports: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class StructCompositionSpec:
+    """Composition clause attached to a struct declaration."""
+
+    mode: CompositionMode
+    source_paths: tuple[tuple[str, ...], ...]
 
 
 @dataclass
@@ -288,8 +297,41 @@ def extract_identifier_path(expr_ctx) -> list[str] | None:
 
 def struct_path_from_ctx(ctx: ZincParser.StructInstantiationContext) -> list[str]:
     """Extract the declared struct path from a struct instantiation node."""
-    qualified = ctx.qualifiedName()
-    return [token.getText() for token in qualified.IDENTIFIER()]
+    return qualified_name_path(ctx.qualifiedName())
+
+
+def qualified_name_path(ctx: ZincParser.QualifiedNameContext) -> list[str]:
+    """Extract identifier parts from a qualified name."""
+    return [token.getText() for token in ctx.IDENTIFIER()]
+
+
+def struct_composition_from_ctx(
+    ctx: ZincParser.StructDeclarationContext,
+) -> StructCompositionSpec | None:
+    """Return composition metadata for a struct declaration, if present."""
+    composition = ctx.structComposition()
+    if composition is None:
+        return None
+
+    if composition.orthogonalComposition():
+        return StructCompositionSpec(
+            mode="orthogonal",
+            source_paths=tuple(
+                tuple(qualified_name_path(qualified))
+                for qualified in composition.orthogonalComposition().qualifiedName()
+            ),
+        )
+
+    if composition.mergeComposition():
+        return StructCompositionSpec(
+            mode="merge",
+            source_paths=tuple(
+                tuple(qualified_name_path(qualified))
+                for qualified in composition.mergeComposition().qualifiedName()
+            ),
+        )
+
+    return None
 
 
 def _read_pkg_metadata(pkg_file: Path) -> tuple[str, str]:

@@ -1,0 +1,19 @@
+// expected-error: found 2 syntax error
+
+struct File {
+    path: string
+}
+
+struct Message {
+    text: string
+}
+
+struct Audit {
+    created_by: string
+}
+
+struct Item [ File | Message, Audit ] {
+}
+
+fn main() {
+}

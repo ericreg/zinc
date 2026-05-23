@@ -1,0 +1,20 @@
+// Test: Composition sources may come from imported modules
+
+import structs/_composition_parts as parts
+
+struct Post [ parts.Audit | parts.Content ] {
+    id: i32
+}
+
+fn main() {
+    post = Post {
+        created_by: "alice"
+        body: "hello world"
+        id: 3
+    }
+
+    print(post.id)
+    print(post.created_by)
+    print(post.body)
+    print(post.creator())
+}

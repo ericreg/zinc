@@ -1,0 +1,21 @@
+// expected-error: orthogonal composition for 'Item' has duplicate field 'path'
+
+struct File {
+    path: string
+}
+
+struct Meta {
+    owner_id: i32
+}
+
+struct Item [ File | Meta ] {
+    path: string
+}
+
+fn main() {
+    item = Item {
+        path: "a"
+        owner_id: 1
+    }
+    print(item.path)
+}

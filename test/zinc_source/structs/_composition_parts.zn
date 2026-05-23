@@ -1,0 +1,11 @@
+struct Audit {
+    created_by: string
+
+    fn creator() {
+        return "{self.created_by}"
+    }
+}
+
+struct Content {
+    body: string
+}

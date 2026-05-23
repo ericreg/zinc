@@ -1,4 +1,4 @@
-# Generated from zinc/parser/zinc.g4 by ANTLR 4.13.2
+# Generated from zinc.g4 by ANTLR 4.13.2
 from antlr4 import *
 if "." in __name__:
     from .zincParser import zincParser
@@ -46,6 +46,21 @@ class zincVisitor(ParseTreeVisitor):
 
     # Visit a parse tree produced by zincParser#structDeclaration.
     def visitStructDeclaration(self, ctx:zincParser.StructDeclarationContext):
+        return self.visitChildren(ctx)
+
+
+    # Visit a parse tree produced by zincParser#structComposition.
+    def visitStructComposition(self, ctx:zincParser.StructCompositionContext):
+        return self.visitChildren(ctx)
+
+
+    # Visit a parse tree produced by zincParser#orthogonalComposition.
+    def visitOrthogonalComposition(self, ctx:zincParser.OrthogonalCompositionContext):
+        return self.visitChildren(ctx)
+
+
+    # Visit a parse tree produced by zincParser#mergeComposition.
+    def visitMergeComposition(self, ctx:zincParser.MergeCompositionContext):
         return self.visitChildren(ctx)
 
 

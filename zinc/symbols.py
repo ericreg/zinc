@@ -1,6 +1,6 @@
 """Symbol Table for the Zinc compiler."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum, auto
 
 from antlr4 import ParserRuleContext
@@ -21,8 +21,8 @@ from zinc.ast.types import (
 from zinc.exceptions import ZincTypeError
 from zinc.parser.zincVisitor import zincVisitor
 from zinc.parser.zincParser import zincParser as ZincParser
-from zinc.atlas import Atlas, FunctionInstance, ConstInstance, StructFieldInfo, StructMethodInfo
-from zinc.modules import extract_identifier_path, struct_path_from_ctx
+from zinc.atlas import Atlas, FunctionInstance, ConstInstance, StructFieldInfo, StructInstance, StructMethodInfo
+from zinc.modules import extract_identifier_path, struct_composition_from_ctx, struct_path_from_ctx
 
 
 class SymbolKind(Enum):
@@ -192,6 +192,8 @@ class SymbolTableVisitor(zincVisitor):
         # Track all caller channel infos for function parameters (param_name -> list of ChannelTypeInfos)
         self._channel_param_all_infos: dict[str, list[ChannelTypeInfo]] = {}
         self._iterating_dict_stack: list[set[str]] = []
+        self._struct_analysis_cache: dict[str, StructInstance] = {}
+        self._struct_analysis_stack: list[str] = []
 
     def _resolve_const_symbol(self, path: list[str]) -> ConstInstance | None:
         """Resolve a const path in the current module."""
@@ -310,27 +312,192 @@ class SymbolTableVisitor(zincVisitor):
 
     def _analyze_struct(self, struct) -> None:
         """Analyze a struct declaration and populate fields/methods."""
-        ctx = struct.ctx
+        analyzed = self._analyze_struct_by_qualified_name(struct.qualified_name)
+        struct.fields = [self._copy_struct_field(field) for field in analyzed.fields]
+        struct.methods = [self._copy_struct_method(method) for method in analyzed.methods]
+        struct.composition_mode = analyzed.composition_mode
+        struct.composition_sources = analyzed.composition_sources
 
-        # Parse fields
-        struct.fields = self._parse_struct_fields(ctx)
+    def _analyze_struct_by_qualified_name(self, qualified_name: str) -> StructInstance:
+        """Analyze a struct definition, including flattening any composition."""
+        cached = self._struct_analysis_cache.get(qualified_name)
+        if cached is not None:
+            return cached
 
-        # Build field type map for parameter inference
-        field_types: dict[str, str] = {}
-        for f in struct.fields:
-            field_types[f.name] = f.rust_type()
+        if qualified_name in self._struct_analysis_stack:
+            cycle = " -> ".join([*self._struct_analysis_stack, qualified_name])
+            raise ZincTypeError(f"cyclic struct composition is not supported: {cycle}")
 
-        # Analyze methods
-        struct.methods = []
-        if ctx.structBody():
-            for member in ctx.structBody().structMember():
-                if member.functionDeclaration():
-                    method = self._analyze_struct_method(
-                        member.functionDeclaration(), field_types, struct.name
+        symbol = self.module_graph.get_symbol(qualified_name)
+        ctx: ZincParser.StructDeclarationContext = symbol.ctx  # type: ignore[assignment]
+        struct = StructInstance(
+            name=symbol.name,
+            qualified_name=symbol.qualified_name,
+            module_id=symbol.module_id,
+            ctx=symbol.ctx,
+        )
+
+        self._struct_analysis_stack.append(qualified_name)
+        try:
+            composition = struct_composition_from_ctx(ctx)
+            fields: list[StructFieldInfo] = []
+            field_indexes: dict[str, int] = {}
+            methods: list[StructMethodInfo] = []
+            method_indexes: dict[str, int] = {}
+
+            if composition is not None:
+                struct.composition_mode = composition.mode
+                source_names: list[str] = []
+                allow_override = composition.mode == "merge"
+
+                for source_path in composition.source_paths:
+                    source_display = ".".join(source_path)
+                    source_symbol = self.module_graph.resolve_struct_path(
+                        symbol.module_id, list(source_path)
                     )
-                    struct.methods.append(method)
+                    if source_symbol is None:
+                        raise ZincTypeError(
+                            f"unknown struct composition source '{source_display}' in '{symbol.name}'"
+                        )
+                    if source_symbol.qualified_name == qualified_name:
+                        raise ZincTypeError(f"struct '{symbol.name}' cannot compose itself")
+                    source_names.append(source_symbol.qualified_name)
+                    source_struct = self._analyze_struct_by_qualified_name(
+                        source_symbol.qualified_name
+                    )
+                    self._merge_struct_fields(
+                        owner_name=symbol.name,
+                        mode=composition.mode,
+                        fields=fields,
+                        field_indexes=field_indexes,
+                        incoming=source_struct.fields,
+                        allow_override=allow_override,
+                    )
+                    self._merge_struct_methods(
+                        owner_name=symbol.name,
+                        mode=composition.mode,
+                        methods=methods,
+                        method_indexes=method_indexes,
+                        incoming=source_struct.methods,
+                        allow_override=allow_override,
+                    )
 
-    def _parse_struct_fields(self, ctx) -> list[StructFieldInfo]:
+                struct.composition_sources = tuple(source_names)
+
+            local_fields = self._parse_struct_fields(ctx, qualified_name)
+            self._merge_struct_fields(
+                owner_name=symbol.name,
+                mode=struct.composition_mode,
+                fields=fields,
+                field_indexes=field_indexes,
+                incoming=local_fields,
+                allow_override=struct.composition_mode == "merge",
+            )
+
+            field_types = {field.name: field.rust_type() for field in fields}
+
+            local_methods: list[StructMethodInfo] = []
+            if ctx.structBody():
+                for member in ctx.structBody().structMember():
+                    if member.functionDeclaration():
+                        local_methods.append(
+                            self._analyze_struct_method(
+                                member.functionDeclaration(),
+                                field_types,
+                                source_module_id=symbol.module_id,
+                                constructor_owner_qualified_name=qualified_name,
+                            )
+                        )
+
+            self._merge_struct_methods(
+                owner_name=symbol.name,
+                mode=struct.composition_mode,
+                methods=methods,
+                method_indexes=method_indexes,
+                incoming=local_methods,
+                allow_override=struct.composition_mode == "merge",
+            )
+
+            if struct.composition_mode is not None:
+                self._validate_composed_struct_methods(symbol.name, fields, methods)
+
+            struct.fields = fields
+            struct.methods = methods
+            self._struct_analysis_cache[qualified_name] = struct
+            return struct
+        finally:
+            self._struct_analysis_stack.pop()
+
+    def _copy_struct_field(self, field: StructFieldInfo) -> StructFieldInfo:
+        """Clone field metadata when flattening composition."""
+        return replace(field)
+
+    def _copy_struct_method(self, method: StructMethodInfo) -> StructMethodInfo:
+        """Clone method metadata when flattening composition."""
+        return replace(
+            method,
+            parameters=[(name, type_ann, resolved) for name, type_ann, resolved in method.parameters],
+        )
+
+    def _merge_struct_fields(
+        self,
+        owner_name: str,
+        mode: str | None,
+        fields: list[StructFieldInfo],
+        field_indexes: dict[str, int],
+        incoming: list[StructFieldInfo],
+        allow_override: bool,
+    ) -> None:
+        """Merge fields into a flattened struct, optionally allowing overrides."""
+        for field in incoming:
+            copied = self._copy_struct_field(field)
+            existing_index = field_indexes.get(copied.name)
+            if existing_index is None:
+                field_indexes[copied.name] = len(fields)
+                fields.append(copied)
+                continue
+            if not allow_override:
+                previous = fields[existing_index]
+                raise ZincTypeError(
+                    f"orthogonal composition for '{owner_name}' has duplicate field "
+                    f"'{copied.name}' from '{self._member_source_name(previous.source_struct_qualified_name)}' "
+                    f"and '{self._member_source_name(copied.source_struct_qualified_name)}'"
+                )
+            fields[existing_index] = copied
+
+    def _merge_struct_methods(
+        self,
+        owner_name: str,
+        mode: str | None,
+        methods: list[StructMethodInfo],
+        method_indexes: dict[str, int],
+        incoming: list[StructMethodInfo],
+        allow_override: bool,
+    ) -> None:
+        """Merge methods into a flattened struct, optionally allowing overrides."""
+        for method in incoming:
+            copied = self._copy_struct_method(method)
+            existing_index = method_indexes.get(copied.name)
+            if existing_index is None:
+                method_indexes[copied.name] = len(methods)
+                methods.append(copied)
+                continue
+            if not allow_override:
+                previous = methods[existing_index]
+                raise ZincTypeError(
+                    f"orthogonal composition for '{owner_name}' has duplicate method "
+                    f"'{copied.name}' from '{self._member_source_name(previous.source_struct_qualified_name)}' "
+                    f"and '{self._member_source_name(copied.source_struct_qualified_name)}'"
+                )
+            methods[existing_index] = copied
+
+    def _member_source_name(self, qualified_name: str | None) -> str:
+        """Render a human-readable source-struct name for diagnostics."""
+        if qualified_name is None:
+            return "local"
+        return self.module_graph.get_symbol(qualified_name).name
+
+    def _parse_struct_fields(self, ctx, source_struct_qualified_name: str) -> list[StructFieldInfo]:
         """Parse struct field declarations from parse tree."""
         fields = []
         if not ctx.structBody():
@@ -382,13 +549,18 @@ class SymbolTableVisitor(zincVisitor):
                     is_private=name.startswith("_"),
                     is_const=is_const,
                     resolved_type=resolved_type,
+                    source_struct_qualified_name=source_struct_qualified_name,
                 )
             )
 
         return fields
 
     def _analyze_struct_method(
-        self, ctx: ZincParser.FunctionDeclarationContext, field_types: dict[str, str], struct_name: str
+        self,
+        ctx: ZincParser.FunctionDeclarationContext,
+        field_types: dict[str, str],
+        source_module_id: str,
+        constructor_owner_qualified_name: str,
     ) -> StructMethodInfo:
         """Analyze a struct method for static/instance and self mutability."""
         name = ctx.IDENTIFIER().getText()
@@ -417,7 +589,12 @@ class SymbolTableVisitor(zincVisitor):
         resolved_params = self._infer_method_params(ctx.block(), parameters, field_types)
 
         # Infer return type
-        return_type = self._infer_return_type(ctx.block(), struct_name, field_types)
+        return_type = self._infer_return_type(
+            ctx.block(),
+            field_types,
+            source_module_id,
+            constructor_owner_qualified_name,
+        )
 
         return StructMethodInfo(
             name=name,
@@ -426,6 +603,9 @@ class SymbolTableVisitor(zincVisitor):
             self_mutability=self_mutability,
             return_type=return_type,
             body_ctx=ctx.block(),
+            source_struct_qualified_name=constructor_owner_qualified_name,
+            source_module_id=source_module_id,
+            constructor_owner_qualified_name=constructor_owner_qualified_name,
         )
 
     def _track_self_usage(self, block_ctx) -> tuple[bool, bool]:
@@ -587,7 +767,13 @@ class SymbolTableVisitor(zincVisitor):
             result.append((name, type_ann, resolved))
         return result
 
-    def _infer_return_type(self, block_ctx, struct_name: str, field_types: dict[str, str]) -> str | None:
+    def _infer_return_type(
+        self,
+        block_ctx,
+        field_types: dict[str, str],
+        source_module_id: str,
+        constructor_owner_qualified_name: str,
+    ) -> str | None:
         """Infer return type from return statements."""
 
         def get_expr_type(expr_ctx) -> str | None:
@@ -599,10 +785,16 @@ class SymbolTableVisitor(zincVisitor):
             if isinstance(expr_ctx, ZincParser.PrimaryExprContext):
                 primary = expr_ctx.primaryExpression()
                 if primary and primary.structInstantiation():
-                    inst_name = primary.structInstantiation().qualifiedName().getText()
-                    if inst_name == struct_name:
+                    inst = primary.structInstantiation()
+                    struct_symbol = self.module_graph.resolve_struct_path(
+                        source_module_id, struct_path_from_ctx(inst)
+                    )
+                    if (
+                        struct_symbol is not None
+                        and struct_symbol.qualified_name == constructor_owner_qualified_name
+                    ):
                         return "Self"
-                    return inst_name
+                    return inst.qualifiedName().getText()
                 if primary and primary.literal():
                     try:
                         literal_type = parse_literal(primary.literal().getText())
@@ -652,6 +844,244 @@ class SymbolTableVisitor(zincVisitor):
             return None
 
         return find_return_type(block_ctx)
+
+    def _validate_composed_struct_methods(
+        self,
+        struct_name: str,
+        fields: list[StructFieldInfo],
+        methods: list[StructMethodInfo],
+    ) -> None:
+        """Validate copied methods against the final flattened field set."""
+        field_types = {
+            field.name: self._type_name_to_base(field.type_annotation or field.rust_type())
+            for field in fields
+        }
+        method_types = {method.name: self._method_return_base_type(method.return_type) for method in methods}
+
+        for method in methods:
+            param_types = {
+                name: self._type_name_to_base(resolved or type_ann)
+                for name, type_ann, resolved in method.parameters
+            }
+            self._validate_composed_method_node(
+                node=method.body_ctx,
+                struct_name=struct_name,
+                method_name=method.name,
+                field_types=field_types,
+                method_types=method_types,
+                param_types=param_types,
+            )
+
+    def _validate_composed_method_node(
+        self,
+        node,
+        struct_name: str,
+        method_name: str,
+        field_types: dict[str, BaseType],
+        method_types: dict[str, BaseType],
+        param_types: dict[str, BaseType],
+    ) -> None:
+        """Walk a composed method body and reject obviously invalid self usage."""
+        if node is None:
+            return
+
+        if isinstance(node, ZincParser.VariableAssignmentContext):
+            target = node.assignmentTarget()
+            if target.memberAccess():
+                member = target.memberAccess()
+                target_expr = member.expression()
+                if isinstance(target_expr, ZincParser.PrimaryExprContext):
+                    primary = target_expr.primaryExpression()
+                    if primary and primary.getText() == "self":
+                        field_name = member.IDENTIFIER().getText()
+                        expected = field_types.get(field_name)
+                        if expected is None:
+                            raise ZincTypeError(
+                                f"composed method '{struct_name}.{method_name}' references missing field '{field_name}'"
+                            )
+                        actual = self._composed_expr_type(
+                            node.expression(),
+                            struct_name,
+                            method_name,
+                            field_types,
+                            method_types,
+                            param_types,
+                        )
+                        if not self._assignment_types_compatible(expected, actual):
+                            raise ZincTypeError(
+                                f"composed method '{struct_name}.{method_name}' assigns incompatible value to field '{field_name}'"
+                            )
+
+        if isinstance(node, ZincParser.FunctionCallExprContext):
+            callee_ctx = node.expression()
+            if isinstance(callee_ctx, ZincParser.MemberAccessExprContext):
+                receiver = callee_ctx.expression()
+                if isinstance(receiver, ZincParser.PrimaryExprContext):
+                    primary = receiver.primaryExpression()
+                    if primary and primary.getText() == "self":
+                        callee_name = callee_ctx.IDENTIFIER().getText()
+                        if callee_name not in method_types:
+                            raise ZincTypeError(
+                                f"composed method '{struct_name}.{method_name}' calls missing method '{callee_name}'"
+                            )
+
+        if isinstance(node, ZincParser.MemberAccessExprContext):
+            target_expr = node.expression()
+            if isinstance(target_expr, ZincParser.PrimaryExprContext):
+                primary = target_expr.primaryExpression()
+                if primary and primary.getText() == "self":
+                    field_name = node.IDENTIFIER().getText()
+                    if field_name not in field_types and field_name not in method_types:
+                        raise ZincTypeError(
+                            f"composed method '{struct_name}.{method_name}' references missing member '{field_name}'"
+                        )
+
+        if hasattr(node, "getChildCount"):
+            for i in range(node.getChildCount()):
+                child = node.getChild(i)
+                if isinstance(child, ParserRuleContext):
+                    self._validate_composed_method_node(
+                        child,
+                        struct_name,
+                        method_name,
+                        field_types,
+                        method_types,
+                        param_types,
+                    )
+
+    def _composed_expr_type(
+        self,
+        expr_ctx,
+        struct_name: str,
+        method_name: str,
+        field_types: dict[str, BaseType],
+        method_types: dict[str, BaseType],
+        param_types: dict[str, BaseType],
+    ) -> BaseType:
+        """Infer a lightweight type for composed-method validation."""
+        if expr_ctx is None:
+            return BaseType.UNKNOWN
+
+        if isinstance(expr_ctx, ZincParser.PrimaryExprContext):
+            primary = expr_ctx.primaryExpression()
+            if primary is None:
+                return BaseType.UNKNOWN
+            if primary.literal():
+                return parse_literal(primary.literal().getText())
+            if primary.IDENTIFIER():
+                return param_types.get(primary.IDENTIFIER().getText(), BaseType.UNKNOWN)
+            if primary.structInstantiation():
+                return BaseType.STRUCT
+            if primary.getText() == "self":
+                return BaseType.STRUCT
+            return BaseType.UNKNOWN
+
+        if isinstance(expr_ctx, ZincParser.MemberAccessExprContext):
+            receiver = expr_ctx.expression()
+            if isinstance(receiver, ZincParser.PrimaryExprContext):
+                primary = receiver.primaryExpression()
+                if primary and primary.getText() == "self":
+                    member_name = expr_ctx.IDENTIFIER().getText()
+                    if member_name in field_types:
+                        return field_types[member_name]
+                    if member_name in method_types:
+                        return method_types[member_name]
+                    raise ZincTypeError(
+                        f"composed method '{struct_name}.{method_name}' references missing member '{member_name}'"
+                    )
+            return BaseType.UNKNOWN
+
+        if isinstance(expr_ctx, ZincParser.ParenExprContext):
+            return self._composed_expr_type(
+                expr_ctx.expression(),
+                struct_name,
+                method_name,
+                field_types,
+                method_types,
+                param_types,
+            )
+
+        if isinstance(expr_ctx, ZincParser.UnaryExprContext):
+            operand = self._composed_expr_type(
+                expr_ctx.expression(),
+                struct_name,
+                method_name,
+                field_types,
+                method_types,
+                param_types,
+            )
+            return BaseType.BOOLEAN if expr_ctx.getChild(0).getText() in {"!", "not"} else operand
+
+        if isinstance(expr_ctx, (ZincParser.AdditiveExprContext, ZincParser.MultiplicativeExprContext)):
+            left = self._composed_expr_type(
+                expr_ctx.expression(0),
+                struct_name,
+                method_name,
+                field_types,
+                method_types,
+                param_types,
+            )
+            right = self._composed_expr_type(
+                expr_ctx.expression(1),
+                struct_name,
+                method_name,
+                field_types,
+                method_types,
+                param_types,
+            )
+            result = TypeInfo.promote(TypeInfo(left), TypeInfo(right)).base
+            if result == BaseType.UNKNOWN and left != BaseType.UNKNOWN and right != BaseType.UNKNOWN:
+                raise ZincTypeError(
+                    f"composed method '{struct_name}.{method_name}' uses incompatible operand types"
+                )
+            return result
+
+        if isinstance(expr_ctx, (ZincParser.RelationalExprContext, ZincParser.EqualityExprContext)):
+            return BaseType.BOOLEAN
+
+        if isinstance(expr_ctx, (ZincParser.LogicalAndExprContext, ZincParser.LogicalOrExprContext)):
+            return BaseType.BOOLEAN
+
+        if isinstance(expr_ctx, ZincParser.FunctionCallExprContext):
+            callee_ctx = expr_ctx.expression()
+            if isinstance(callee_ctx, ZincParser.MemberAccessExprContext):
+                receiver = callee_ctx.expression()
+                if isinstance(receiver, ZincParser.PrimaryExprContext):
+                    primary = receiver.primaryExpression()
+                    if primary and primary.getText() == "self":
+                        callee_name = callee_ctx.IDENTIFIER().getText()
+                        if callee_name not in method_types:
+                            raise ZincTypeError(
+                                f"composed method '{struct_name}.{method_name}' calls missing method '{callee_name}'"
+                            )
+                        return method_types[callee_name]
+            return BaseType.UNKNOWN
+
+        return BaseType.UNKNOWN
+
+    def _type_name_to_base(self, type_name: str | None) -> BaseType:
+        """Map a Rust-or-Zinc type spelling to a base type."""
+        if type_name is None:
+            return BaseType.UNKNOWN
+        mapping = {
+            "i32": BaseType.INTEGER,
+            "i64": BaseType.INTEGER,
+            "f32": BaseType.FLOAT,
+            "f64": BaseType.FLOAT,
+            "String": BaseType.STRING,
+            "string": BaseType.STRING,
+            "bool": BaseType.BOOLEAN,
+            "Self": BaseType.STRUCT,
+        }
+        return mapping.get(type_name, BaseType.UNKNOWN)
+
+    def _assignment_types_compatible(self, expected: BaseType, actual: BaseType) -> bool:
+        """Return True when an assignment is compatible under Zinc's simple rules."""
+        if expected == BaseType.UNKNOWN or actual == BaseType.UNKNOWN:
+            return True
+        if expected == actual:
+            return True
+        return expected in {BaseType.INTEGER, BaseType.FLOAT} and actual in {BaseType.INTEGER, BaseType.FLOAT}
 
     def _is_empty_array_literal(self, expr_ctx) -> bool:
         """Check if an expression is an empty array literal []."""

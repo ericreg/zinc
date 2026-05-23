@@ -22,3 +22,27 @@ fn main() {
     print(c.count)
     print(c.step)
 }
+
+
+struct File {
+    path: string
+}
+
+struct Message {
+    text: string
+    timestamp: i64
+}
+
+struct Item [
+        File,
+        Message,
+    ] {
+
+    owner_id: i32
+
+    fn print() {
+        print("Rectangle: {self.path}")
+        print("owner_id: {self.owner_id}")
+        print("timestamp: {self.timestamp}")
+    }
+}
