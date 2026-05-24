@@ -619,6 +619,26 @@ name = "structs_13_base_types"
 path = "src/structs/13_base_types.rs"
 
 [[bin]]
+name = "structs_14_anon_basic_fields"
+path = "src/structs/14_anon_basic_fields.rs"
+
+[[bin]]
+name = "structs_15_anon_function_param_return"
+path = "src/structs/15_anon_function_param_return.rs"
+
+[[bin]]
+name = "structs_16_anon_nested_fields"
+path = "src/structs/16_anon_nested_fields.rs"
+
+[[bin]]
+name = "structs_17_anon_array_tuple_channel"
+path = "src/structs/17_anon_array_tuple_channel.rs"
+
+[[bin]]
+name = "structs_18_anon_named_struct_field"
+path = "src/structs/18_anon_named_struct_field.rs"
+
+[[bin]]
 name = "tuples_01_literal_index"
 path = "src/tuples/01_literal_index.rs"
 

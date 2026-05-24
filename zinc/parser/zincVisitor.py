@@ -339,6 +339,21 @@ class zincVisitor(ParseTreeVisitor):
         return self.visitChildren(ctx)
 
 
+    # Visit a parse tree produced by zincParser#anonymousStructType.
+    def visitAnonymousStructType(self, ctx:zincParser.AnonymousStructTypeContext):
+        return self.visitChildren(ctx)
+
+
+    # Visit a parse tree produced by zincParser#anonymousStructFieldType.
+    def visitAnonymousStructFieldType(self, ctx:zincParser.AnonymousStructFieldTypeContext):
+        return self.visitChildren(ctx)
+
+
+    # Visit a parse tree produced by zincParser#anonymousStructLiteral.
+    def visitAnonymousStructLiteral(self, ctx:zincParser.AnonymousStructLiteralContext):
+        return self.visitChildren(ctx)
+
+
     # Visit a parse tree produced by zincParser#dictEntry.
     def visitDictEntry(self, ctx:zincParser.DictEntryContext):
         return self.visitChildren(ctx)

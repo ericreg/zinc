@@ -10,6 +10,7 @@ from zinc.parser.zincParser import zincParser as ZincParser
 from zinc.atlas import Atlas, FunctionInstance, StructInstance, ConstInstance, StructFieldInfo, StructMethodInfo
 from zinc.symbols import SymbolTable, SymbolKind
 from zinc.ast.types import (
+    AnonymousStructTypeInfo,
     ArrayTypeInfo,
     BaseType,
     CallableTarget,
@@ -107,12 +108,14 @@ class CodeGenVisitor(zincVisitor):
         self._current_channel_params: set[str] = set()
         self._boxed_struct_vars: set[tuple[str | None, str]] = set()
         self._callable_signatures: dict[str, CallableTypeInfo] = {}
+        self._anonymous_structs: dict[tuple, AnonymousStructTypeInfo] = {}
 
     def generate(self) -> RustProgram:
         """Main entry point - generate Rust code for all reachable code."""
         # Pre-scan to determine which struct vars need mut
         self._prescan_for_mut_vars()
         self._collect_callable_signatures()
+        self._collect_anonymous_struct_types()
         self._mark_async_functions()
 
         imports = self._generate_imports()
@@ -122,7 +125,19 @@ class CodeGenVisitor(zincVisitor):
             self._generate_callable_enum(info)
             for _, info in sorted(self._callable_signatures.items())
         ]
-        structs = [*runtime_helpers, *callable_enums, *[self._generate_struct(s) for s in self.atlas.structs.values()]]
+        anonymous_structs = [
+            self._generate_anonymous_struct(info)
+            for _, info in sorted(
+                self._anonymous_structs.items(),
+                key=lambda item: item[1].rust_type_name(),
+            )
+        ]
+        structs = [
+            *runtime_helpers,
+            *callable_enums,
+            *anonymous_structs,
+            *[self._generate_struct(s) for s in self.atlas.structs.values()],
+        ]
         functions = []
         main_body = []
 
@@ -639,6 +654,176 @@ class CodeGenVisitor(zincVisitor):
             self._register_callable_info(channel_info.element_callable_info)
         self._prune_abstract_callable_signatures()
 
+    def _register_anonymous_struct_info(self, info: AnonymousStructTypeInfo | None) -> None:
+        """Collect a reachable anonymous-struct shape and any nested shapes."""
+        if info is None:
+            return
+        key = info.structural_key()
+        existing = self._anonymous_structs.get(key)
+        if existing is None:
+            self._anonymous_structs[key] = info.copy()
+            existing = self._anonymous_structs[key]
+        for field in existing.fields:
+            self._register_type_metadata(
+                field.resolved_type,
+                array_info=field.array_info,
+                dict_info=field.dict_info,
+                set_info=field.set_info,
+                tuple_info=field.tuple_info,
+                callable_info=field.callable_info,
+                struct_qualified_name=field.struct_qualified_name,
+                anonymous_struct_info=field.anonymous_struct_info,
+            )
+
+    def _register_type_metadata(
+        self,
+        base_type: BaseType,
+        *,
+        array_info: ArrayTypeInfo | None = None,
+        dict_info: DictTypeInfo | None = None,
+        set_info: SetTypeInfo | None = None,
+        tuple_info: TupleTypeInfo | None = None,
+        callable_info: CallableTypeInfo | None = None,
+        struct_qualified_name: str | None = None,
+        anonymous_struct_info: AnonymousStructTypeInfo | None = None,
+    ) -> None:
+        """Recursively collect anonymous structs nested inside rich type metadata."""
+        del struct_qualified_name  # Named structs are handled elsewhere; only anonymous shapes need synthesis.
+        if base_type == BaseType.STRUCT:
+            self._register_anonymous_struct_info(anonymous_struct_info)
+            return
+        if base_type == BaseType.ARRAY and array_info:
+            self._register_type_metadata(
+                array_info.element_type,
+                tuple_info=array_info.element_tuple_info,
+                callable_info=array_info.element_callable_info,
+                struct_qualified_name=array_info.element_struct_qualified_name,
+                anonymous_struct_info=array_info.element_anonymous_struct_info,
+            )
+            return
+        if base_type == BaseType.DICT and dict_info:
+            self._register_type_metadata(
+                dict_info.key_type,
+                callable_info=dict_info.key_callable_info,
+                struct_qualified_name=dict_info.key_struct_qualified_name,
+                anonymous_struct_info=dict_info.key_anonymous_struct_info,
+            )
+            self._register_type_metadata(
+                dict_info.value_type,
+                callable_info=dict_info.value_callable_info,
+                struct_qualified_name=dict_info.value_struct_qualified_name,
+                anonymous_struct_info=dict_info.value_anonymous_struct_info,
+            )
+            return
+        if base_type == BaseType.SET and set_info:
+            self._register_type_metadata(
+                set_info.element_type,
+                struct_qualified_name=set_info.element_struct_qualified_name,
+                anonymous_struct_info=set_info.element_anonymous_struct_info,
+            )
+            return
+        if base_type == BaseType.TUPLE and tuple_info:
+            for index, element_type in enumerate(tuple_info.element_types):
+                self._register_type_metadata(
+                    element_type,
+                    tuple_info=tuple_info.element_tuple_infos.get(index),
+                    callable_info=tuple_info.element_callable_infos.get(index),
+                    struct_qualified_name=tuple_info.element_struct_qualified_names.get(index),
+                    anonymous_struct_info=tuple_info.element_anonymous_struct_infos.get(index),
+                )
+            return
+        if base_type == BaseType.CALLABLE and callable_info:
+            for index, param_type in enumerate(callable_info.param_types):
+                self._register_type_metadata(
+                    param_type,
+                    array_info=callable_info.param_array_infos.get(index),
+                    dict_info=callable_info.param_dict_infos.get(index),
+                    set_info=callable_info.param_set_infos.get(index),
+                    tuple_info=callable_info.param_tuple_infos.get(index),
+                    callable_info=callable_info.param_callable_infos.get(index),
+                    struct_qualified_name=callable_info.param_struct_qualified_names.get(index),
+                    anonymous_struct_info=callable_info.param_anonymous_struct_infos.get(index),
+                )
+            self._register_type_metadata(
+                callable_info.return_type,
+                dict_info=callable_info.return_dict_info,
+                set_info=callable_info.return_set_info,
+                tuple_info=callable_info.return_tuple_info,
+                callable_info=callable_info.return_callable_info,
+                struct_qualified_name=callable_info.return_struct_qualified_name,
+                anonymous_struct_info=callable_info.return_anonymous_struct_info,
+            )
+
+    def _collect_anonymous_struct_types(self) -> None:
+        """Collect all reachable anonymous-struct shapes before Rust emission."""
+        self._anonymous_structs = {}
+        for struct in self.atlas.structs.values():
+            for field in struct.fields:
+                self._register_type_metadata(
+                    field.resolved_type,
+                    array_info=field.array_info,
+                    dict_info=field.dict_info,
+                    set_info=field.set_info,
+                    tuple_info=field.tuple_info,
+                    callable_info=field.callable_info,
+                    struct_qualified_name=field.struct_qualified_name,
+                    anonymous_struct_info=field.anonymous_struct_info,
+                )
+        for func in self.atlas.functions.values():
+            for index, arg_type in enumerate(func.arg_types):
+                self._register_type_metadata(
+                    arg_type,
+                    array_info=func.arg_array_infos.get(index),
+                    dict_info=func.arg_dict_infos.get(index),
+                    set_info=func.arg_set_infos.get(index),
+                    tuple_info=func.arg_tuple_infos.get(index),
+                    callable_info=func.arg_callable_infos.get(index),
+                    struct_qualified_name=func.arg_struct_qualified_names.get(index),
+                    anonymous_struct_info=func.arg_anonymous_struct_infos.get(index),
+                )
+            self._register_type_metadata(
+                func.return_type,
+                dict_info=func.return_dict_info,
+                set_info=func.return_set_info,
+                tuple_info=func.return_tuple_info,
+                callable_info=func.return_callable_info,
+                struct_qualified_name=func.return_struct_qualified_name,
+                anonymous_struct_info=func.return_anonymous_struct_info,
+            )
+        for info in self._callable_signatures.values():
+            self._register_type_metadata(
+                BaseType.CALLABLE,
+                callable_info=info,
+            )
+        for symbol in self.symbols.all_symbols():
+            self._register_type_metadata(
+                symbol.resolved_type,
+                array_info=ArrayTypeInfo(
+                    element_type=symbol.element_type,
+                    element_tuple_info=symbol.tuple_info if symbol.element_type == BaseType.TUPLE else None,
+                    element_callable_info=symbol.callable_info if symbol.element_type == BaseType.CALLABLE else None,
+                    element_struct_qualified_name=symbol.element_struct_qualified_name,
+                    element_anonymous_struct_info=symbol.element_anonymous_struct_info,
+                )
+                if symbol.resolved_type == BaseType.ARRAY and symbol.element_type is not None
+                else None,
+                dict_info=symbol.dict_info,
+                set_info=symbol.set_info,
+                tuple_info=symbol.tuple_info if symbol.resolved_type == BaseType.TUPLE else None,
+                callable_info=symbol.callable_info if symbol.resolved_type == BaseType.CALLABLE else None,
+                anonymous_struct_info=symbol.anonymous_struct_info,
+            )
+            if symbol.resolved_type == BaseType.ARRAY and symbol.element_type == BaseType.STRUCT:
+                self._register_anonymous_struct_info(symbol.element_anonymous_struct_info)
+        for channel_info in self._channel_infos.values():
+            self._register_type_metadata(
+                channel_info.element_type,
+                tuple_info=channel_info.element_tuple_info,
+                callable_info=channel_info.element_callable_info,
+                struct_qualified_name=channel_info.element_struct_qualified_name,
+                anonymous_struct_info=channel_info.element_anonymous_struct_info,
+            )
+
     def _prune_abstract_callable_signatures(self) -> None:
         """Drop abstract callable signatures when a concrete version exists for the same target set."""
         grouped: dict[tuple[tuple, int], list[CallableTypeInfo]] = {}
@@ -681,6 +866,8 @@ class CodeGenVisitor(zincVisitor):
         set_info: SetTypeInfo | None = None,
         tuple_info: TupleTypeInfo | None = None,
         callable_info: CallableTypeInfo | None = None,
+        struct_qualified_name: str | None = None,
+        anonymous_struct_info: AnonymousStructTypeInfo | None = None,
         as_reference: bool = False,
     ) -> str:
         """Render a full Zinc type including rich metadata."""
@@ -694,6 +881,10 @@ class CodeGenVisitor(zincVisitor):
             return tuple_info.to_rust_type()
         if base_type == BaseType.CALLABLE and callable_info:
             return callable_info.rust_type_name()
+        if base_type == BaseType.STRUCT:
+            if anonymous_struct_info:
+                return anonymous_struct_info.rust_type_name()
+            return self._named_struct_rust_name(struct_qualified_name)
         if base_type == BaseType.VOID:
             return "()"
         return type_to_rust(base_type)
@@ -707,6 +898,8 @@ class CodeGenVisitor(zincVisitor):
             set_info=info.param_set_infos.get(index),
             tuple_info=info.param_tuple_infos.get(index),
             callable_info=info.param_callable_infos.get(index),
+            struct_qualified_name=info.param_struct_qualified_names.get(index),
+            anonymous_struct_info=info.param_anonymous_struct_infos.get(index),
             as_reference=info.param_types[index] in {BaseType.ARRAY, BaseType.DICT, BaseType.SET},
         )
 
@@ -718,6 +911,8 @@ class CodeGenVisitor(zincVisitor):
             set_info=info.return_set_info,
             tuple_info=info.return_tuple_info,
             callable_info=info.return_callable_info,
+            struct_qualified_name=info.return_struct_qualified_name,
+            anonymous_struct_info=info.return_anonymous_struct_info,
             as_reference=False,
         )
 
@@ -732,6 +927,8 @@ class CodeGenVisitor(zincVisitor):
                 arg_set_infos=info.param_set_infos,
                 arg_tuple_infos=info.param_tuple_infos,
                 arg_callable_infos=info.param_callable_infos,
+                arg_struct_qualified_names=info.param_struct_qualified_names,
+                arg_anonymous_struct_infos=info.param_anonymous_struct_infos,
             )
         if target.kind == "static_method":
             struct_qualified_name = target.receiver_struct_qualified_name or target.qualified_name.rpartition("::")[0]
@@ -964,6 +1161,15 @@ class CodeGenVisitor(zincVisitor):
         """Return the flattened Rust name for a struct."""
         return self.module_graph.rust_base_name(struct.qualified_name)
 
+    def _named_struct_rust_name(self, qualified_name: str | None) -> str:
+        """Return the flattened Rust name for a named struct qualified name."""
+        if qualified_name is None:
+            return "Struct"
+        struct = self.atlas.structs.get(qualified_name)
+        if struct is not None:
+            return self._struct_rust_name(struct)
+        return self.module_graph.rust_base_name(qualified_name)
+
     def _const_rust_name(self, const: ConstInstance) -> str:
         """Return the flattened Rust name for a const."""
         return self.module_graph.rust_base_name(const.qualified_name).upper()
@@ -1003,6 +1209,25 @@ class CodeGenVisitor(zincVisitor):
                 return f"static {name}: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {value});"
             return f"const {name}: {type_str} = {value};"
         return f"const {name} = {value};"
+
+    def _generate_anonymous_struct(self, info: AnonymousStructTypeInfo) -> str:
+        """Generate a synthesized Rust struct for one anonymous shape."""
+        lines = ["#[derive(Clone, Default)]", f"struct {info.rust_type_name()} {{"]
+        for field in info.canonical_fields():
+            rust_type = self._type_with_metadata_to_rust(
+                field.resolved_type,
+                array_info=field.array_info,
+                dict_info=field.dict_info,
+                set_info=field.set_info,
+                tuple_info=field.tuple_info,
+                callable_info=field.callable_info,
+                struct_qualified_name=field.struct_qualified_name,
+                anonymous_struct_info=field.anonymous_struct_info,
+                as_reference=False,
+            )
+            lines.append(f"    {field.name}: {rust_type},")
+        lines.append("}")
+        return "\n".join(lines)
 
     def _generate_struct(self, struct: StructInstance) -> str:
         """Generate a struct definition and impl block."""
@@ -1144,6 +1369,13 @@ class CodeGenVisitor(zincVisitor):
                         type_str = tuple_info.to_rust_type()
                     elif i in func.arg_callable_infos:
                         type_str = func.arg_callable_infos[i].rust_type_name()
+                    elif func.arg_types[i] == BaseType.STRUCT:
+                        type_str = self._type_with_metadata_to_rust(
+                            BaseType.STRUCT,
+                            struct_qualified_name=func.arg_struct_qualified_names.get(i),
+                            anonymous_struct_info=func.arg_anonymous_struct_infos.get(i),
+                            as_reference=False,
+                        )
                     else:
                         type_str = type_to_rust(func.arg_types[i])
                     params.append(f"{param_name}: {type_str}")
@@ -1164,6 +1396,16 @@ class CodeGenVisitor(zincVisitor):
                 return_type_str = f" -> {func.return_tuple_info.to_rust_type()}"
             elif func.return_type == BaseType.CALLABLE and func.return_callable_info:
                 return_type_str = f" -> {func.return_callable_info.rust_type_name()}"
+            elif func.return_type == BaseType.STRUCT:
+                return_type_str = (
+                    " -> "
+                    + self._type_with_metadata_to_rust(
+                        BaseType.STRUCT,
+                        struct_qualified_name=func.return_struct_qualified_name,
+                        anonymous_struct_info=func.return_anonymous_struct_info,
+                        as_reference=False,
+                    )
+                )
             else:
                 return_type_str = f" -> {type_to_rust(func.return_type)}"
         else:
@@ -1308,6 +1550,8 @@ class CodeGenVisitor(zincVisitor):
         """Visit a primary expression."""
         if ctx.literal():
             return self.visit(ctx.literal())
+        if hasattr(ctx, "anonymousStructLiteral") and ctx.anonymousStructLiteral():
+            return self.visit(ctx.anonymousStructLiteral())
         if ctx.IDENTIFIER():
             name = ctx.IDENTIFIER().getText()
             expr_symbol = self._get_expr_symbol(ctx)
@@ -1344,6 +1588,26 @@ class CodeGenVisitor(zincVisitor):
         if ctx.expression():
             return f"({self.visit(ctx.expression())})"
         return ctx.getText()
+
+    def visitAnonymousStructLiteral(self, ctx) -> str:
+        """Visit an anonymous struct literal."""
+        expr_symbol = self._get_expr_symbol(ctx)
+        anonymous_struct_info = expr_symbol.anonymous_struct_info if expr_symbol else None
+        struct_name = anonymous_struct_info.rust_type_name() if anonymous_struct_info else "__ZincAnonStruct_missing"
+        field_info_map = anonymous_struct_info.field_map() if anonymous_struct_info else {}
+        fields = []
+        for field_ctx in ctx.fieldInit():
+            field_name = field_ctx.IDENTIFIER().getText()
+            field_value = self.visit(field_ctx.expression())
+            field_info = field_info_map.get(field_name)
+            if field_info is not None:
+                field_value = self._coerce_owned(
+                    field_value,
+                    field_info.resolved_type,
+                    field_ctx.expression(),
+                )
+            fields.append(f"{field_name}: {field_value}")
+        return f"{struct_name} {{ {', '.join(fields)} }}"
 
     def visitPrimaryExpr(self, ctx: ZincParser.PrimaryExprContext) -> str:
         """Visit primary expression wrapper."""
@@ -1786,8 +2050,20 @@ class CodeGenVisitor(zincVisitor):
             info = self._expected_dict_info or self._get_dict_info(ctx) or DictTypeInfo(kind=callee)
             collection_type = info.rust_container()
             if info.key_type != BaseType.UNKNOWN and info.value_type != BaseType.UNKNOWN:
-                key = type_to_rust(info.key_type)
-                value = type_to_rust(info.value_type)
+                key = self._type_with_metadata_to_rust(
+                    info.key_type,
+                    callable_info=info.key_callable_info,
+                    struct_qualified_name=info.key_struct_qualified_name,
+                    anonymous_struct_info=info.key_anonymous_struct_info,
+                    as_reference=False,
+                )
+                value = self._type_with_metadata_to_rust(
+                    info.value_type,
+                    callable_info=info.value_callable_info,
+                    struct_qualified_name=info.value_struct_qualified_name,
+                    anonymous_struct_info=info.value_anonymous_struct_info,
+                    as_reference=False,
+                )
                 return f"{collection_type}::<{key}, {value}>::new()"
             return f"{collection_type}::new()"
 
@@ -1795,7 +2071,12 @@ class CodeGenVisitor(zincVisitor):
             info = self._expected_set_info or self._get_set_info(ctx) or SetTypeInfo(kind=callee)
             collection_type = info.rust_container()
             if info.element_type != BaseType.UNKNOWN:
-                elem = type_to_rust(info.element_type)
+                elem = self._type_with_metadata_to_rust(
+                    info.element_type,
+                    struct_qualified_name=info.element_struct_qualified_name,
+                    anonymous_struct_info=info.element_anonymous_struct_info,
+                    as_reference=False,
+                )
                 return f"{collection_type}::<{elem}>::new()"
             return f"{collection_type}::new()"
 

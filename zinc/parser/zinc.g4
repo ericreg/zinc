@@ -101,7 +101,8 @@ parameter
     ;
 
 type
-    : qualifiedName ('<' typeList '>')?
+    : anonymousStructType
+    | qualifiedName ('<' typeList '>')?
     | '[' type ']'                  // array type
     | tupleType                     // tuple type
     | '(' typeList? ')' '->' type   // function type
@@ -234,6 +235,7 @@ expression
 
 primaryExpression
     : literal
+    | anonymousStructLiteral
     | structInstantiation
     | IDENTIFIER
     | 'self'
@@ -275,6 +277,18 @@ collectionLiteral
     : '{' '}'
     | '{' dictEntry (',' dictEntry)* ','? '}'
     | '{' expression (',' expression)* ','? '}'
+    ;
+
+anonymousStructType
+    : 'struct' '{' anonymousStructFieldType* '}'
+    ;
+
+anonymousStructFieldType
+    : IDENTIFIER ':' type
+    ;
+
+anonymousStructLiteral
+    : 'struct' '{' (fieldInit (','? fieldInit)* ','?)? '}'
     ;
 
 dictEntry

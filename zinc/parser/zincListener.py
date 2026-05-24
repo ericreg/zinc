@@ -602,6 +602,33 @@ class zincListener(ParseTreeListener):
         pass
 
 
+    # Enter a parse tree produced by zincParser#anonymousStructType.
+    def enterAnonymousStructType(self, ctx:zincParser.AnonymousStructTypeContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#anonymousStructType.
+    def exitAnonymousStructType(self, ctx:zincParser.AnonymousStructTypeContext):
+        pass
+
+
+    # Enter a parse tree produced by zincParser#anonymousStructFieldType.
+    def enterAnonymousStructFieldType(self, ctx:zincParser.AnonymousStructFieldTypeContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#anonymousStructFieldType.
+    def exitAnonymousStructFieldType(self, ctx:zincParser.AnonymousStructFieldTypeContext):
+        pass
+
+
+    # Enter a parse tree produced by zincParser#anonymousStructLiteral.
+    def enterAnonymousStructLiteral(self, ctx:zincParser.AnonymousStructLiteralContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#anonymousStructLiteral.
+    def exitAnonymousStructLiteral(self, ctx:zincParser.AnonymousStructLiteralContext):
+        pass
+
+
     # Enter a parse tree produced by zincParser#dictEntry.
     def enterDictEntry(self, ctx:zincParser.DictEntryContext):
         pass

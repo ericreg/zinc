@@ -815,6 +815,38 @@ fn main() {
 }
 ```
 
+Anonymous structs are lightweight, data-only structural types. Use `struct { ... }`
+in expression position to build a value, or in type position to require an exact
+shape:
+
+```zinc
+fn area(rect: struct {
+    width: i64
+    height: i64
+}) {
+    return rect.width * rect.height
+}
+
+fn main() {
+    rect = struct {
+        height: 4
+        width: 3
+    }
+
+    print(area(rect))
+}
+```
+
+Anonymous structs use exact structural typing:
+
+- field order does not matter
+- extra or missing fields are errors
+- anonymous structs only interoperate with other anonymous structs of the same shape
+- named structs remain nominal and do not automatically interoperate with anonymous structs
+
+Anonymous structs are data-only in v1: they do not declare methods, composition,
+`const` fields, or privacy modifiers.
+
 Fields whose names begin with `_` are private in generated Rust:
 
 ```zinc

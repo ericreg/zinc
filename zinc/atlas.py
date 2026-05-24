@@ -9,6 +9,7 @@ from antlr4 import ParserRuleContext
 from sortedcontainers import SortedDict, SortedSet
 
 from zinc.ast.types import (
+    AnonymousStructTypeInfo,
     ArrayTypeInfo,
     BaseType,
     CallableTypeInfo,
@@ -53,11 +54,16 @@ class FunctionInstance:
     arg_tuple_infos: dict[int, TupleTypeInfo] = field(default_factory=dict)
     # Rich type info for callable arguments (arg_index -> CallableTypeInfo)
     arg_callable_infos: dict[int, CallableTypeInfo] = field(default_factory=dict)
+    # Struct identity metadata for arguments
+    arg_struct_qualified_names: dict[int, str] = field(default_factory=dict)
+    arg_anonymous_struct_infos: dict[int, AnonymousStructTypeInfo] = field(default_factory=dict)
     # Rich type info for collection return values
     return_dict_info: DictTypeInfo | None = None
     return_set_info: SetTypeInfo | None = None
     return_tuple_info: TupleTypeInfo | None = None
     return_callable_info: CallableTypeInfo | None = None
+    return_struct_qualified_name: str | None = None
+    return_anonymous_struct_info: AnonymousStructTypeInfo | None = None
 
 
 @dataclass
@@ -70,13 +76,31 @@ class StructFieldInfo:
     is_private: bool = False
     is_const: bool = False
     resolved_type: BaseType = field(default=BaseType.UNKNOWN)
+    array_info: ArrayTypeInfo | None = None
+    dict_info: DictTypeInfo | None = None
+    set_info: SetTypeInfo | None = None
+    tuple_info: TupleTypeInfo | None = None
     callable_info: CallableTypeInfo | None = None
+    struct_qualified_name: str | None = None
+    anonymous_struct_info: AnonymousStructTypeInfo | None = None
     source_struct_qualified_name: str | None = None
 
     def rust_type(self) -> str:
         """Get Rust type string for this field."""
         if self.callable_info is not None:
             return self.callable_info.rust_type_name()
+        if self.array_info is not None:
+            return self.array_info.to_rust_type(as_reference=False)
+        if self.dict_info is not None:
+            return self.dict_info.to_rust_type(as_reference=False)
+        if self.set_info is not None:
+            return self.set_info.to_rust_type(as_reference=False)
+        if self.tuple_info is not None:
+            return self.tuple_info.to_rust_type()
+        if self.anonymous_struct_info is not None:
+            return self.anonymous_struct_info.rust_type_name()
+        if self.struct_qualified_name is not None:
+            return self.struct_qualified_name.rpartition("::")[2] or self.struct_qualified_name
         if self.type_annotation:
             mapping = {
                 "i8": "i8",
@@ -198,6 +222,8 @@ class Atlas:
         arg_set_infos: dict[int, SetTypeInfo] | None = None,
         arg_tuple_infos: dict[int, TupleTypeInfo] | None = None,
         arg_callable_infos: dict[int, CallableTypeInfo] | None = None,
+        arg_struct_qualified_names: dict[int, str] | None = None,
+        arg_anonymous_struct_infos: dict[int, AnonymousStructTypeInfo] | None = None,
     ) -> str:
         """Create a new function specialization and return its mangled name."""
         mangled = self._mangle_name(
@@ -209,6 +235,8 @@ class Atlas:
             arg_set_infos,
             arg_tuple_infos,
             arg_callable_infos,
+            arg_struct_qualified_names,
+            arg_anonymous_struct_infos,
         )
         if mangled not in self.functions:
             module_id, name = ModuleGraph.split_qualified_name(qualified_name)
@@ -231,10 +259,17 @@ class Atlas:
                 arg_callable_infos={
                     index: info.copy() for index, info in (arg_callable_infos or {}).items()
                 },
+                arg_struct_qualified_names=dict(arg_struct_qualified_names or {}),
+                arg_anonymous_struct_infos={
+                    index: info.copy()
+                    for index, info in (arg_anonymous_struct_infos or {}).items()
+                },
             )
             self.calls[mangled] = SortedSet()
-        elif arg_callable_infos:
             instance = self.functions[mangled]
+        else:
+            instance = self.functions[mangled]
+        if arg_callable_infos:
             for index, info in arg_callable_infos.items():
                 existing = instance.arg_callable_infos.get(index)
                 if existing is None:
@@ -253,6 +288,11 @@ class Atlas:
 
                         chosen = existing if specificity(existing) <= specificity(info) else info
                         instance.arg_callable_infos[index] = chosen.copy()
+        if arg_struct_qualified_names:
+            instance.arg_struct_qualified_names.update(arg_struct_qualified_names)
+        if arg_anonymous_struct_infos:
+            for index, info in arg_anonymous_struct_infos.items():
+                instance.arg_anonymous_struct_infos[index] = info.copy()
 
         if caller_mangled and caller_mangled in self.calls:
             self.calls[caller_mangled].add(mangled)
@@ -269,6 +309,8 @@ class Atlas:
         arg_set_infos: dict[int, SetTypeInfo] | None = None,
         arg_tuple_infos: dict[int, TupleTypeInfo] | None = None,
         arg_callable_infos: dict[int, CallableTypeInfo] | None = None,
+        arg_struct_qualified_names: dict[int, str] | None = None,
+        arg_anonymous_struct_infos: dict[int, AnonymousStructTypeInfo] | None = None,
     ) -> str:
         """Generate a flattened Rust symbol name."""
         base_name = self.module_graph.rust_base_name(qualified_name)
@@ -289,6 +331,10 @@ class Atlas:
                 type_parts.append(arg_tuple_infos[i].to_rust_type_suffix())
             elif base_type == BaseType.CALLABLE and arg_callable_infos and i in arg_callable_infos:
                 type_parts.append(arg_callable_infos[i].to_rust_type_suffix())
+            elif base_type == BaseType.STRUCT and arg_anonymous_struct_infos and i in arg_anonymous_struct_infos:
+                type_parts.append(arg_anonymous_struct_infos[i].to_rust_type_suffix())
+            elif base_type == BaseType.STRUCT and arg_struct_qualified_names and i in arg_struct_qualified_names:
+                type_parts.append(f"Struct_{re.sub(r'[^0-9A-Za-z]+', '_', arg_struct_qualified_names[i])}")
             else:
                 type_parts.append(type_to_rust(base_type))
 

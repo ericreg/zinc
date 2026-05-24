@@ -1,4 +1,4 @@
-// expected-error: indirect call arity mismatch
+// expected-error: parameter 'f' expects a compatible '\(i64\)->i64' value
 fn apply(f: (i64) -> i64, x: i64) {
     return f(x)
 }

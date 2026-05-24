@@ -9,6 +9,7 @@
     { "include": "#numbers" },
     { "include": "#imports" },
     { "include": "#struct_compositions" },
+    { "include": "#anonymous_structs" },
     { "include": "#declarations" },
     { "include": "#types" },
     { "include": "#module_paths" },
@@ -178,6 +179,31 @@
               "name": "punctuation.separator.comma.zinc",
               "match": ","
             }
+          ]
+        }
+      ]
+    },
+    "anonymous_structs": {
+      "patterns": [
+        {
+          "name": "meta.struct.anonymous.zinc",
+          "begin": "\\b(struct)(\\s*)(\\{)",
+          "beginCaptures": {
+            "1": { "name": "keyword.declaration.struct.zinc" },
+            "3": { "name": "punctuation.section.block.begin.zinc" }
+          },
+          "end": "\\}",
+          "endCaptures": {
+            "0": { "name": "punctuation.section.block.end.zinc" }
+          },
+          "patterns": [
+            { "include": "#comments" },
+            { "include": "#strings" },
+            { "include": "#numbers" },
+            { "include": "#types" },
+            { "include": "#keywords" },
+            { "include": "#operators" },
+            { "include": "#punctuation" }
           ]
         }
       ]
