@@ -1,0 +1,14 @@
+// expected-error: bound methods cannot be sent over channels in v1
+struct Counter {
+    count: 0
+
+    fn inc() {
+        self.count = self.count + 1
+    }
+}
+
+fn main() {
+    c = Counter {}
+    jobs = chan()
+    jobs <- c.inc
+}

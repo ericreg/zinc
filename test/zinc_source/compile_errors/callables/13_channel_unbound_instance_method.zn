@@ -1,0 +1,13 @@
+// expected-error: instance methods must be bound to a receiver before use as callable values
+struct Counter {
+    count: 0
+
+    fn inc() {
+        self.count = self.count + 1
+    }
+}
+
+fn main() {
+    jobs = chan()
+    jobs <- Counter.inc
+}

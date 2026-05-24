@@ -1,0 +1,17 @@
+fn main() {
+    values = chan(2)
+    values <- 1
+    values <- 2
+    close(values)
+
+    a, ok1 = <-values
+    b, ok2 = <-values
+    c, ok3 = <-values
+
+    print("{a}")
+    print("{ok1}")
+    print("{b}")
+    print("{ok2}")
+    print("{c}")
+    print("{ok3}")
+}

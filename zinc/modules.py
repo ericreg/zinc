@@ -431,6 +431,17 @@ def _collect_top_level_symbols(tree: ZincParser.ProgramContext, module_id: str) 
                 ctx=ctx,
                 is_public=not name.startswith("_"),
             )
+        elif stmt.asyncFunctionDeclaration():
+            ctx = stmt.asyncFunctionDeclaration()
+            name = ctx.IDENTIFIER().getText()
+            symbol = TopLevelSymbol(
+                qualified_name=ModuleGraph.qualified_name(module_id, name),
+                module_id=module_id,
+                name=name,
+                kind="function",
+                ctx=ctx,
+                is_public=not name.startswith("_"),
+            )
         elif stmt.structDeclaration():
             ctx = stmt.structDeclaration()
             name = ctx.IDENTIFIER().getText()

@@ -1,0 +1,10 @@
+// expected-error: close-aware select receive requires exactly two bindings
+
+fn main() {
+    values = chan()
+    select {
+        case a, b, c = <-values {
+            print("nope")
+        }
+    }
+}

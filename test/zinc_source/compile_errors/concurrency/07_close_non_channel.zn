@@ -1,0 +1,6 @@
+// expected-error: close\(\) expects a channel argument
+
+fn main() {
+    value = 1
+    close(value)
+}

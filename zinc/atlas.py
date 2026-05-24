@@ -219,6 +219,7 @@ class Atlas:
                 mangled_name=mangled,
                 ctx=ctx,
                 arg_types=list(arg_types),
+                is_async=isinstance(ctx, ZincParser.AsyncFunctionDeclarationContext),
                 arg_channel_infos={
                     index: [info]
                     for index, info in (arg_channel_infos or {}).items()
@@ -316,7 +317,7 @@ class Atlas:
 class AtlasBuilder:
     """Build the Atlas from a module graph."""
 
-    BUILTIN_FUNCTIONS = {"print", "chan", "dict", "sort_dict", "set", "sort_set"}
+    BUILTIN_FUNCTIONS = {"print", "chan", "close", "dict", "sort_dict", "set", "sort_set"}
 
     def __init__(self, module_graph: ModuleGraph):
         self.module_graph = module_graph
@@ -366,6 +367,7 @@ class AtlasBuilder:
                 mangled_name=self.module_graph.rust_base_name(main_symbol.qualified_name),
                 ctx=main_symbol.ctx,
                 arg_types=[],
+                is_async=isinstance(main_symbol.ctx, ZincParser.AsyncFunctionDeclarationContext),
             ),
             function_defs=self._function_defs,
         )

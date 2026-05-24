@@ -1,0 +1,6 @@
+// expected-error: close-aware receive requires exactly two bindings
+
+fn main() {
+    values = chan()
+    a, b, c = <-values
+}

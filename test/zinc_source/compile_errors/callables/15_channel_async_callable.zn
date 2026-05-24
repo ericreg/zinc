@@ -1,0 +1,9 @@
+// expected-error: async functions cannot be used as callable values
+async helper(x) {
+    return x + 1
+}
+
+fn main() {
+    jobs = chan()
+    jobs <- helper
+}

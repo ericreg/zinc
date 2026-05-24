@@ -1,0 +1,14 @@
+fn inc(x) {
+    return x + 1
+}
+
+fn worker(out) {
+    out <- inc
+}
+
+fn main() {
+    jobs = chan()
+    spawn worker(jobs)
+    f = <-jobs
+    print(f(5))
+}

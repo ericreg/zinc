@@ -1,0 +1,7 @@
+// expected-error: Context.with_cancel\(\) expects a context argument
+
+fn main() {
+    child, cancel = Context.with_cancel(1)
+    print("{child}")
+    cancel()
+}

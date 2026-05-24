@@ -71,6 +71,38 @@ name = "callables_13_named_function_array"
 path = "src/callables/13_named_function_array.rs"
 
 [[bin]]
+name = "callables_14_channel_top_level_function"
+path = "src/callables/14_channel_top_level_function.rs"
+
+[[bin]]
+name = "callables_15_channel_static_method"
+path = "src/callables/15_channel_static_method.rs"
+
+[[bin]]
+name = "callables_16_channel_lambda"
+path = "src/callables/16_channel_lambda.rs"
+
+[[bin]]
+name = "callables_17_channel_helper_param"
+path = "src/callables/17_channel_helper_param.rs"
+
+[[bin]]
+name = "callables_18_channel_spawn_helper"
+path = "src/callables/18_channel_spawn_helper.rs"
+
+[[bin]]
+name = "callables_19_channel_bounded"
+path = "src/callables/19_channel_bounded.rs"
+
+[[bin]]
+name = "callables_20_channel_select_receive"
+path = "src/callables/20_channel_select_receive.rs"
+
+[[bin]]
+name = "callables_21_channel_same_signature_mix"
+path = "src/callables/21_channel_same_signature_mix.rs"
+
+[[bin]]
 name = "collections_01_dict_literal"
 path = "src/collections/01_dict_literal.rs"
 
@@ -113,6 +145,18 @@ path = "src/concurrency/channels/03_bounded_fifo.rs"
 [[bin]]
 name = "concurrency_channels_04_bounded_send_unblocks"
 path = "src/concurrency/channels/04_bounded_send_unblocks.rs"
+
+[[bin]]
+name = "concurrency_channels_05_close_drain"
+path = "src/concurrency/channels/05_close_drain.rs"
+
+[[bin]]
+name = "concurrency_channels_06_param_receive_range"
+path = "src/concurrency/channels/06_param_receive_range.rs"
+
+[[bin]]
+name = "concurrency_channels_07_param_receive_send"
+path = "src/concurrency/channels/07_param_receive_send.rs"
 
 [[bin]]
 name = "concurrency_non_deterministic_01_spawn_print_race"
@@ -201,6 +245,18 @@ path = "src/concurrency/select/05_helper_async.rs"
 [[bin]]
 name = "concurrency_select_06_mixed_send_receive"
 path = "src/concurrency/select/06_mixed_send_receive.rs"
+
+[[bin]]
+name = "concurrency_select_07_receive_closed_status"
+path = "src/concurrency/select/07_receive_closed_status.rs"
+
+[[bin]]
+name = "concurrency_select_08_context_done"
+path = "src/concurrency/select/08_context_done.rs"
+
+[[bin]]
+name = "concurrency_select_09_context_spawn_cancel"
+path = "src/concurrency/select/09_context_spawn_cancel.rs"
 
 [[bin]]
 name = "concurrency_spawn_01_basic_ack"

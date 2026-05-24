@@ -1,23 +1,53 @@
-- support importing and module definitions
-- scratch docker image
+Zinc roadmap
+=============
 
-- decorators
-- multiline string
-- unsigned ints
+Implemented core pillars
+------------------------
+- [x] Modules and imports
+- [x] Dynamic variable rebinding
+- [x] Monomorphized functions
+- [x] Structs with methods
+- [x] Struct composition
+- [x] First-class callables
+- [x] Channels, spawn, bounded channels, and select
+- [x] Arrays, dicts, sets, tuples
+- [x] Base integer and float annotation surface, including unsigned ints
+
+Highest-priority language gaps
+------------------------------
+- [ ] Error handling story
+      Today many runtime failure paths still lower to Rust `unwrap()`/panic.
+      Need a real Zinc-level model for recoverable errors.
+- [ ] Zinc stdlib
+      The language has a solid core, but it still needs a standard library layer
+      to make code generation and user programs feel simpler and more "Python-like".
 
 
-- how to we handle private fields in composition?
-- fuzz tests
+Language ergonomics
+-------------------
+- [ ] Decorators
+- [ ] Multiline strings
+- [ ] Metadata/introspection surface
+      Possible shape:
+      - `name()`
+      - `self._fields` only when used
 
-consider taking a dependency only on
-https://docs.rs/fixed-num/latest/fixed_num/
+Docs that need to catch up to the implementation
+------------------------------------------------
+- [ ] Document first-class callables
+- [ ] Document struct composition
+- [ ] Expand the guide into a small book / better language reference
 
-metadata:
-    name()
-    self._fields <- added only if used
+Tooling and quality
+-------------------
+- [ ] Add a formatter
+- [ ] Write `galv` build CLI
+- [ ] Fuzz tests
+- [ ] Easy-win code reduction / simplification / cleanup pass
+- [ ] Scratch Docker image
+- [ ] performance testing comparison between languages, java, python, C/C++, Rust
 
-
-write galv build cli
-add a formatter
-
-Do a "easy win" code reduction/simplification/cleanup pass.
+Research / design notes
+-----------------------
+- [ ] Evaluate depending on `fixed-num`
+      https://docs.rs/fixed-num/latest/fixed_num/

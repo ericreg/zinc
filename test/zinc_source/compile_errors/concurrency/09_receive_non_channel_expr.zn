@@ -1,4 +1,4 @@
-// expected-error: 'value' is not a channel
+// expected-error: channel receive expects a channel expression
 
 fn main() {
     value = 1

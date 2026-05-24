@@ -1,0 +1,10 @@
+fn double(x) {
+    return x * 2
+}
+
+fn main() {
+    jobs = chan(1)
+    jobs <- double
+    f = <-jobs
+    print(f(4))
+}

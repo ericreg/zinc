@@ -665,6 +665,15 @@ class zincListener(ParseTreeListener):
         pass
 
 
+    # Enter a parse tree produced by zincParser#selectReceiveBinding.
+    def enterSelectReceiveBinding(self, ctx:zincParser.SelectReceiveBindingContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#selectReceiveBinding.
+    def exitSelectReceiveBinding(self, ctx:zincParser.SelectReceiveBindingContext):
+        pass
+
+
     # Enter a parse tree produced by zincParser#lambdaExpression.
     def enterLambdaExpression(self, ctx:zincParser.LambdaExpressionContext):
         pass

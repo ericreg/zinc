@@ -1,0 +1,19 @@
+fn inc(x) {
+    return x + 1
+}
+
+fn double(x) {
+    return x * 2
+}
+
+fn main() {
+    jobs = chan()
+    jobs <- inc
+    jobs <- double
+
+    first = <-jobs
+    second = <-jobs
+
+    print(first(2))
+    print(second(2))
+}

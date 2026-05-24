@@ -1,0 +1,14 @@
+// expected-error: incompatible callable signatures for channel payload
+fn inc(x) {
+    return x + 1
+}
+
+fn add(a, b) {
+    return a + b
+}
+
+fn main() {
+    jobs = chan()
+    jobs <- inc
+    jobs <- add
+}

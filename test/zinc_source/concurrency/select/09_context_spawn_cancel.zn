@@ -1,0 +1,17 @@
+fn wait_for_cancel(ctx, output) {
+    select {
+        case <-ctx.done() {
+            output <- 1
+            close(output)
+        }
+    }
+}
+
+fn main() {
+    root = Context.background()
+    child, cancel = Context.with_cancel(root)
+    output = chan()
+    spawn wait_for_cancel(child, output)
+    cancel()
+    print(<-output)
+}

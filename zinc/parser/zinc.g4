@@ -294,9 +294,14 @@ argumentList
     ;
 
 selectCase
-    : 'case' IDENTIFIER '=' '<-' IDENTIFIER block               # selectReceiveCase
+    : 'case' (selectReceiveBinding '=')? '<-' expression block  # selectReceiveCase
     | 'case' IDENTIFIER '<-' expression block                   # selectSendCase
     | 'default' block                                           # selectDefaultCase
+    ;
+
+selectReceiveBinding
+    : IDENTIFIER
+    | tupleAssignmentTarget
     ;
 
 lambdaExpression

@@ -52,6 +52,7 @@ class Symbol:
     is_mutated: bool = False  # True if variable needs 'mut' (reassigned or mutating method called)
     is_shadow: bool = False  # True if this shadows a previous binding of the same name
     element_type: BaseType | None = None  # For arrays: type of elements
+    channel_info: ChannelTypeInfo | None = None
     dict_info: DictTypeInfo | None = None
     set_info: SetTypeInfo | None = None
     tuple_info: TupleTypeInfo | None = None
@@ -317,6 +318,12 @@ class SymbolTableVisitor(zincVisitor):
             id="chan",
             kind=SymbolKind.BUILTIN,
             resolved_type=BaseType.CHANNEL,
+            interval=(-1, -1),
+        )
+        self.symbols.define(
+            id="close",
+            kind=SymbolKind.BUILTIN,
+            resolved_type=BaseType.VOID,
             interval=(-1, -1),
         )
         for name, base_type in (
@@ -1104,6 +1111,7 @@ class SymbolTableVisitor(zincVisitor):
             "String": BaseType.STRING,
             "string": BaseType.STRING,
             "bool": BaseType.BOOLEAN,
+            "Context": BaseType.CONTEXT,
             "Self": BaseType.STRUCT,
         }
         return mapping.get(type_name, BaseType.UNKNOWN)
@@ -1341,6 +1349,17 @@ class SymbolTableVisitor(zincVisitor):
             is_mutated=info.is_mutated,
         )
 
+    def _copy_channel_info(self, info: ChannelTypeInfo | None) -> ChannelTypeInfo | None:
+        """Copy channel metadata so callable element refinements can be merged safely."""
+        if info is None:
+            return None
+        return ChannelTypeInfo(
+            element_type=info.element_type,
+            element_tuple_info=self._copy_tuple_info(info.element_tuple_info),
+            element_callable_info=self._copy_callable_info(info.element_callable_info),
+            is_bounded=info.is_bounded,
+        )
+
     def _copy_tuple_info(self, info: TupleTypeInfo | None) -> TupleTypeInfo | None:
         """Copy tuple metadata recursively."""
         if info is None:
@@ -1465,9 +1484,15 @@ class SymbolTableVisitor(zincVisitor):
         if info is None:
             info = ChannelTypeInfo(element_type=BaseType.UNKNOWN)
             self._channel_infos[channel_name] = info
+        symbol.channel_info = self._copy_channel_info(info)
         return info
 
-    def _merge_channel_value_type(self, channel_name: str, value_type: BaseType) -> None:
+    def _merge_channel_value_type(
+        self,
+        channel_name: str,
+        value_type: BaseType,
+        value_callable_info: CallableTypeInfo | None = None,
+    ) -> None:
         """Merge a sent value type into channel metadata."""
         targets = self._channel_param_all_infos.get(channel_name)
         if targets is None:
@@ -1476,13 +1501,29 @@ class SymbolTableVisitor(zincVisitor):
         for chan_info in targets:
             if chan_info.element_type == BaseType.UNKNOWN:
                 chan_info.element_type = value_type
-                continue
-            if value_type == BaseType.UNKNOWN or value_type == chan_info.element_type:
-                continue
-            merged = promote_numeric(chan_info.element_type, value_type)
-            if merged == BaseType.UNKNOWN:
-                raise ZincTypeError("mixed channel value types are not supported")
-            chan_info.element_type = merged
+            elif value_type != BaseType.UNKNOWN and value_type != chan_info.element_type:
+                if chan_info.element_type == BaseType.CALLABLE and value_type == BaseType.CALLABLE:
+                    pass
+                else:
+                    merged = promote_numeric(chan_info.element_type, value_type)
+                    if merged == BaseType.UNKNOWN:
+                        raise ZincTypeError("mixed channel value types are not supported")
+                    chan_info.element_type = merged
+
+            if chan_info.element_type == BaseType.CALLABLE:
+                chan_info.element_callable_info = self._merge_callable_info(
+                    chan_info.element_callable_info,
+                    value_callable_info,
+                    "channel payload",
+                )
+
+    def _validate_channel_callable_send(self, callable_info: CallableTypeInfo | None) -> None:
+        """Reject callable categories that are not transportable over channels in v1."""
+        if callable_info is None:
+            return
+        for target in callable_info.targets:
+            if target.kind == "bound_method":
+                raise ZincTypeError("bound methods cannot be sent over channels in v1")
 
     def _merge_key_type(self, current: BaseType, incoming: BaseType, label: str) -> BaseType:
         """Merge dict key or set element types, rejecting floats for Rust container keys."""
@@ -1601,6 +1642,24 @@ class SymbolTableVisitor(zincVisitor):
             ctx.getSourceInterval(), self._current_function
         )
 
+    def _channel_info_for_expr(self, expr_ctx) -> ChannelTypeInfo | None:
+        """Resolve channel metadata for a named or temporary channel expression."""
+        info = self._channel_info_ref_for_expr(expr_ctx)
+        return self._copy_channel_info(info)
+
+    def _channel_info_ref_for_expr(self, expr_ctx) -> ChannelTypeInfo | None:
+        """Resolve channel metadata for a named or temporary channel expression by reference."""
+        if isinstance(expr_ctx, ZincParser.PrimaryExprContext):
+            primary = expr_ctx.primaryExpression()
+            if primary and primary.IDENTIFIER():
+                name = primary.IDENTIFIER().getText()
+                if name in self._channel_infos:
+                    return self._channel_infos[name]
+        expr_symbol = self._expr_symbol(expr_ctx)
+        if expr_symbol and expr_symbol.channel_info:
+            return expr_symbol.channel_info
+        return None
+
     def _iterated_dict_name(self, expr_ctx) -> str | None:
         """Return the dict variable name if an expression iterates a dict."""
         if isinstance(expr_ctx, ZincParser.PrimaryExprContext):
@@ -1712,6 +1771,7 @@ class SymbolTableVisitor(zincVisitor):
                     all_chan_infos = func.arg_channel_infos[i]
                     if all_chan_infos:
                         self._channel_infos[param_name] = all_chan_infos[0]
+                        param_symbol.channel_info = self._copy_channel_info(all_chan_infos[0])
                         # Store full list for updating all callers when element type is inferred
                         self._channel_param_all_infos[param_name] = all_chan_infos
                 # Track array parameters for element type
@@ -1836,7 +1896,7 @@ class SymbolTableVisitor(zincVisitor):
             module = self.module_graph.get_module(self._current_module)
             top_level_names.update(module.symbols.keys())
             top_level_names.update(module.injected_symbols.keys())
-        top_level_names.update({"print", "chan", "dict", "sort_dict", "set", "sort_set"})
+        top_level_names.update({"print", "chan", "close", "dict", "sort_dict", "set", "sort_set", "Context"})
 
         def walk(node) -> None:
             if node is None:
@@ -1943,6 +2003,20 @@ class SymbolTableVisitor(zincVisitor):
             targets=(target,),
         )
 
+    def _context_cancel_callable_info(self) -> CallableTypeInfo:
+        """Return the callable signature used by Context.with_cancel()."""
+        return CallableTypeInfo(
+            param_types=[],
+            return_type=BaseType.VOID,
+            targets=(
+                CallableTarget(
+                    kind="context_cancel",
+                    qualified_name="__zinc_context_cancel",
+                    display_name="cancel",
+                ),
+            ),
+        )
+
     def _callable_info_from_symbol_path(self, path: list[str]) -> CallableTypeInfo | None:
         """Resolve a value-position path as a callable reference, if possible."""
         if self._current_module is None:
@@ -1970,6 +2044,8 @@ class SymbolTableVisitor(zincVisitor):
             method = next((candidate for candidate in struct.methods if candidate.name == method_name), None)
             if method is None:
                 return None
+            if not method.is_static:
+                raise ZincTypeError("instance methods must be bound to a receiver before use as callable values")
             target = CallableTarget(
                 kind="static_method",
                 qualified_name=f"{struct_symbol.qualified_name}::{method_name}",
@@ -2094,6 +2170,7 @@ class SymbolTableVisitor(zincVisitor):
                     interval=ctx.getSourceInterval(),
                 )
                 temp.element_type = symbol.element_type
+                temp.channel_info = self._copy_channel_info(symbol.channel_info)
                 temp.dict_info = self._copy_dict_info(symbol.dict_info)
                 temp.set_info = self._copy_set_info(symbol.set_info)
                 temp.tuple_info = self._copy_tuple_info(symbol.tuple_info)
@@ -2546,12 +2623,17 @@ class SymbolTableVisitor(zincVisitor):
                     raise ZincTypeError("mutating collection methods cannot be used as values")
                 arg_types.append(arg_type)
 
-                if arg_type == BaseType.CHANNEL and isinstance(arg_expr, ZincParser.PrimaryExprContext):
-                    primary = arg_expr.primaryExpression()
-                    if primary and primary.IDENTIFIER():
-                        chan_var = primary.IDENTIFIER().getText()
-                        if chan_var in self._channel_infos:
-                            arg_channel_infos[i] = self._channel_infos[chan_var]
+                if arg_type == BaseType.CHANNEL:
+                    if isinstance(arg_expr, ZincParser.PrimaryExprContext):
+                        primary = arg_expr.primaryExpression()
+                        if primary and primary.IDENTIFIER():
+                            chan_var = primary.IDENTIFIER().getText()
+                            if chan_var in self._channel_infos:
+                                arg_channel_infos[i] = self._channel_infos[chan_var]
+                                continue
+                    arg_symbol = self._expr_symbol(arg_expr)
+                    if arg_symbol and arg_symbol.channel_info:
+                        arg_channel_infos[i] = self._copy_channel_info(arg_symbol.channel_info) or ChannelTypeInfo()
                 # Track array element types for array arguments
                 elif arg_type == BaseType.ARRAY:
                     arg_symbol = self._expr_symbol(arg_expr)
@@ -2618,11 +2700,25 @@ class SymbolTableVisitor(zincVisitor):
                         raise ZincTypeError("chan() accepts at most one capacity argument")
                     if arg_types and arg_types[0] != BaseType.INTEGER:
                         raise ZincTypeError("chan() capacity must be an integer")
-                    self.symbols.define_temp(
+                    temp = self.symbols.define_temp(
                         resolved_type=BaseType.CHANNEL,
                         interval=ctx.getSourceInterval(),
                     )
+                    temp.channel_info = ChannelTypeInfo(
+                        element_type=BaseType.UNKNOWN,
+                        is_bounded=bool(arg_types),
+                    )
                     return BaseType.CHANNEL
+                if func_name == "close":
+                    if len(arg_types) != 1:
+                        raise ZincTypeError("close() expects exactly one channel argument")
+                    if arg_types[0] != BaseType.CHANNEL:
+                        raise ZincTypeError("close() expects a channel argument")
+                    self.symbols.define_temp(
+                        resolved_type=BaseType.VOID,
+                        interval=ctx.getSourceInterval(),
+                    )
+                    return BaseType.VOID
                 if func_name in {"dict", "sort_dict"}:
                     if arg_types:
                         raise ZincTypeError(f"{func_name}() does not accept arguments")
@@ -2646,6 +2742,49 @@ class SymbolTableVisitor(zincVisitor):
         if isinstance(callee_ctx, ZincParser.MemberAccessExprContext):
             method_name = callee_ctx.IDENTIFIER().getText()
             receiver_ctx = callee_ctx.expression()
+            path = extract_identifier_path(callee_ctx) if self._current_module is not None else None
+
+            if path == ["Context", "background"]:
+                if arg_types:
+                    raise ZincTypeError("Context.background() does not accept arguments")
+                self.symbols.define_temp(
+                    resolved_type=BaseType.CONTEXT,
+                    interval=ctx.getSourceInterval(),
+                )
+                return BaseType.CONTEXT
+
+            if path == ["Context", "with_cancel"]:
+                if len(arg_types) != 1 or arg_types[0] != BaseType.CONTEXT:
+                    raise ZincTypeError("Context.with_cancel() expects a context argument")
+                temp = self.symbols.define_temp(
+                    resolved_type=BaseType.TUPLE,
+                    interval=ctx.getSourceInterval(),
+                )
+                temp.tuple_info = TupleTypeInfo(
+                    element_types=[BaseType.CONTEXT, BaseType.CALLABLE],
+                    element_callable_infos={1: self._context_cancel_callable_info()},
+                )
+                return BaseType.TUPLE
+
+            receiver_type = self.visit(receiver_ctx)
+            if receiver_type == BaseType.CONTEXT:
+                if method_name == "done":
+                    if arg_types:
+                        raise ZincTypeError("Context.done() does not accept arguments")
+                    temp = self.symbols.define_temp(
+                        resolved_type=BaseType.CHANNEL,
+                        interval=ctx.getSourceInterval(),
+                    )
+                    temp.channel_info = ChannelTypeInfo(element_type=BaseType.BOOLEAN)
+                    return BaseType.CHANNEL
+                if method_name == "cancel":
+                    if arg_types:
+                        raise ZincTypeError("Context.cancel() does not accept arguments")
+                    self.symbols.define_temp(
+                        resolved_type=BaseType.VOID,
+                        interval=ctx.getSourceInterval(),
+                    )
+                    return BaseType.VOID
 
             # len() always returns an integer (usize in Rust, i64 in Zinc)
             if method_name == "len":
@@ -2824,7 +2963,9 @@ class SymbolTableVisitor(zincVisitor):
                 candidate_tuple_info = None
                 candidate_callable_info = None
 
-                if target.kind in {"function", "lambda"}:
+                if target.kind == "context_cancel":
+                    candidate_type = BaseType.VOID
+                elif target.kind in {"function", "lambda"}:
                     func_def = self.atlas.function_defs.get(target.qualified_name)
                     if func_def is None:
                         raise ZincTypeError(f"unknown callable target '{target.display_name}'")
@@ -2922,6 +3063,8 @@ class SymbolTableVisitor(zincVisitor):
                 if struct:
                     method = next((candidate for candidate in struct.methods if candidate.name == method_name), None)
                     if method:
+                        if not method.is_static:
+                            raise ZincTypeError("instance methods must be bound to a receiver before use as callable values")
                         return_type = self._method_return_base_type(method.return_type)
                         temp = self.symbols.define_temp(
                             resolved_type=return_type,
@@ -3029,6 +3172,47 @@ class SymbolTableVisitor(zincVisitor):
             raise ZincTypeError("mutating collection methods cannot be used as assignment values")
         target = ctx.assignmentTarget()
 
+        if (
+            target.tupleAssignmentTarget()
+            and isinstance(ctx.expression(), ZincParser.ChannelReceiveExprContext)
+        ):
+            tokens = self._binding_tokens(target.tupleAssignmentTarget())
+            if len(tokens) != 2:
+                raise ZincTypeError("close-aware receive requires exactly two bindings")
+            chan_info = self._channel_info_ref_for_expr(ctx.expression().expression())
+            if chan_info is None:
+                raise ZincTypeError("channel receive expects a channel expression")
+            binding_types = [chan_info.element_type, BaseType.BOOLEAN]
+            binding_tuple_infos = [self._copy_tuple_info(chan_info.element_tuple_info), None]
+            binding_callable_infos = [chan_info.element_callable_info, None]
+            for i, token in enumerate(tokens):
+                var_name = token.getText()
+                element_type = binding_types[i]
+                existing = self.symbols.lookup_by_id(var_name)
+                tuple_info = binding_tuple_infos[i]
+                callable_info = binding_callable_infos[i]
+                if existing is None or existing.resolved_type != element_type:
+                    new_sym = self.symbols.define(
+                        id=var_name,
+                        kind=SymbolKind.VARIABLE,
+                        resolved_type=element_type,
+                        interval=token.getSourceInterval(),
+                        is_shadow=existing is not None,
+                    )
+                    new_sym.tuple_info = tuple_info
+                    new_sym.callable_info = callable_info
+                else:
+                    existing.is_mutated = True
+                    existing.tuple_info = tuple_info
+                    existing.callable_info = callable_info
+                    temp = self.symbols.define_temp(
+                        resolved_type=element_type,
+                        interval=token.getSourceInterval(),
+                    )
+                    temp.tuple_info = tuple_info
+                    temp.callable_info = callable_info
+            return
+
         if target.IDENTIFIER():
             var_name = target.IDENTIFIER().getText()
             existing = self.symbols.lookup_by_id(var_name)
@@ -3074,6 +3258,7 @@ class SymbolTableVisitor(zincVisitor):
             expr_symbol = self.symbols.lookup_by_interval(
                 ctx.expression().getSourceInterval(), self._current_function
             )
+            expr_channel_info = self._copy_channel_info(expr_symbol.channel_info) if expr_symbol else None
             if expr_symbol and expr_symbol.tuple_info:
                 expr_tuple_info = self._copy_tuple_info(expr_symbol.tuple_info)
             expr_callable_info = (
@@ -3082,6 +3267,31 @@ class SymbolTableVisitor(zincVisitor):
                 else self._copy_callable_info(expr_symbol.callable_info) if expr_symbol else None
             )
             expr_struct_qualified_name = self._struct_qualified_name_for_symbol(expr_symbol)
+
+            if expr_type == BaseType.CHANNEL and expr_channel_info is not None:
+                existing_channel_info = self._channel_infos.get(var_name)
+                if existing_channel_info is None:
+                    self._channel_infos[var_name] = self._copy_channel_info(expr_channel_info) or ChannelTypeInfo()
+                else:
+                    if (
+                        existing_channel_info.element_type == BaseType.UNKNOWN
+                        and expr_channel_info.element_type != BaseType.UNKNOWN
+                    ):
+                        existing_channel_info.element_type = expr_channel_info.element_type
+                    if (
+                        existing_channel_info.element_tuple_info is None
+                        and expr_channel_info.element_tuple_info is not None
+                    ):
+                        existing_channel_info.element_tuple_info = self._copy_tuple_info(
+                            expr_channel_info.element_tuple_info
+                        )
+                    existing_channel_info.element_callable_info = self._merge_callable_info(
+                        existing_channel_info.element_callable_info,
+                        expr_channel_info.element_callable_info,
+                        f"channel '{var_name}'",
+                    )
+                    existing_channel_info.is_bounded = expr_channel_info.is_bounded or existing_channel_info.is_bounded
+                expr_channel_info = self._copy_channel_info(self._channel_infos[var_name])
 
             if existing is None:
                 # First assignment - create new symbol
@@ -3095,6 +3305,8 @@ class SymbolTableVisitor(zincVisitor):
                 # Propagate array element type
                 if expr_element_type:
                     new_sym.element_type = expr_element_type
+                if expr_channel_info:
+                    new_sym.channel_info = expr_channel_info
                 if expr_dict_info:
                     new_sym.dict_info = expr_dict_info
                 if expr_set_info:
@@ -3116,6 +3328,8 @@ class SymbolTableVisitor(zincVisitor):
                 )
                 if expr_element_type:
                     new_sym.element_type = expr_element_type
+                if expr_channel_info:
+                    new_sym.channel_info = expr_channel_info
                 if expr_dict_info:
                     new_sym.dict_info = expr_dict_info
                 if expr_set_info:
@@ -3205,6 +3419,14 @@ class SymbolTableVisitor(zincVisitor):
                     resolved_type=expr_type,
                     interval=target.getSourceInterval(),
                 )
+            elif expr_type == BaseType.CHANNEL:
+                existing.channel_info = self._copy_channel_info(expr_channel_info)
+                existing.is_mutated = True
+                temp = self.symbols.define_temp(
+                    resolved_type=expr_type,
+                    interval=target.getSourceInterval(),
+                )
+                temp.channel_info = self._copy_channel_info(existing.channel_info)
             elif expr_type == BaseType.CALLABLE:
                 existing.callable_info = self._merge_callable_info(
                     existing.callable_info,
@@ -3390,7 +3612,12 @@ class SymbolTableVisitor(zincVisitor):
         binding_ctx = binding.tupleAssignmentTarget() or binding
         tokens = self._binding_tokens(binding_ctx)
 
-        def define_binding(index: int, resolved_type: BaseType, tuple_info: TupleTypeInfo | None = None) -> None:
+        def define_binding(
+            index: int,
+            resolved_type: BaseType,
+            tuple_info: TupleTypeInfo | None = None,
+            callable_info: CallableTypeInfo | None = None,
+        ) -> None:
             token = tokens[index]
             symbol = self.symbols.define(
                 id=token.getText(),
@@ -3399,8 +3626,10 @@ class SymbolTableVisitor(zincVisitor):
                 interval=token.getSourceInterval(),
             )
             symbol.tuple_info = self._copy_tuple_info(tuple_info)
+            symbol.callable_info = self._copy_callable_info(callable_info)
 
         item_tuple_info: TupleTypeInfo | None = None
+        item_callable_info: CallableTypeInfo | None = None
         if iterable_type == BaseType.INTEGER:
             var_type = BaseType.INTEGER
         elif iterable_type == BaseType.ARRAY:
@@ -3409,6 +3638,8 @@ class SymbolTableVisitor(zincVisitor):
                 var_type = expr_symbol.element_type
                 if var_type == BaseType.TUPLE:
                     item_tuple_info = expr_symbol.tuple_info
+                if var_type == BaseType.CALLABLE:
+                    item_callable_info = expr_symbol.callable_info
         elif iterable_type == BaseType.SET:
             var_type = BaseType.UNKNOWN
             if expr_symbol and expr_symbol.set_info:
@@ -3417,11 +3648,20 @@ class SymbolTableVisitor(zincVisitor):
             var_type = BaseType.TUPLE
             if expr_symbol and expr_symbol.dict_info:
                 item_tuple_info = self._tuple_info_from_dict_info(expr_symbol.dict_info)
+        elif iterable_type == BaseType.CHANNEL:
+            chan_info = self._channel_info_for_expr(ctx.expression())
+            var_type = BaseType.UNKNOWN
+            if chan_info is not None:
+                var_type = chan_info.element_type
+                if var_type == BaseType.TUPLE:
+                    item_tuple_info = chan_info.element_tuple_info
+                if var_type == BaseType.CALLABLE:
+                    item_callable_info = chan_info.element_callable_info
         else:
             var_type = BaseType.UNKNOWN
 
         if len(tokens) == 1:
-            define_binding(0, var_type, item_tuple_info)
+            define_binding(0, var_type, item_tuple_info, item_callable_info)
         else:
             if var_type != BaseType.TUPLE or item_tuple_info is None:
                 raise ZincTypeError("for-loop destructuring requires tuple items")
@@ -3476,25 +3716,48 @@ class SymbolTableVisitor(zincVisitor):
 
     def visitSelectReceiveCase(self, ctx: ZincParser.SelectReceiveCaseContext) -> None:
         """Visit a select receive case."""
-        binding_name = ctx.IDENTIFIER(0).getText()
-        channel_name = ctx.IDENTIFIER(1).getText()
-        channel_symbol = self.symbols.lookup_by_id(channel_name)
-        if channel_symbol is None or channel_symbol.resolved_type != BaseType.CHANNEL:
-            raise ZincTypeError(f"'{channel_name}' is not a channel")
-        if channel_symbol.kind == SymbolKind.PARAMETER:
-            raise ZincTypeError("cannot receive from channel parameter")
+        channel_expr = ctx.expression()
+        channel_type = self.visit(channel_expr)
+        if channel_type != BaseType.CHANNEL:
+            raise ZincTypeError("select receive expects a channel expression")
+        channel_info = self._channel_info_ref_for_expr(channel_expr)
+        if channel_info is None:
+            channel_info = ChannelTypeInfo(element_type=BaseType.UNKNOWN)
 
         block_name = self._next_block_name("select")
         self.symbols.enter_scope(block_name)
         try:
-            channel_info = self._channel_info_for_name(channel_name)
-            self.symbols.define(
-                id=binding_name,
-                kind=SymbolKind.VARIABLE,
-                resolved_type=channel_info.element_type,
-                interval=ctx.IDENTIFIER(0).getSourceInterval(),
-                is_shadow=self.symbols.lookup_by_id(binding_name) is not None,
-            )
+            binding_ctx = ctx.selectReceiveBinding()
+            if binding_ctx is not None:
+                if binding_ctx.IDENTIFIER():
+                    binding_name = binding_ctx.IDENTIFIER().getText()
+                    binding_symbol = self.symbols.define(
+                        id=binding_name,
+                        kind=SymbolKind.VARIABLE,
+                        resolved_type=channel_info.element_type,
+                        interval=binding_ctx.IDENTIFIER().getSourceInterval(),
+                        is_shadow=self.symbols.lookup_by_id(binding_name) is not None,
+                    )
+                    binding_symbol.tuple_info = self._copy_tuple_info(channel_info.element_tuple_info)
+                    if channel_info.element_type == BaseType.CALLABLE:
+                        binding_symbol.callable_info = channel_info.element_callable_info
+                else:
+                    tokens = self._binding_tokens(binding_ctx.tupleAssignmentTarget())
+                    if len(tokens) != 2:
+                        raise ZincTypeError("close-aware select receive requires exactly two bindings")
+                    binding_types = [channel_info.element_type, BaseType.BOOLEAN]
+                    binding_tuple_infos = [self._copy_tuple_info(channel_info.element_tuple_info), None]
+                    binding_callable_infos = [channel_info.element_callable_info, None]
+                    for i, token in enumerate(tokens):
+                        binding_symbol = self.symbols.define(
+                            id=token.getText(),
+                            kind=SymbolKind.VARIABLE,
+                            resolved_type=binding_types[i],
+                            interval=token.getSourceInterval(),
+                            is_shadow=self.symbols.lookup_by_id(token.getText()) is not None,
+                        )
+                        binding_symbol.tuple_info = binding_tuple_infos[i]
+                        binding_symbol.callable_info = binding_callable_infos[i]
             self.visit(ctx.block())
         finally:
             self.symbols.exit_scope()
@@ -3503,7 +3766,11 @@ class SymbolTableVisitor(zincVisitor):
         """Visit a select send case."""
         channel_name = ctx.IDENTIFIER().getText()
         value_type = self.visit(ctx.expression())
-        self._merge_channel_value_type(channel_name, value_type)
+        value_symbol = self._expr_symbol(ctx.expression())
+        value_callable_info = value_symbol.callable_info if value_symbol else None
+        if value_type == BaseType.CALLABLE:
+            self._validate_channel_callable_send(value_callable_info)
+        self._merge_channel_value_type(channel_name, value_type, value_callable_info)
 
         block_name = self._next_block_name("select")
         self.symbols.enter_scope(block_name)
@@ -3537,12 +3804,17 @@ class SymbolTableVisitor(zincVisitor):
                 arg_type = self.visit(arg_expr)
                 arg_types.append(arg_type)
 
-                if arg_type == BaseType.CHANNEL and isinstance(arg_expr, ZincParser.PrimaryExprContext):
-                    arg_primary = arg_expr.primaryExpression()
-                    if arg_primary and arg_primary.IDENTIFIER():
-                        chan_var = arg_primary.IDENTIFIER().getText()
-                        if chan_var in self._channel_infos:
-                            arg_channel_infos[i] = self._channel_infos[chan_var]
+                if arg_type == BaseType.CHANNEL:
+                    if isinstance(arg_expr, ZincParser.PrimaryExprContext):
+                        arg_primary = arg_expr.primaryExpression()
+                        if arg_primary and arg_primary.IDENTIFIER():
+                            chan_var = arg_primary.IDENTIFIER().getText()
+                            if chan_var in self._channel_infos:
+                                arg_channel_infos[i] = self._channel_infos[chan_var]
+                                continue
+                    arg_symbol = self._expr_symbol(arg_expr)
+                    if arg_symbol and arg_symbol.channel_info:
+                        arg_channel_infos[i] = self._copy_channel_info(arg_symbol.channel_info) or ChannelTypeInfo()
                 elif arg_type == BaseType.CALLABLE:
                     arg_symbol = self._expr_symbol(arg_expr)
                     if arg_symbol and arg_symbol.callable_info:
@@ -3579,34 +3851,27 @@ class SymbolTableVisitor(zincVisitor):
         """Visit channel send statement and infer channel element type."""
         channel_name = ctx.IDENTIFIER().getText()
         value_type = self.visit(ctx.expression())
-        self._merge_channel_value_type(channel_name, value_type)
+        value_symbol = self._expr_symbol(ctx.expression())
+        value_callable_info = value_symbol.callable_info if value_symbol else None
+        if value_type == BaseType.CALLABLE:
+            self._validate_channel_callable_send(value_callable_info)
+        self._merge_channel_value_type(channel_name, value_type, value_callable_info)
 
     def visitChannelReceiveExpr(self, ctx: ZincParser.ChannelReceiveExprContext) -> BaseType:
         """Visit channel receive expression."""
         chan_expr = ctx.expression()
         expr_type = self.visit(chan_expr)
 
-        if isinstance(chan_expr, ZincParser.PrimaryExprContext):
-            primary = chan_expr.primaryExpression()
-            if primary and primary.IDENTIFIER():
-                channel_name = primary.IDENTIFIER().getText()
-                channel_symbol = self.symbols.lookup_by_id(channel_name)
-                if channel_symbol is None or channel_symbol.resolved_type != BaseType.CHANNEL:
-                    raise ZincTypeError(f"'{channel_name}' is not a channel")
-                if channel_symbol.kind == SymbolKind.PARAMETER:
-                    raise ZincTypeError("cannot receive from channel parameter")
-                elem_type = self._channel_info_for_name(channel_name).element_type
-                self.symbols.define_temp(
-                    resolved_type=elem_type,
-                    interval=ctx.getSourceInterval(),
-                )
-                return elem_type
-
         if expr_type != BaseType.CHANNEL:
             raise ZincTypeError("channel receive expects a channel expression")
 
-        self.symbols.define_temp(
-            resolved_type=BaseType.UNKNOWN,
+        channel_info = self._channel_info_ref_for_expr(chan_expr)
+        elem_type = channel_info.element_type if channel_info is not None else BaseType.UNKNOWN
+        temp = self.symbols.define_temp(
+            resolved_type=elem_type,
             interval=ctx.getSourceInterval(),
         )
-        return BaseType.UNKNOWN
+        if channel_info is not None:
+            temp.tuple_info = self._copy_tuple_info(channel_info.element_tuple_info)
+            temp.callable_info = channel_info.element_callable_info
+        return elem_type

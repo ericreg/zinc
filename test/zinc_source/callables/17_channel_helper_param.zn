@@ -1,0 +1,14 @@
+fn inc(x) {
+    return x + 1
+}
+
+fn publish(out) {
+    out <- inc
+}
+
+fn main() {
+    jobs = chan()
+    publish(jobs)
+    f = <-jobs
+    print(f(4))
+}

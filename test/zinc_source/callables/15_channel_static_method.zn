@@ -1,0 +1,12 @@
+struct Math {
+    fn inc(x: i64) {
+        return x + 1
+    }
+}
+
+fn main() {
+    jobs = chan()
+    jobs <- Math.inc
+    f = <-jobs
+    print(f(3))
+}

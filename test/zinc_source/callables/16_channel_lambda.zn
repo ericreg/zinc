@@ -1,0 +1,8 @@
+fn main() {
+    jobs = chan()
+    jobs <- fn(x: i64) {
+        return x + 2
+    }
+    f = <-jobs
+    print(f(3))
+}

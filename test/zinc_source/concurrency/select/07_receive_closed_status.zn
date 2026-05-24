@@ -1,0 +1,15 @@
+fn main() {
+    values = chan()
+    values <- 7
+    close(values)
+
+    first = <-values
+    print("{first}")
+
+    select {
+        case value, ok = <-values {
+            print("{value}")
+            print("{ok}")
+        }
+    }
+}

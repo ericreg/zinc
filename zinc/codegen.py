@@ -117,11 +117,12 @@ class CodeGenVisitor(zincVisitor):
 
         imports = self._generate_imports()
         consts = [self._generate_const(c) for c in self.atlas.consts.values()]
+        runtime_helpers = self._generate_runtime_helpers()
         callable_enums = [
             self._generate_callable_enum(info)
             for _, info in sorted(self._callable_signatures.items())
         ]
-        structs = [*callable_enums, *[self._generate_struct(s) for s in self.atlas.structs.values()]]
+        structs = [*runtime_helpers, *callable_enums, *[self._generate_struct(s) for s in self.atlas.structs.values()]]
         functions = []
         main_body = []
 
@@ -273,14 +274,22 @@ class CodeGenVisitor(zincVisitor):
         """Return True when a parse subtree requires async Rust lowering."""
         if isinstance(node, ZincParser.SelectStatementContext):
             return True
+        if isinstance(node, ZincParser.ForStatementContext):
+            expr_symbol = self.symbols.lookup_by_interval(
+                node.expression().getSourceInterval(), function_name
+            )
+            if expr_symbol and expr_symbol.resolved_type == BaseType.CHANNEL:
+                return True
         if isinstance(node, ZincParser.ChannelReceiveExprContext):
             return True
         if isinstance(node, ZincParser.AwaitExprContext):
             return True
         if isinstance(node, ZincParser.ChannelSendStatementContext):
-            chan_info = self._channel_infos.get(node.IDENTIFIER().getText())
-            return bool(chan_info and chan_info.is_bounded)
+            return True
         if isinstance(node, ZincParser.FunctionCallExprContext):
+            callee_name = self._function_call_name(node)
+            if callee_name == "close":
+                return False
             key = (function_name, node.getSourceInterval())
             mangled = self._specialization_map.get(key)
             if mangled and mangled in self.atlas.functions and self.atlas.functions[mangled].is_async:
@@ -294,21 +303,12 @@ class CodeGenVisitor(zincVisitor):
         return False
 
     def _channel_sender_expr(self, name: str, clone: bool = False) -> str:
-        """Render the Rust sender endpoint for a Zinc channel value."""
-        if name in self._current_channel_params:
-            base = name
-        elif name in self._channel_infos:
-            base = f"{name}_tx"
-        else:
-            base = name
+        """Render the Rust channel value used for sends."""
+        base = name
         return f"{base}.clone()" if clone else base
 
     def _channel_receiver_expr(self, name: str) -> str:
-        """Render the Rust receiver endpoint for a Zinc channel value."""
-        if name in self._current_channel_params:
-            return name
-        if name in self._channel_infos:
-            return f"{name}_rx"
+        """Render the Rust channel value used for receives."""
         return name
 
     def _render_channel_value(self, channel_name: str, expr_ctx) -> str:
@@ -316,6 +316,15 @@ class CodeGenVisitor(zincVisitor):
         value = self.visit(expr_ctx)
         chan_info = self._channel_infos.get(channel_name)
         target_type = chan_info.element_type if chan_info else self._get_expr_type(expr_ctx)
+        if target_type == BaseType.CALLABLE and chan_info and chan_info.element_callable_info:
+            expr_symbol = self._get_expr_symbol(expr_ctx)
+            if expr_symbol and expr_symbol.callable_info:
+                if self._is_direct_callable_expr(expr_ctx, expr_symbol):
+                    return self._render_callable_value_for_signature(
+                        expr_symbol.callable_info,
+                        chan_info.element_callable_info,
+                    )
+                return f"{value}.clone()"
         return self._coerce_owned(value, target_type, expr_ctx)
 
     def _render_scoped_block(self, block_ctx, prelude: list[str] | None = None, local_names: set[str] | None = None) -> list[str]:
@@ -364,6 +373,216 @@ class CodeGenVisitor(zincVisitor):
             imports.append("use std::rc::Rc;")
         return imports
 
+    def _generate_runtime_helpers(self) -> list[str]:
+        """Generate built-in Rust helper types used by Zinc lowering."""
+        channel_helper = "\n".join([
+            "enum __ZincTryRecv<T> {",
+            "    Value(T),",
+            "    Empty,",
+            "    Closed,",
+            "}",
+            "",
+            "enum __ZincTrySend<T> {",
+            "    Sent,",
+            "    Full(T),",
+            "    Closed(T),",
+            "}",
+            "",
+            "enum __ZincChannelSender<T> {",
+            "    Bounded(tokio::sync::mpsc::Sender<T>),",
+            "    Unbounded(tokio::sync::mpsc::UnboundedSender<T>),",
+            "}",
+            "",
+            "enum __ZincChannelReceiver<T> {",
+            "    Bounded(tokio::sync::mpsc::Receiver<T>),",
+            "    Unbounded(tokio::sync::mpsc::UnboundedReceiver<T>),",
+            "}",
+            "",
+            "impl<T> __ZincChannelReceiver<T> {",
+            "    async fn recv(&mut self) -> Option<T> {",
+            "        match self {",
+            "            Self::Bounded(receiver) => receiver.recv().await,",
+            "            Self::Unbounded(receiver) => receiver.recv().await,",
+            "        }",
+            "    }",
+            "",
+            "    fn try_recv(&mut self) -> __ZincTryRecv<T> {",
+            "        match self {",
+            "            Self::Bounded(receiver) => match receiver.try_recv() {",
+            "                Ok(value) => __ZincTryRecv::Value(value),",
+            "                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => __ZincTryRecv::Empty,",
+            "                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => __ZincTryRecv::Closed,",
+            "            },",
+            "            Self::Unbounded(receiver) => match receiver.try_recv() {",
+            "                Ok(value) => __ZincTryRecv::Value(value),",
+            "                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => __ZincTryRecv::Empty,",
+            "                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => __ZincTryRecv::Closed,",
+            "            },",
+            "        }",
+            "    }",
+            "}",
+            "",
+            "impl<T> Clone for __ZincChannelSender<T> {",
+            "    fn clone(&self) -> Self {",
+            "        match self {",
+            "            Self::Bounded(sender) => Self::Bounded(sender.clone()),",
+            "            Self::Unbounded(sender) => Self::Unbounded(sender.clone()),",
+            "        }",
+            "    }",
+            "}",
+            "",
+            "struct __ZincChannel<T> {",
+            "    sender: __ZincChannelSender<T>,",
+            "    receiver: std::sync::Arc<tokio::sync::Mutex<__ZincChannelReceiver<T>>>,",
+            "    closed: std::sync::Arc<std::sync::atomic::AtomicBool>,",
+            "    close_notify: std::sync::Arc<tokio::sync::Notify>,",
+            "}",
+            "",
+            "impl<T> Clone for __ZincChannel<T> {",
+            "    fn clone(&self) -> Self {",
+            "        Self {",
+            "            sender: self.sender.clone(),",
+            "            receiver: self.receiver.clone(),",
+            "            closed: self.closed.clone(),",
+            "            close_notify: self.close_notify.clone(),",
+            "        }",
+            "    }",
+            "}",
+            "",
+            "impl<T: Send + 'static> __ZincChannel<T> {",
+            "    fn bounded(capacity: i64) -> Self {",
+            "        let (sender, receiver) = tokio::sync::mpsc::channel(capacity as usize);",
+            "        Self {",
+            "            sender: __ZincChannelSender::Bounded(sender),",
+            "            receiver: std::sync::Arc::new(tokio::sync::Mutex::new(__ZincChannelReceiver::Bounded(receiver))),",
+            "            closed: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),",
+            "            close_notify: std::sync::Arc::new(tokio::sync::Notify::new()),",
+            "        }",
+            "    }",
+            "",
+            "    fn unbounded() -> Self {",
+            "        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();",
+            "        Self {",
+            "            sender: __ZincChannelSender::Unbounded(sender),",
+            "            receiver: std::sync::Arc::new(tokio::sync::Mutex::new(__ZincChannelReceiver::Unbounded(receiver))),",
+            "            closed: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),",
+            "            close_notify: std::sync::Arc::new(tokio::sync::Notify::new()),",
+            "        }",
+            "    }",
+            "",
+            "    async fn send(&self, value: T) {",
+            "        if self.closed.load(std::sync::atomic::Ordering::SeqCst) {",
+            "            panic!(\"send on closed channel\");",
+            "        }",
+            "        match &self.sender {",
+            "            __ZincChannelSender::Bounded(sender) => {",
+            "                if let Err(_) = sender.send(value).await {",
+            "                    panic!(\"send on closed channel\");",
+            "                }",
+            "            },",
+            "            __ZincChannelSender::Unbounded(sender) => {",
+            "                if let Err(_) = sender.send(value) {",
+            "                    panic!(\"send on closed channel\");",
+            "                }",
+            "            },",
+            "        }",
+            "    }",
+            "",
+            "    fn try_send(&self, value: T) -> __ZincTrySend<T> {",
+            "        if self.closed.load(std::sync::atomic::Ordering::SeqCst) {",
+            "            return __ZincTrySend::Closed(value);",
+            "        }",
+            "        match &self.sender {",
+            "            __ZincChannelSender::Bounded(sender) => match sender.try_send(value) {",
+            "                Ok(()) => __ZincTrySend::Sent,",
+            "                Err(tokio::sync::mpsc::error::TrySendError::Full(value)) => __ZincTrySend::Full(value),",
+            "                Err(tokio::sync::mpsc::error::TrySendError::Closed(value)) => __ZincTrySend::Closed(value),",
+            "            },",
+            "            __ZincChannelSender::Unbounded(sender) => match sender.send(value) {",
+            "                Ok(()) => __ZincTrySend::Sent,",
+            "                Err(err) => __ZincTrySend::Closed(err.0),",
+            "            },",
+            "        }",
+            "    }",
+            "",
+            "    fn close(&self) {",
+            "        if self.closed.swap(true, std::sync::atomic::Ordering::SeqCst) {",
+            "            panic!(\"double close\");",
+            "        }",
+            "        self.close_notify.notify_waiters();",
+            "    }",
+            "",
+            "    async fn recv_option(&self) -> Option<T> {",
+            "        loop {",
+            "            match self.receiver.clone().try_lock_owned() {",
+            "                Ok(mut receiver) => match receiver.try_recv() {",
+            "                    __ZincTryRecv::Value(value) => return Some(value),",
+            "                    __ZincTryRecv::Closed => return None,",
+            "                    __ZincTryRecv::Empty => {",
+            "                        if self.closed.load(std::sync::atomic::Ordering::SeqCst) {",
+            "                            return None;",
+            "                        }",
+            "                        let notified = self.close_notify.notified();",
+            "                        drop(receiver);",
+            "                        tokio::select! {",
+            "                            value = async {",
+            "                                let mut receiver = self.receiver.clone().lock_owned().await;",
+            "                                receiver.recv().await",
+            "                            } => return value,",
+            "                            _ = notified => continue,",
+            "                        }",
+            "                    },",
+            "                },",
+            "                Err(_) => tokio::task::yield_now().await,",
+            "            }",
+            "        }",
+            "    }",
+            "",
+            "    async fn recv(&self) -> T {",
+            "        match self.recv_option().await {",
+            "            Some(value) => value,",
+            "            None => panic!(\"receive on closed channel\"),",
+            "        }",
+            "    }",
+            "",
+            "    fn try_recv(&self) -> __ZincTryRecv<T> {",
+            "        match self.receiver.clone().try_lock_owned() {",
+            "            Ok(mut receiver) => match receiver.try_recv() {",
+            "                __ZincTryRecv::Empty if self.closed.load(std::sync::atomic::Ordering::SeqCst) => __ZincTryRecv::Closed,",
+            "                result => result,",
+            "            },",
+            "            Err(_) => __ZincTryRecv::Empty,",
+            "        }",
+            "    }",
+            "}",
+            "",
+            "#[derive(Clone)]",
+            "struct __ZincContext {",
+            "    done: __ZincChannel<bool>,",
+            "}",
+            "",
+            "impl Default for __ZincContext {",
+            "    fn default() -> Self {",
+            "        Self::background()",
+            "    }",
+            "}",
+            "",
+            "impl __ZincContext {",
+            "    fn background() -> Self {",
+            "        Self { done: __ZincChannel::unbounded() }",
+            "    }",
+            "",
+            "    fn done(&self) -> __ZincChannel<bool> {",
+            "        self.done.clone()",
+            "    }",
+            "",
+            "    fn cancel(&self) {",
+            "        self.done.close();",
+            "    }",
+            "}",
+        ])
+        return [channel_helper]
+
     def _register_callable_info(self, info: CallableTypeInfo | None) -> None:
         """Collect a concrete callable signature and all nested callable signatures."""
         if info is None:
@@ -403,6 +622,9 @@ class CodeGenVisitor(zincVisitor):
             for info in func.arg_callable_infos.values():
                 self._register_callable_info(info)
             self._register_callable_info(func.return_callable_info)
+            for channel_infos in func.arg_channel_infos.values():
+                for channel_info in channel_infos:
+                    self._register_callable_info(channel_info.element_callable_info)
         for symbol in self.symbols.all_symbols():
             if symbol.kind not in {SymbolKind.VARIABLE, SymbolKind.PARAMETER}:
                 continue
@@ -413,6 +635,8 @@ class CodeGenVisitor(zincVisitor):
             if symbol.tuple_info:
                 for nested in symbol.tuple_info.element_callable_infos.values():
                     self._register_callable_info(nested)
+        for channel_info in self._channel_infos.values():
+            self._register_callable_info(channel_info.element_callable_info)
         self._prune_abstract_callable_signatures()
 
     def _prune_abstract_callable_signatures(self) -> None:
@@ -516,10 +740,14 @@ class CodeGenVisitor(zincVisitor):
             return f"{self._struct_rust_name(struct)}::{method_name}"
         if target.kind == "bound_method":
             return target.qualified_name.rpartition("::")[2]
+        if target.kind == "context_cancel":
+            return "context_cancel"
         raise KeyError(f"unknown callable target kind: {target.kind}")
 
     def _callable_variant_payload_type(self, target: CallableTarget) -> str | None:
         """Return the Rust payload type for a callable enum variant."""
+        if target.kind == "context_cancel":
+            return "__ZincContext"
         if target.kind != "bound_method":
             return None
         struct_qualified_name = target.receiver_struct_qualified_name
@@ -534,6 +762,7 @@ class CodeGenVisitor(zincVisitor):
         """Generate a Rust enum and dispatcher for one callable signature."""
         ordered_targets = sorted(info.targets, key=lambda target: target.storage_key())
         lines = ["#[derive(Clone)]", f"enum {info.rust_type_name()} {{"]
+        lines.append("    Closed,")
         for target in ordered_targets:
             variant_name = self._callable_variant_name(info, target)
             payload_type = self._callable_variant_payload_type(target)
@@ -541,6 +770,12 @@ class CodeGenVisitor(zincVisitor):
                 lines.append(f"    {variant_name}({payload_type}),")
             else:
                 lines.append(f"    {variant_name},")
+        lines.append("}")
+        lines.append("")
+        lines.append(f"impl Default for {info.rust_type_name()} {{")
+        lines.append("    fn default() -> Self {")
+        lines.append("        Self::Closed")
+        lines.append("    }")
         lines.append("}")
         lines.append("")
         lines.append(f"impl {info.rust_type_name()} {{")
@@ -552,6 +787,7 @@ class CodeGenVisitor(zincVisitor):
         ret_suffix = "" if ret_type == "()" else f" -> {ret_type}"
         lines.append(f"    fn call(&self, {', '.join(params)}){ret_suffix} {{")
         lines.append("        match self {")
+        lines.append('            Self::Closed => panic!("callable used after closed receive"),')
         for target in ordered_targets:
             variant_name = self._callable_variant_name(info, target)
             args = ", ".join(f"arg_{index}" for index in range(len(info.param_types)))
@@ -563,6 +799,12 @@ class CodeGenVisitor(zincVisitor):
                     lines.append(f"            Self::{variant_name}(receiver) => {{ {call_expr}; }}")
                 else:
                     lines.append(f"            Self::{variant_name}(receiver) => {call_expr},")
+            elif target.kind == "context_cancel":
+                call_expr = "ctx.cancel()"
+                if ret_type == "()":
+                    lines.append(f"            Self::{variant_name}(ctx) => {{ {call_expr}; }}")
+                else:
+                    lines.append(f"            Self::{variant_name}(ctx) => {call_expr},")
             else:
                 callee = self._callable_dispatch_target(info, target)
                 call_expr = f"{callee}({args})"
@@ -605,6 +847,56 @@ class CodeGenVisitor(zincVisitor):
             return f"{expected_info.rust_type_name()}::{variant_name}({receiver_name}.clone())"
         return f"{expected_info.rust_type_name()}::{variant_name}"
 
+    def _is_direct_callable_expr(self, expr_ctx, expr_symbol=None) -> bool:
+        """Return True when an expression denotes a callable source, not an existing value."""
+        symbol = expr_symbol or self._get_expr_symbol(expr_ctx)
+        if symbol is None or symbol.resolved_type != BaseType.CALLABLE or symbol.callable_info is None:
+            return False
+
+        if isinstance(expr_ctx, ZincParser.LambdaExprContext):
+            return True
+
+        if isinstance(expr_ctx, ZincParser.PrimaryExprContext):
+            primary = expr_ctx.primaryExpression()
+            return bool(
+                primary
+                and primary.IDENTIFIER()
+                and primary.IDENTIFIER().getText() not in self._declared_vars
+            )
+
+        if isinstance(expr_ctx, ZincParser.MemberAccessExprContext):
+            is_direct_call = (
+                isinstance(expr_ctx.parentCtx, ZincParser.FunctionCallExprContext)
+                and expr_ctx.parentCtx.expression() is expr_ctx
+            )
+            if is_direct_call:
+                return False
+
+            if self._current_module is not None:
+                path = extract_identifier_path(expr_ctx)
+                if path:
+                    if self.module_graph.resolve_function_path(self._current_module, path):
+                        return True
+                    static_target = self.module_graph.resolve_static_method_target(self._current_module, path)
+                    if static_target is not None:
+                        struct_symbol, method_name = static_target
+                        struct = self.atlas.structs.get(struct_symbol.qualified_name)
+                        if struct and any(m.name == method_name and m.is_static for m in struct.methods):
+                            return True
+
+            receiver_ctx = expr_ctx.expression()
+            if isinstance(receiver_ctx, ZincParser.PrimaryExprContext):
+                primary = receiver_ctx.primaryExpression()
+                if primary and primary.IDENTIFIER():
+                    receiver_name = primary.IDENTIFIER().getText()
+                    key = f"{self._current_function}:{receiver_name}"
+                    struct_name = self._struct_instance_vars.get(key)
+                    struct = self.atlas.structs.get(struct_name) if struct_name else None
+                    if struct and any(m.name == expr_ctx.IDENTIFIER().getText() for m in struct.methods):
+                        return True
+
+        return False
+
     def _process_callable_args(
         self,
         callable_info: CallableTypeInfo,
@@ -630,13 +922,7 @@ class CodeGenVisitor(zincVisitor):
                 elif param_type == BaseType.CALLABLE and i in callable_info.param_callable_infos:
                     arg_ctx = arg_ctxs[i] if arg_ctxs and i < len(arg_ctxs) else None
                     arg_symbol = self._get_expr_symbol(arg_ctx) if arg_ctx is not None else None
-                    is_local_callable = (
-                        isinstance(arg_ctx, ZincParser.PrimaryExprContext)
-                        and arg_ctx.primaryExpression()
-                        and arg_ctx.primaryExpression().IDENTIFIER()
-                        and arg_ctx.primaryExpression().IDENTIFIER().getText() in self._declared_vars
-                    )
-                    if arg_symbol and arg_symbol.callable_info and not is_local_callable:
+                    if arg_symbol and arg_symbol.callable_info and self._is_direct_callable_expr(arg_ctx, arg_symbol):
                         processed.append(
                             self._render_callable_value_for_signature(
                                 arg_symbol.callable_info,
@@ -730,6 +1016,13 @@ class CodeGenVisitor(zincVisitor):
             rust_type = f.rust_type()
             lines.append(f"    {vis}{f.name}: {rust_type},")
         lines.append("}")
+        lines.append("")
+        lines.append(f"impl Default for {rust_name} {{")
+        lines.append("    fn default() -> Self {")
+        field_defaults = ", ".join(f"{field.name}: {field.rust_default()}" for field in struct.fields)
+        lines.append(f"        Self {{ {field_defaults} }}")
+        lines.append("    }")
+        lines.append("}")
 
         # Impl block (only if there are methods)
         if struct.methods:
@@ -812,6 +1105,7 @@ class CodeGenVisitor(zincVisitor):
             "f128": "f128",
             "string": "String",
             "bool": "bool",
+            "context": "__ZincContext",
         }
         return mapping.get(zinc_type.lower(), zinc_type)
 
@@ -833,7 +1127,7 @@ class CodeGenVisitor(zincVisitor):
                     if i in func.arg_channel_infos and func.arg_channel_infos[i]:
                         # Use first channel info (all should have same element type)
                         chan_info = func.arg_channel_infos[i][0]
-                        type_str = chan_info.to_rust_sender()
+                        type_str = chan_info.to_rust_type()
                         self._current_channel_params.add(param_name)
                     # Check if this is an array parameter with element type info
                     elif i in func.arg_array_infos:
@@ -1236,6 +1530,16 @@ class CodeGenVisitor(zincVisitor):
         """Return identifier names from a binding/destructuring context."""
         return [token.getText() for token in ctx.getTokens(ZincParser.IDENTIFIER)]
 
+    def _function_call_name(self, expr_ctx) -> str | None:
+        """Return the simple callee name for calls like close(...)."""
+        if isinstance(expr_ctx, ZincParser.FunctionCallExprContext):
+            callee = expr_ctx.expression()
+            if isinstance(callee, ZincParser.PrimaryExprContext):
+                primary = callee.primaryExpression()
+                if primary and primary.IDENTIFIER():
+                    return primary.IDENTIFIER().getText()
+        return None
+
     def _render_tuple_pattern(self, names: list[str]) -> str:
         """Render a Rust tuple pattern."""
         if len(names) == 1:
@@ -1369,6 +1673,7 @@ class CodeGenVisitor(zincVisitor):
             and expr_symbol.resolved_type == BaseType.CALLABLE
             and expr_symbol.callable_info
             and not is_direct_call
+            and self._is_direct_callable_expr(ctx, expr_symbol)
         ):
             return self._render_callable_value(expr_symbol.callable_info)
 
@@ -1428,9 +1733,51 @@ class CodeGenVisitor(zincVisitor):
             arg_ctxs = list(ctx.argumentList().expression())
             args = [self.visit(arg) for arg in arg_ctxs]
 
+        if self._function_call_name(ctx) == "close":
+            channel_arg = args[0] if args else "__zinc_missing_close_arg"
+            return f"{channel_arg}.close()"
+
+        path = extract_identifier_path(callee_ctx) if self._current_module is not None else None
+        if path == ["Context", "background"]:
+            return "__ZincContext::background()"
+        if path == ["Context", "with_cancel"]:
+            parent = args[0] if args else "__zinc_missing_context"
+            cancel_info = CallableTypeInfo(param_types=[], return_type=BaseType.VOID)
+            expr_symbol = self._get_expr_symbol(ctx)
+            if expr_symbol and expr_symbol.tuple_info and 1 in expr_symbol.tuple_info.element_callable_infos:
+                cancel_info = expr_symbol.tuple_info.element_callable_infos[1]
+            cancel_type = cancel_info.rust_type_name()
+            cancel_target = cancel_info.targets[0] if cancel_info.targets else CallableTarget(
+                kind="context_cancel",
+                qualified_name="__zinc_context_cancel",
+                display_name="cancel",
+            )
+            cancel_variant = self._callable_variant_name(cancel_info, cancel_target)
+            return "\n".join([
+                "{",
+                f"    let __zinc_parent_ctx = {parent}.clone();",
+                "    let __zinc_child_ctx = __ZincContext::background();",
+                "    let __zinc_child_for_task = __zinc_child_ctx.clone();",
+                "    tokio::spawn(async move {",
+                "        let _ = __zinc_parent_ctx.done().recv_option().await;",
+                "        __zinc_child_for_task.cancel();",
+                "    });",
+                f"    (__zinc_child_ctx.clone(), {cancel_type}::{cancel_variant}(__zinc_child_ctx))",
+                "}",
+            ])
+
         # Get callee text first to check for static method
         callee = self.visit(callee_ctx)
         callee_symbol = self._get_expr_symbol(callee_ctx)
+
+        if isinstance(callee_ctx, ZincParser.MemberAccessExprContext):
+            receiver_ctx = callee_ctx.expression()
+            method_name = callee_ctx.IDENTIFIER().getText()
+            if self._get_expr_type(receiver_ctx) == BaseType.CONTEXT:
+                if method_name == "done":
+                    return f"{self.visit(receiver_ctx)}.done()"
+                if method_name == "cancel":
+                    return f"{self.visit(receiver_ctx)}.cancel()"
 
         if callee == "print":
             return self._render_print_call(args)
@@ -1559,6 +1906,7 @@ class CodeGenVisitor(zincVisitor):
                     and receiver_symbol.callable_info
                     and arg_symbol
                     and arg_symbol.callable_info
+                    and self._is_direct_callable_expr(arg_ctx, arg_symbol)
                 ):
                     args[0] = self._render_callable_value_for_signature(
                         arg_symbol.callable_info,
@@ -1621,12 +1969,6 @@ class CodeGenVisitor(zincVisitor):
                 if param_type == BaseType.STRING and arg.startswith('"'):
                     processed.append(f"String::from({arg})")
                 elif param_type == BaseType.CHANNEL and i in func.arg_channel_infos:
-                    arg_ctx = arg_ctxs[i] if arg_ctxs and i < len(arg_ctxs) else None
-                    if isinstance(arg_ctx, ZincParser.PrimaryExprContext):
-                        primary = arg_ctx.primaryExpression()
-                        if primary and primary.IDENTIFIER():
-                            processed.append(self._channel_sender_expr(primary.IDENTIFIER().getText(), clone=True))
-                            continue
                     processed.append(f"{arg}.clone()")
                 # Pass arrays by reference
                 elif param_type == BaseType.ARRAY and i in func.arg_array_infos:
@@ -1650,13 +1992,7 @@ class CodeGenVisitor(zincVisitor):
                 elif param_type == BaseType.CALLABLE and i in func.arg_callable_infos:
                     arg_ctx = arg_ctxs[i] if arg_ctxs and i < len(arg_ctxs) else None
                     arg_symbol = self._get_expr_symbol(arg_ctx) if arg_ctx is not None else None
-                    is_local_callable = (
-                        isinstance(arg_ctx, ZincParser.PrimaryExprContext)
-                        and arg_ctx.primaryExpression()
-                        and arg_ctx.primaryExpression().IDENTIFIER()
-                        and arg_ctx.primaryExpression().IDENTIFIER().getText() in self._declared_vars
-                    )
-                    if arg_symbol and arg_symbol.callable_info and not is_local_callable:
+                    if arg_symbol and arg_symbol.callable_info and self._is_direct_callable_expr(arg_ctx, arg_symbol):
                         processed.append(
                             self._render_callable_value_for_signature(
                                 arg_symbol.callable_info,
@@ -1824,13 +2160,8 @@ class CodeGenVisitor(zincVisitor):
     def visitChannelReceiveExpr(self, ctx: ZincParser.ChannelReceiveExprContext) -> str:
         """Visit channel receive expression."""
         chan_expr = ctx.expression()
-        if isinstance(chan_expr, ZincParser.PrimaryExprContext):
-            primary = chan_expr.primaryExpression()
-            if primary and primary.IDENTIFIER():
-                chan_name = primary.IDENTIFIER().getText()
-                return f"{self._channel_receiver_expr(chan_name)}.recv().await.unwrap()"
         receiver = self.visit(chan_expr)
-        return f"{receiver}.recv().await.unwrap()"
+        return f"{receiver}.recv().await"
 
     def visitStructInstantiation(self, ctx: ZincParser.StructInstantiationContext) -> str:
         """Visit struct instantiation."""
@@ -1887,9 +2218,42 @@ class CodeGenVisitor(zincVisitor):
         """Visit variable assignment with shadowing support."""
         target = ctx.assignmentTarget().getText()
         target_ctx = ctx.assignmentTarget()
+        expr = ctx.expression()
+
+        if (
+            target_ctx.tupleAssignmentTarget()
+            and isinstance(expr, ZincParser.ChannelReceiveExprContext)
+        ):
+            names = self._binding_names(target_ctx.tupleAssignmentTarget())
+            target_symbols = [
+                self.symbols.lookup_by_interval(token.getSourceInterval(), self._current_function)
+                for token in target_ctx.tupleAssignmentTarget().getTokens(ZincParser.IDENTIFIER)
+            ]
+            needs_declaration = any(
+                symbol is None or symbol.is_shadow or symbol.id not in self._declared_vars
+                for symbol in target_symbols
+            )
+            pattern_names = []
+            for name, symbol in zip(names, target_symbols, strict=False):
+                if needs_declaration and symbol and symbol.is_mutated:
+                    pattern_names.append(f"mut {name}")
+                else:
+                    pattern_names.append(name)
+                if needs_declaration:
+                    self._declared_vars.add(name)
+            pattern = self._render_tuple_pattern(pattern_names)
+            channel_value = self.visit(expr.expression())
+            value_expr = (
+                f"match {channel_value}.recv_option().await {{ "
+                "Some(value) => (value, true), "
+                "None => (Default::default(), false), "
+                "}"
+            )
+            if needs_declaration:
+                return f"let {pattern} = {value_expr};"
+            return f"{pattern} = {value_expr};"
 
         # Check if this is a chan() call - generate tuple destructuring
-        expr = ctx.expression()
         if isinstance(expr, ZincParser.FunctionCallExprContext):
             callee = expr.expression()
             if isinstance(callee, ZincParser.PrimaryExprContext):
@@ -1902,17 +2266,19 @@ class CodeGenVisitor(zincVisitor):
                     # Look up channel info to get element type
                     if var_name in self._channel_infos:
                         chan_info = self._channel_infos[var_name]
-                        elem_type = type_to_rust(chan_info.element_type)
+                        constructor = "__ZincChannel"
+                        if chan_info.element_type != BaseType.UNKNOWN:
+                            constructor = f"__ZincChannel::<{chan_info.element_rust_type()}>"
                         self._declared_vars.add(var_name)
                         if chan_info.is_bounded and capacity is not None:
-                            return f"let ({var_name}_tx, mut {var_name}_rx) = tokio::sync::mpsc::channel::<{elem_type}>({capacity});"
-                        return f"let ({var_name}_tx, mut {var_name}_rx) = tokio::sync::mpsc::unbounded_channel::<{elem_type}>();"
+                            return f"let {var_name} = {constructor}::bounded({capacity});"
+                        return f"let {var_name} = {constructor}::unbounded();"
                     else:
                         # Fallback - unknown element type
                         self._declared_vars.add(var_name)
                         if capacity is not None:
-                            return f"let ({var_name}_tx, mut {var_name}_rx) = tokio::sync::mpsc::channel({capacity});"
-                        return f"let ({var_name}_tx, mut {var_name}_rx) = tokio::sync::mpsc::unbounded_channel();"
+                            return f"let {var_name} = __ZincChannel::bounded({capacity});"
+                        return f"let {var_name} = __ZincChannel::unbounded();"
 
         target_symbol = None
         if target_ctx.IDENTIFIER():
@@ -1937,20 +2303,13 @@ class CodeGenVisitor(zincVisitor):
             self._expected_tuple_info = previous_tuple_info
 
         expr_symbol = self._get_expr_symbol(expr)
-        is_local_callable = (
-            isinstance(expr, ZincParser.PrimaryExprContext)
-            and expr.primaryExpression()
-            and expr.primaryExpression().IDENTIFIER()
-            and expr.primaryExpression().IDENTIFIER().getText() in self._declared_vars
-        )
         if (
             target_symbol
             and target_symbol.resolved_type == BaseType.CALLABLE
             and target_symbol.callable_info
             and expr_symbol
             and expr_symbol.callable_info
-            and len(expr_symbol.callable_info.targets) == 1
-            and not is_local_callable
+            and self._is_direct_callable_expr(expr, expr_symbol)
         ):
             value = self._render_callable_value_for_signature(
                 expr_symbol.callable_info,
@@ -2087,8 +2446,28 @@ class CodeGenVisitor(zincVisitor):
         binding_ctx = binding.tupleAssignmentTarget() or binding
         names = self._binding_names(binding_ctx)
         var_name = names[0] if len(names) == 1 else self._render_tuple_pattern(names)
-        iterable = self._render_for_iterable(ctx.expression())
         body_stmts = self._generate_block(ctx.block())
+
+        if self._get_expr_type(ctx.expression()) == BaseType.CHANNEL:
+            loop_id = self._next_select_id()
+            channel_iter = f"__zinc_channel_iter_{loop_id}"
+            iterable_expr = self.visit(ctx.expression())
+            lines = [
+                "{",
+                f"    let {channel_iter} = {iterable_expr}.clone();",
+                "    loop {",
+                f"        let Some({var_name}) = {channel_iter}.recv_option().await else {{",
+                "            break;",
+                "        };",
+            ]
+            for stmt in body_stmts:
+                for line in stmt.split("\n"):
+                    lines.append(f"        {line}")
+            lines.append("    }")
+            lines.append("}")
+            return "\n".join(lines)
+
+        iterable = self._render_for_iterable(ctx.expression())
 
         lines = [f"for {var_name} in {iterable} {{"]
         for stmt in body_stmts:
@@ -2129,26 +2508,49 @@ class CodeGenVisitor(zincVisitor):
         self._select_counter += 1
         return select_id
 
-    def _render_select_case_body(self, block_ctx, binding_name: str | None = None, binding_source: str | None = None) -> list[str]:
+    def _render_select_case_body(
+        self,
+        block_ctx,
+        prelude: list[str] | None = None,
+        local_names: set[str] | None = None,
+    ) -> list[str]:
         """Render a select case body, keeping header bindings local to the case."""
-        prelude: list[str] = []
-        local_names: set[str] | None = None
-        if binding_name and binding_source:
-            prelude.append(f"let {binding_name} = {binding_source};")
-            local_names = {binding_name}
         return self._render_scoped_block(block_ctx, prelude=prelude, local_names=local_names)
+
+    def _select_receive_binding(self, case_ctx) -> tuple[str, list[str]]:
+        """Return the binding mode for a receive case."""
+        binding_ctx = case_ctx.selectReceiveBinding()
+        if binding_ctx is None:
+            return "none", []
+        if binding_ctx.IDENTIFIER():
+            return "single", [binding_ctx.IDENTIFIER().getText()]
+        return "status", self._binding_names(binding_ctx.tupleAssignmentTarget())
+
+    def _render_select_receive_case_body(self, case_ctx, option_expr: str) -> list[str]:
+        """Render a receive-case body from an Option-valued receive result."""
+        mode, names = self._select_receive_binding(case_ctx)
+        if mode == "none":
+            return self._render_select_case_body(case_ctx.block())
+        if mode == "single":
+            prelude = [
+                f"let {names[0]} = match {option_expr} {{ Some(value) => value, None => panic!(\"select receive on closed channel\") }};"
+            ]
+            return self._render_select_case_body(case_ctx.block(), prelude=prelude, local_names={names[0]})
+        pattern = self._render_tuple_pattern(names)
+        prelude = [
+            f"let {pattern} = match {option_expr} {{ Some(value) => (value, true), None => (Default::default(), false) }};"
+        ]
+        return self._render_select_case_body(case_ctx.block(), prelude=prelude, local_names=set(names))
 
     def _render_select_without_default(self, case_ctxs: list, select_id: int) -> str:
         """Lower a blocking select to tokio::select!."""
         lines = ["tokio::select! {"]
         for branch_index, case_ctx in enumerate(case_ctxs):
             if isinstance(case_ctx, ZincParser.SelectReceiveCaseContext):
-                binding_name = case_ctx.IDENTIFIER(0).getText()
-                channel_name = case_ctx.IDENTIFIER(1).getText()
                 recv_name = f"__zinc_select_value_{select_id}_{branch_index}"
-                receiver = self._channel_receiver_expr(channel_name)
-                body = self._render_select_case_body(case_ctx.block(), binding_name, recv_name)
-                lines.append(f"    {recv_name} = async {{ {receiver}.recv().await.unwrap() }} => {{")
+                receiver = self.visit(case_ctx.expression())
+                body = self._render_select_receive_case_body(case_ctx, recv_name)
+                lines.append(f"    {recv_name} = async {{ {receiver}.recv_option().await }} => {{")
                 self._append_block_lines(lines, body, 2)
                 lines.append("    },")
                 continue
@@ -2156,14 +2558,9 @@ class CodeGenVisitor(zincVisitor):
             channel_name = case_ctx.IDENTIFIER().getText()
             sender = self._channel_sender_expr(channel_name)
             value = self._render_channel_value(channel_name, case_ctx.expression())
-            chan_info = self._channel_infos.get(channel_name)
             body = self._render_select_case_body(case_ctx.block())
-            if chan_info and chan_info.is_bounded:
-                result_name = f"__zinc_select_result_{select_id}_{branch_index}"
-                lines.append(f"    {result_name} = {sender}.send({value}) => {{")
-                lines.append(f"        {result_name}.unwrap();")
-            else:
-                lines.append(f"    _ = async {{ {sender}.send({value}).unwrap(); }} => {{")
+            result_name = f"__zinc_select_result_{select_id}_{branch_index}"
+            lines.append(f"    {result_name} = async {{ {sender}.send({value}).await }} => {{")
             self._append_block_lines(lines, body, 2)
             lines.append("    },")
         lines.append("}")
@@ -2195,42 +2592,38 @@ class CodeGenVisitor(zincVisitor):
         for branch_index, case_ctx in enumerate(case_ctxs):
             lines.append(f"            {branch_index} => {{")
             if isinstance(case_ctx, ZincParser.SelectReceiveCaseContext):
-                binding_name = case_ctx.IDENTIFIER(0).getText()
-                channel_name = case_ctx.IDENTIFIER(1).getText()
                 value_name = f"__zinc_select_value_{select_id}_{branch_index}"
-                receiver = self._channel_receiver_expr(channel_name)
-                body = self._render_select_case_body(case_ctx.block(), binding_name, value_name)
+                receiver = self.visit(case_ctx.expression())
+                mode, _ = self._select_receive_binding(case_ctx)
+                body_with_value = self._render_select_receive_case_body(case_ctx, f"Some({value_name})")
+                body_closed = self._render_select_receive_case_body(case_ctx, "None")
                 lines.append(f"                match {receiver}.try_recv() {{")
-                lines.append(f"                    Ok({value_name}) => {{")
-                self._append_block_lines(lines, body, 6)
+                lines.append(f"                    __ZincTryRecv::Value({value_name}) => {{")
+                self._append_block_lines(lines, body_with_value, 6)
                 lines.append(f"                        break {label};")
                 lines.append("                    },")
-                lines.append("                    Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {},")
-                lines.append('                    Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => panic!("select receive on closed channel"),')
+                lines.append("                    __ZincTryRecv::Empty => {},")
+                if mode == "single":
+                    lines.append('                    __ZincTryRecv::Closed => panic!("select receive on closed channel"),')
+                else:
+                    lines.append("                    __ZincTryRecv::Closed => {")
+                    self._append_block_lines(lines, body_closed, 6)
+                    lines.append(f"                        break {label};")
+                    lines.append("                    },")
                 lines.append("                }")
             else:
                 channel_name = case_ctx.IDENTIFIER().getText()
                 sender = self._channel_sender_expr(channel_name)
                 value = self._render_channel_value(channel_name, case_ctx.expression())
-                chan_info = self._channel_infos.get(channel_name)
                 body = self._render_select_case_body(case_ctx.block())
-                if chan_info and chan_info.is_bounded:
-                    lines.append(f"                match {sender}.try_send({value}) {{")
-                    lines.append("                    Ok(()) => {")
-                    self._append_block_lines(lines, body, 6)
-                    lines.append(f"                        break {label};")
-                    lines.append("                    },")
-                    lines.append("                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {},")
-                    lines.append('                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => panic!("select send on closed channel"),')
-                    lines.append("                }")
-                else:
-                    lines.append(f"                match {sender}.send({value}) {{")
-                    lines.append("                    Ok(()) => {")
-                    self._append_block_lines(lines, body, 6)
-                    lines.append(f"                        break {label};")
-                    lines.append("                    },")
-                    lines.append('                    Err(_) => panic!("select send on closed channel"),')
-                    lines.append("                }")
+                lines.append(f"                match {sender}.try_send({value}) {{")
+                lines.append("                    __ZincTrySend::Sent => {")
+                self._append_block_lines(lines, body, 6)
+                lines.append(f"                        break {label};")
+                lines.append("                    },")
+                lines.append("                    __ZincTrySend::Full(_) => {},")
+                lines.append('                    __ZincTrySend::Closed(_) => panic!("select send on closed channel"),')
+                lines.append("                }")
             lines.append("            }")
 
         lines.extend([
@@ -2280,13 +2673,11 @@ class CodeGenVisitor(zincVisitor):
                 self._expected_tuple_info = previous_tuple_info
             if func and func.return_type == BaseType.CALLABLE and func.return_callable_info:
                 expr_symbol = self._get_expr_symbol(ctx.expression())
-                is_local_callable = (
-                    isinstance(ctx.expression(), ZincParser.PrimaryExprContext)
-                    and ctx.expression().primaryExpression()
-                    and ctx.expression().primaryExpression().IDENTIFIER()
-                    and ctx.expression().primaryExpression().IDENTIFIER().getText() in self._declared_vars
-                )
-                if expr_symbol and expr_symbol.callable_info and not is_local_callable:
+                if (
+                    expr_symbol
+                    and expr_symbol.callable_info
+                    and self._is_direct_callable_expr(ctx.expression(), expr_symbol)
+                ):
                     value = self._render_callable_value_for_signature(
                         expr_symbol.callable_info,
                         func.return_callable_info,
@@ -2327,13 +2718,10 @@ class CodeGenVisitor(zincVisitor):
         if ctx.argumentList():
             for i, arg in enumerate(ctx.argumentList().expression()):
                 arg_code = self.visit(arg)
-                if isinstance(arg, ZincParser.PrimaryExprContext):
-                    primary = arg.primaryExpression()
-                    if primary and primary.IDENTIFIER():
-                        var_name = primary.IDENTIFIER().getText()
-                        if var_name in self._channel_infos:
-                            arg_code = f"__zinc_spawn_arg_{i}"
-                            setup.append(f"let {arg_code} = {self._channel_sender_expr(var_name, clone=True)};")
+                if self._get_expr_type(arg) == BaseType.CHANNEL:
+                    clone_name = f"__zinc_spawn_arg_{i}"
+                    setup.append(f"let {clone_name} = {arg_code}.clone();")
+                    arg_code = clone_name
                 args.append(arg_code)
 
         # Look up mangled name from specialization map (scoped by current function)
@@ -2356,10 +2744,7 @@ class CodeGenVisitor(zincVisitor):
         channel_name = ctx.IDENTIFIER().getText()
         sender = self._channel_sender_expr(channel_name)
         value = self._render_channel_value(channel_name, ctx.expression())
-        chan_info = self._channel_infos.get(channel_name)
-        if chan_info and chan_info.is_bounded:
-            return f"{sender}.send({value}).await.unwrap();"
-        return f"{sender}.send({value}).unwrap();"
+        return f"{sender}.send({value}).await;"
 
     def visitExpressionStatement(self, ctx: ZincParser.ExpressionStatementContext) -> str:
         """Visit expression statement."""

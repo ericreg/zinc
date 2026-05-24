@@ -1,0 +1,14 @@
+fn bounce(input, output) {
+    value = <-input
+    output <- value + 1
+    close(output)
+}
+
+fn main() {
+    input = chan()
+    output = chan()
+    input <- 4
+    close(input)
+    spawn bounce(input, output)
+    print(<-output)
+}

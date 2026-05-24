@@ -1,0 +1,11 @@
+fn main() {
+    root = Context.background()
+    child, cancel = Context.with_cancel(root)
+    cancel()
+
+    select {
+        case <-child.done() {
+            print("done")
+        }
+    }
+}

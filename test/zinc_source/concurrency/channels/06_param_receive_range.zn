@@ -1,0 +1,16 @@
+fn sum(values) {
+    total = 0
+    for value in values {
+        total = total + value
+    }
+    return total
+}
+
+fn main() {
+    values = chan()
+    values <- 1
+    values <- 2
+    values <- 3
+    close(values)
+    print(sum(values))
+}

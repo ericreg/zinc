@@ -374,6 +374,11 @@ class zincVisitor(ParseTreeVisitor):
         return self.visitChildren(ctx)
 
 
+    # Visit a parse tree produced by zincParser#selectReceiveBinding.
+    def visitSelectReceiveBinding(self, ctx:zincParser.SelectReceiveBindingContext):
+        return self.visitChildren(ctx)
+
+
     # Visit a parse tree produced by zincParser#lambdaExpression.
     def visitLambdaExpression(self, ctx:zincParser.LambdaExpressionContext):
         return self.visitChildren(ctx)

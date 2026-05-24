@@ -14,6 +14,7 @@ class BaseType(Enum):
     BOOLEAN = auto()
     FLOAT = auto()
     CHANNEL = auto()  # Channel type (sender or receiver)
+    CONTEXT = auto()  # Cancellation context
     ARRAY = auto()  # Array or Vec type
     DICT = auto()  # HashMap or BTreeMap type
     SET = auto()  # HashSet or BTreeSet type
@@ -85,12 +86,14 @@ def type_to_rust(base_type: BaseType) -> str:
         BaseType.FLOAT: "f64",
         BaseType.STRING: "String",
         BaseType.BOOLEAN: "bool",
-        BaseType.CHANNEL: "chan",  # Placeholder for mangled names
+        BaseType.CHANNEL: "__ZincChannel",  # Generic, element type handled separately
+        BaseType.CONTEXT: "__ZincContext",
         BaseType.ARRAY: "Vec",  # Generic, element type handled separately
         BaseType.DICT: "HashMap",  # Generic, key/value handled separately
         BaseType.SET: "HashSet",  # Generic, element type handled separately
         BaseType.TUPLE: "Tuple",  # Generic, element types handled separately
         BaseType.CALLABLE: "Callable",  # Placeholder, signature handled separately
+        BaseType.VOID: "()",
         BaseType.UNKNOWN: "unknown",
     }
     return mapping.get(base_type, "unknown")
@@ -114,27 +117,37 @@ class ChannelTypeInfo:
     """Type information for channel types."""
 
     element_type: BaseType = BaseType.UNKNOWN  # Type of values sent/received
+    element_tuple_info: TupleTypeInfo | None = None
+    element_callable_info: CallableTypeInfo | None = None
     is_bounded: bool = False  # True if created with chan(n)
 
-    def to_rust_sender(self) -> str:
-        """Generate Rust sender type."""
-        elem = type_to_rust(self.element_type)
-        if self.is_bounded:
-            return f"tokio::sync::mpsc::Sender<{elem}>"
-        return f"tokio::sync::mpsc::UnboundedSender<{elem}>"
+    def element_rust_type(self) -> str:
+        """Generate Rust type for the channel payload."""
+        if self.element_type == BaseType.TUPLE and self.element_tuple_info:
+            return self.element_tuple_info.to_rust_type()
+        if self.element_type == BaseType.CALLABLE and self.element_callable_info:
+            return self.element_callable_info.rust_type_name()
+        return type_to_rust(self.element_type)
 
-    def to_rust_receiver(self) -> str:
-        """Generate Rust receiver type."""
-        elem = type_to_rust(self.element_type)
-        if self.is_bounded:
-            return f"tokio::sync::mpsc::Receiver<{elem}>"
-        return f"tokio::sync::mpsc::UnboundedReceiver<{elem}>"
+    def to_rust_type(self) -> str:
+        """Generate the shared Rust channel-wrapper type."""
+        return f"__ZincChannel<{self.element_rust_type()}>"
 
     def to_rust_type_suffix(self) -> str:
         """Generate type suffix for mangled names (no special chars)."""
+        if self.element_type == BaseType.TUPLE and self.element_tuple_info:
+            elem = self.element_tuple_info.to_rust_type_suffix()
+            if self.is_bounded:
+                return f"BoundedChannel_{elem}"
+            return f"Channel_{elem}"
+        if self.element_type == BaseType.CALLABLE and self.element_callable_info:
+            elem = self.element_callable_info.to_rust_type_suffix()
+            if self.is_bounded:
+                return f"BoundedChannel_{elem}"
+            return f"Channel_{elem}"
         if self.is_bounded:
-            return "Sender"
-        return "UnboundedSender"
+            return "BoundedChannel"
+        return "Channel"
 
 
 @dataclass
@@ -499,6 +512,8 @@ class CallableTypeInfo:
             return ("tuple", tuple_info.to_rust_type_suffix())
         if base_type == BaseType.CALLABLE and callable_info:
             return ("callable", callable_info.to_rust_type_suffix())
+        if base_type == BaseType.VOID:
+            return ("unit",)
         return (base_type.name.lower(),)
 
     def _param_suffix(self, index: int, base_type: BaseType) -> str:
@@ -531,6 +546,10 @@ class CallableTypeInfo:
             return tuple_info.to_rust_type_suffix()
         if base_type == BaseType.CALLABLE and callable_info:
             return callable_info.to_rust_type_suffix()
+        if base_type == BaseType.VOID:
+            return "Unit"
+        if base_type == BaseType.CONTEXT:
+            return "Context"
         return type_to_rust(base_type)
 
 

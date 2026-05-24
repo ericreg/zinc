@@ -1,0 +1,10 @@
+fn inc(x) {
+    return x + 1
+}
+
+fn main() {
+    jobs = chan()
+    jobs <- inc
+    f = <-jobs
+    print(f(3))
+}
