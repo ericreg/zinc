@@ -1,0 +1,12 @@
+fn identity(x) {
+    return x
+}
+
+fn apply(f, x) {
+    return f(x)
+}
+
+fn main() {
+    print(apply(identity, 3))
+    print(apply(identity, "hi"))
+}

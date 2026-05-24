@@ -1,0 +1,10 @@
+// expected-error: lambda expressions cannot capture outer variable 'y'
+fn main() {
+    if true {
+        y = 2
+        f = fn() {
+            return y
+        }
+        print(f())
+    }
+}

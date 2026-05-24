@@ -1936,6 +1936,27 @@ class CodeGenVisitor(zincVisitor):
             self._expected_set_info = previous_set_info
             self._expected_tuple_info = previous_tuple_info
 
+        expr_symbol = self._get_expr_symbol(expr)
+        is_local_callable = (
+            isinstance(expr, ZincParser.PrimaryExprContext)
+            and expr.primaryExpression()
+            and expr.primaryExpression().IDENTIFIER()
+            and expr.primaryExpression().IDENTIFIER().getText() in self._declared_vars
+        )
+        if (
+            target_symbol
+            and target_symbol.resolved_type == BaseType.CALLABLE
+            and target_symbol.callable_info
+            and expr_symbol
+            and expr_symbol.callable_info
+            and len(expr_symbol.callable_info.targets) == 1
+            and not is_local_callable
+        ):
+            value = self._render_callable_value_for_signature(
+                expr_symbol.callable_info,
+                target_symbol.callable_info,
+            )
+
         if target_ctx.IDENTIFIER():
             boxed_key = self._boxed_struct_key(target)
             if boxed_key in self._boxed_struct_vars:

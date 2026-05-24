@@ -1,0 +1,11 @@
+fn inc(x) {
+    return x + 1
+}
+
+fn apply(f, x) {
+    return f(x)
+}
+
+fn main() {
+    print(apply(inc, 3))
+}

@@ -1,0 +1,16 @@
+fn inc(x) {
+    return x + 1
+}
+
+fn double(x) {
+    return x * 2
+}
+
+fn main() {
+    ops = []
+    ops.push(inc)
+    ops.push(double)
+
+    print(ops[0](4))
+    print(ops[1](4))
+}

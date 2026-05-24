@@ -1,0 +1,13 @@
+struct Counter {
+    count: 7
+
+    fn get() {
+        return self.count
+    }
+}
+
+fn main() {
+    c = Counter {}
+    step = c.get
+    print(step())
+}

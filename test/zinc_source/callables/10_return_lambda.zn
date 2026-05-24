@@ -1,0 +1,10 @@
+fn make() {
+    return fn(x) {
+        return x + 1
+    }
+}
+
+fn main() {
+    f = make()
+    print(f(4))
+}

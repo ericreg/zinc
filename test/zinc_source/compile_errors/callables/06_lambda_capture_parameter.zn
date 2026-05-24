@@ -1,0 +1,12 @@
+// expected-error: lambda expressions cannot capture outer variable 'x'
+fn wrap(x) {
+    f = fn() {
+        return x
+    }
+
+    return f()
+}
+
+fn main() {
+    print(wrap(1))
+}

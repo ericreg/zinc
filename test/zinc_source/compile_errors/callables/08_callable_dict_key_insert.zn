@@ -1,0 +1,10 @@
+// expected-error: callables cannot be used as dict keys
+fn inc(x) {
+    return x + 1
+}
+
+fn main() {
+    values = dict()
+    values.insert(inc, 1)
+    print(values.len())
+}

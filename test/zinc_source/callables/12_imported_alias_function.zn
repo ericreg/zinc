@@ -1,0 +1,6 @@
+import modules/_lib/math as math
+
+fn main() {
+    f = math.add
+    print(f(2, 3))
+}

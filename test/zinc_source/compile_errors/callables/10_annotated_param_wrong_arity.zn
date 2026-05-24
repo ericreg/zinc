@@ -1,0 +1,12 @@
+// expected-error: indirect call arity mismatch
+fn apply(f: (i64) -> i64, x: i64) {
+    return f(x)
+}
+
+fn add(a, b) {
+    return a + b
+}
+
+fn main() {
+    print(apply(add, 3))
+}

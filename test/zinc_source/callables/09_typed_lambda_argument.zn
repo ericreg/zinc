@@ -1,0 +1,9 @@
+fn apply(f: (i64) -> i64, x: i64) {
+    return f(x)
+}
+
+fn main() {
+    print(apply(fn(value: i64) {
+        return value * 3
+    }, 4))
+}

@@ -1,0 +1,10 @@
+struct Math {
+    fn add_one(x: i64) {
+        return x + 1
+    }
+}
+
+fn main() {
+    f = Math.add_one
+    print(f(4))
+}

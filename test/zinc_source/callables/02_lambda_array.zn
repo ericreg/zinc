@@ -1,0 +1,8 @@
+fn main() {
+    ops = []
+    ops.push(fn(x) {
+        return x + 1
+    })
+
+    print(ops[0](10))
+}

@@ -1,0 +1,20 @@
+fn inc(x) {
+    return x + 1
+}
+
+fn double(x) {
+    return x * 2
+}
+
+fn choose(flag) {
+    if flag {
+        return inc
+    }
+
+    return double
+}
+
+fn main() {
+    print(choose(true)(4))
+    print(choose(false)(4))
+}

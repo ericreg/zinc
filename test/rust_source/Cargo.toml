@@ -19,6 +19,58 @@ name = "basic_dynamic_type"
 path = "src/basic_dynamic_type.rs"
 
 [[bin]]
+name = "callables_01_named_function"
+path = "src/callables/01_named_function.rs"
+
+[[bin]]
+name = "callables_02_lambda_array"
+path = "src/callables/02_lambda_array.rs"
+
+[[bin]]
+name = "callables_03_bound_method"
+path = "src/callables/03_bound_method.rs"
+
+[[bin]]
+name = "callables_04_return_callable"
+path = "src/callables/04_return_callable.rs"
+
+[[bin]]
+name = "callables_05_static_method"
+path = "src/callables/05_static_method.rs"
+
+[[bin]]
+name = "callables_06_generic_apply_multi_type"
+path = "src/callables/06_generic_apply_multi_type.rs"
+
+[[bin]]
+name = "callables_07_rebinding_same_signature"
+path = "src/callables/07_rebinding_same_signature.rs"
+
+[[bin]]
+name = "callables_08_return_choice_same_signature"
+path = "src/callables/08_return_choice_same_signature.rs"
+
+[[bin]]
+name = "callables_09_typed_lambda_argument"
+path = "src/callables/09_typed_lambda_argument.rs"
+
+[[bin]]
+name = "callables_10_return_lambda"
+path = "src/callables/10_return_lambda.rs"
+
+[[bin]]
+name = "callables_11_bound_readonly_method"
+path = "src/callables/11_bound_readonly_method.rs"
+
+[[bin]]
+name = "callables_12_imported_alias_function"
+path = "src/callables/12_imported_alias_function.rs"
+
+[[bin]]
+name = "callables_13_named_function_array"
+path = "src/callables/13_named_function_array.rs"
+
+[[bin]]
 name = "collections_01_dict_literal"
 path = "src/collections/01_dict_literal.rs"
 
@@ -533,26 +585,6 @@ path = "src/tuples/05_function_return.rs"
 [[bin]]
 name = "tuples_06_nested_index"
 path = "src/tuples/06_nested_index.rs"
-
-[[bin]]
-name = "callables_01_named_function"
-path = "src/callables/01_named_function.rs"
-
-[[bin]]
-name = "callables_02_lambda_array"
-path = "src/callables/02_lambda_array.rs"
-
-[[bin]]
-name = "callables_03_bound_method"
-path = "src/callables/03_bound_method.rs"
-
-[[bin]]
-name = "callables_04_return_callable"
-path = "src/callables/04_return_callable.rs"
-
-[[bin]]
-name = "callables_05_static_method"
-path = "src/callables/05_static_method.rs"
 
 [[bin]]
 name = "variable_assignment"

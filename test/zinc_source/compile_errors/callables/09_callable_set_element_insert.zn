@@ -1,0 +1,10 @@
+// expected-error: callables cannot be used as set elements
+fn inc(x) {
+    return x + 1
+}
+
+fn main() {
+    values = {1}
+    values.insert(inc)
+    print(values.len())
+}

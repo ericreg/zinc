@@ -1,0 +1,14 @@
+// expected-error: indirect call targets disagree on return type
+fn inc(x) {
+    return x + 1
+}
+
+fn positive(x) {
+    return x > 0
+}
+
+fn main() {
+    f = inc
+    f = positive
+    print(f(1))
+}

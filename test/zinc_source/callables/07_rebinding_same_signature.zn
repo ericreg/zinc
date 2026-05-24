@@ -1,0 +1,15 @@
+fn inc(x) {
+    return x + 1
+}
+
+fn double(x) {
+    return x * 2
+}
+
+fn main() {
+    f = inc
+    print(f(2))
+
+    f = double
+    print(f(2))
+}

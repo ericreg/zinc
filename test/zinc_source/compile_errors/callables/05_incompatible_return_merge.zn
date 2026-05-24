@@ -1,0 +1,19 @@
+// expected-error: incompatible callable signatures for function return
+fn add(a, b) {
+    return a + b
+}
+
+fn choose(flag) {
+    if flag {
+        return add
+    }
+
+    return fn(x) {
+        return x + 1
+    }
+}
+
+fn main() {
+    f = choose(false)
+    print(f(3))
+}

@@ -1,0 +1,11 @@
+// expected-error: dict key cannot be a callable in v1
+fn inc(x) {
+    return x + 1
+}
+
+fn main() {
+    values = {
+        inc: 1
+    }
+    print(values["nope"])
+}
