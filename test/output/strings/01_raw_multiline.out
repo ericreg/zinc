@@ -1,0 +1,9 @@
+from helper
+    second line
+roses are red
+    violets are blue
+literal backtick: `
+{not interpolation}
+c:\temp\logs
+struct field
+    with "quotes" and \slashes\

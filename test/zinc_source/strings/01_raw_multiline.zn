@@ -1,0 +1,29 @@
+struct Message {
+    body: string
+}
+
+fn echo(text: string) {
+    print(text)
+}
+
+fn main() {
+    poem = `roses are red
+violets are blue`
+    tick = `literal backtick: ```
+    braces = `{not interpolation}`
+    path = `c:\temp\logs`
+
+    echo(`from helper
+second line`)
+
+    msg = Message {
+        body: `struct field
+with "quotes" and \slashes\`
+    }
+
+    print(poem)
+    print(tick)
+    print(braces)
+    print(path)
+    print(msg.body)
+}

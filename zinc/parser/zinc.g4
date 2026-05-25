@@ -372,6 +372,7 @@ FLOAT
 STRING
     : '"' (~["\\\r\n] | EscapeSequence)* '"'
     | '\'' (~['\\\r\n] | EscapeSequence)* '\''
+    | '`' ('``' | ~[`])* '`'
     ;
 
 fragment EscapeSequence

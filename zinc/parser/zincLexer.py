@@ -1,5 +1,6 @@
 # Generated from zinc.g4 by ANTLR 4.13.2
 from antlr4 import *
+from antlr4.error.Errors import LexerNoViableAltException
 from io import StringIO
 import sys
 if sys.version_info[1] > 5:
@@ -327,4 +328,83 @@ class zincLexer(Lexer):
         self._actions = None
         self._predicates = None
 
+    def nextToken(self):
+        if self._input is None:
+            raise IllegalStateException("nextToken requires a non-null input stream.")
 
+        tokenStartMarker = self._input.mark()
+        try:
+            while True:
+                if self._hitEOF:
+                    self.emitEOF()
+                    return self._token
+                self._token = None
+                self._channel = Token.DEFAULT_CHANNEL
+                self._tokenStartCharIndex = self._input.index
+                self._tokenStartColumn = self._interp.column
+                self._tokenStartLine = self._interp.line
+                self._text = None
+                continueOuter = False
+                while True:
+                    if self._input.LA(1) == ord("`"):
+                        return self._lex_raw_string()
+                    self._type = Token.INVALID_TYPE
+                    ttype = self.SKIP
+                    try:
+                        ttype = self._interp.match(self._input, self._mode)
+                    except LexerNoViableAltException as e:
+                        self.notifyListeners(e)
+                        self.recover(e)
+                    if self._input.LA(1) == Token.EOF:
+                        self._hitEOF = True
+                    if self._type == Token.INVALID_TYPE:
+                        self._type = ttype
+                    if self._type == self.SKIP:
+                        continueOuter = True
+                        break
+                    if self._type != self.MORE:
+                        break
+                if continueOuter:
+                    continue
+                if self._token is None:
+                    self.emit()
+                return self._token
+        finally:
+            self._input.release(tokenStartMarker)
+
+    def _lex_raw_string(self):
+        """Lex a C3-style raw string literal delimited by backticks."""
+        pieces = ["`"]
+        self._interp.consume(self._input)
+
+        while True:
+            lookahead = self._input.LA(1)
+            if lookahead == Token.EOF:
+                self.notifyListeners(
+                    LexerNoViableAltException(self, self._input, self._tokenStartCharIndex, None)
+                )
+                break
+
+            char = chr(lookahead)
+            pieces.append(char)
+            self._interp.consume(self._input)
+
+            if char == "`":
+                if self._input.LA(1) == ord("`"):
+                    pieces.append("`")
+                    self._interp.consume(self._input)
+                    continue
+                break
+
+        token = self._factory.create(
+            self._tokenFactorySourcePair,
+            self.STRING,
+            "".join(pieces),
+            self._channel,
+            self._tokenStartCharIndex,
+            self.getCharIndex() - 1,
+            self._tokenStartLine,
+            self._tokenStartColumn,
+        )
+        self.emitToken(token)
+        return token

@@ -165,7 +165,32 @@ fn main() {
 }
 ```
 
-Use double-quoted strings in Zinc source.
+Use double-quoted strings in Zinc source when you want interpolation or normal escape
+processing.
+
+Use backtick raw strings when you want multiline text or exact contents with no
+escape processing:
+
+```zinc
+fn main() {
+    note = `line 1
+line 2
+literal braces: {name}
+literal slash: \tmp`
+
+    tick = `backtick: ````
+
+    print(note)
+    print(tick)
+}
+```
+
+Raw strings follow C3-style backtick rules:
+
+- they may span multiple lines
+- backslashes are not escapes
+- `{...}` stays literal and does not interpolate
+- write a literal backtick as `` ``
 
 ## Operators
 

@@ -26,6 +26,7 @@ from zinc.modules import (
     struct_path_from_ctx,
 )
 from zinc.parser.zincParser import zincParser as ZincParser
+from zinc.string_literals import is_string_literal, to_rust_string_literal
 
 CompositionMode = str
 
@@ -127,8 +128,8 @@ class StructFieldInfo:
     def rust_default(self) -> str:
         """Get Rust default value for this field."""
         if self.default_value:
-            if self.rust_type() == "String" and self.default_value.startswith('"'):
-                return f"String::from({self.default_value})"
+            if self.rust_type() == "String" and is_string_literal(self.default_value):
+                return f"String::from({to_rust_string_literal(self.default_value)})"
             return self.default_value
         defaults = {
             "i8": "0",

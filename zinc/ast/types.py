@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum, auto
 
+from zinc.string_literals import is_string_literal
+
 
 class BaseType(Enum):
     """Base types supported by Zinc."""
@@ -71,7 +73,7 @@ def parse_literal(literal_text: str) -> BaseType:
         return BaseType.INTEGER
     elif text.replace(".", "", 1).isdigit() and text.count(".") < 2:
         return BaseType.FLOAT
-    elif literal_text.startswith('"') and literal_text.endswith('"'):
+    elif is_string_literal(literal_text):
         return BaseType.STRING
     elif literal_text in ("true", "false"):
         return BaseType.BOOLEAN

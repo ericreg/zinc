@@ -22,6 +22,7 @@ from zinc.ast.types import (
     type_to_rust,
 )
 from zinc.modules import extract_identifier_path, struct_path_from_ctx
+from zinc.string_literals import is_interpolated_string_literal, is_string_literal, to_rust_string_literal
 
 
 @dataclass
@@ -1105,7 +1106,10 @@ class CodeGenVisitor(zincVisitor):
         for i, arg in enumerate(args):
             if i < len(callable_info.param_types):
                 param_type = callable_info.param_types[i]
-                if param_type == BaseType.STRING and arg.startswith('"'):
+                arg_ctx = arg_ctxs[i] if arg_ctxs and i < len(arg_ctxs) else None
+                if param_type == BaseType.STRING and (
+                    self._expr_is_string_literal(arg_ctx) or self._looks_like_rust_string_literal(arg)
+                ):
                     processed.append(f"String::from({arg})")
                 elif param_type == BaseType.ARRAY and i in callable_info.param_array_infos:
                     arr_info = callable_info.param_array_infos[i]
@@ -1117,7 +1121,6 @@ class CodeGenVisitor(zincVisitor):
                     set_info = callable_info.param_set_infos[i]
                     processed.append(f"&mut {arg}" if set_info.is_mutated else f"&{arg}")
                 elif param_type == BaseType.CALLABLE and i in callable_info.param_callable_infos:
-                    arg_ctx = arg_ctxs[i] if arg_ctxs and i < len(arg_ctxs) else None
                     arg_symbol = self._get_expr_symbol(arg_ctx) if arg_ctx is not None else None
                     if arg_symbol and arg_symbol.callable_info and self._is_direct_callable_expr(arg_ctx, arg_symbol):
                         processed.append(
@@ -1204,7 +1207,7 @@ class CodeGenVisitor(zincVisitor):
         if symbol:
             type_str = type_to_rust(symbol.resolved_type)
             if type_str == "String":
-                if value.startswith('"'):
+                if self._expr_is_string_literal(ctx.expression()) or self._looks_like_rust_string_literal(value):
                     value = f"String::from({value})"
                 return f"static {name}: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {value});"
             return f"const {name}: {type_str} = {value};"
@@ -1485,13 +1488,28 @@ class CodeGenVisitor(zincVisitor):
         indent = "    " * self._indent_level
         return f"{indent}{text}"
 
+    def _expr_is_string_literal(self, ctx) -> bool:
+        """Return True when an expression is a direct Zinc string literal."""
+        if not isinstance(ctx, ZincParser.PrimaryExprContext):
+            return False
+        primary = ctx.primaryExpression()
+        if not primary or not primary.literal():
+            return False
+        return is_string_literal(primary.literal().getText())
+
+    def _looks_like_rust_string_literal(self, value: str) -> bool:
+        """Return True when rendered Rust code is definitely a string literal."""
+        return value.startswith('"') or value.startswith('r"') or bool(re.match(r'^r#+\"', value))
+
     # --- Expression Visitors (return Rust code strings) ---
 
     def visitLiteral(self, ctx: ZincParser.LiteralContext) -> str:
         """Visit a literal value."""
         text = ctx.getText()
-        if text.startswith('"') and "{" in text:
+        if is_interpolated_string_literal(text):
             return self._render_interpolated_string(text)
+        if is_string_literal(text):
+            return to_rust_string_literal(text)
         return text
 
     def _render_interpolated_string(self, text: str) -> str:
@@ -1766,7 +1784,7 @@ class CodeGenVisitor(zincVisitor):
     def _coerce_owned(self, value: str, target_type: BaseType, value_ctx=None) -> str:
         """Convert a rendered value into the owned Rust type used inside collections."""
         if target_type == BaseType.STRING:
-            if value.startswith('"'):
+            if self._expr_is_string_literal(value_ctx) or self._looks_like_rust_string_literal(value):
                 return f"String::from({value})"
             return f"{value}.to_string()"
         if target_type == BaseType.FLOAT and value_ctx is not None:
@@ -1774,10 +1792,10 @@ class CodeGenVisitor(zincVisitor):
                 return f"({value} as f64)"
         return value
 
-    def _borrow_lookup_key(self, value: str, key_type: BaseType) -> str:
+    def _borrow_lookup_key(self, value: str, key_type: BaseType, value_ctx=None) -> str:
         """Render a borrowed lookup key for map/set lookup-style methods."""
         if key_type == BaseType.STRING:
-            if value.startswith('"'):
+            if self._expr_is_string_literal(value_ctx) or self._looks_like_rust_string_literal(value):
                 return value
             return f"{value}.as_ref()"
         return f"&{value}"
@@ -1894,7 +1912,7 @@ class CodeGenVisitor(zincVisitor):
         index = self.visit(ctx.expression(1))
         if collection_type == BaseType.DICT:
             info = self._get_dict_info(ctx.expression(0)) or DictTypeInfo()
-            key = self._borrow_lookup_key(index, info.key_type)
+            key = self._borrow_lookup_key(index, info.key_type, ctx.expression(1))
             return f"{collection}.get({key}).unwrap().clone()"
         if collection_type == BaseType.TUPLE:
             tuple_index = self._integer_literal_value(ctx.expression(1))
@@ -1914,7 +1932,7 @@ class CodeGenVisitor(zincVisitor):
             primary = ctx.primaryExpression()
             if primary and primary.literal():
                 lit_text = primary.literal().getText()
-                return bool(lit_text) and not lit_text.startswith('"') and '.' not in lit_text
+                return bool(lit_text) and not is_string_literal(lit_text) and '.' not in lit_text
         return False
 
     def visitRangeExpr(self, ctx: ZincParser.RangeExprContext) -> str:
@@ -2152,7 +2170,7 @@ class CodeGenVisitor(zincVisitor):
                     value = self._coerce_owned(args[1], info.value_type, arg_ctxs[1] if arg_ctxs else None)
                     return f"{target}.insert({key}, {value})"
                 if method_name in {"get", "contains_key", "remove"} and len(args) == 1:
-                    key = self._borrow_lookup_key(args[0], info.key_type)
+                    key = self._borrow_lookup_key(args[0], info.key_type, arg_ctxs[0] if arg_ctxs else None)
                     if method_name == "get":
                         return f"{target}.get({key}).unwrap().clone()"
                     return f"{target}.{method_name}({key})"
@@ -2170,7 +2188,7 @@ class CodeGenVisitor(zincVisitor):
                     elem = self._coerce_owned(args[0], info.element_type, arg_ctxs[0] if arg_ctxs else None)
                     return f"{target}.insert({elem})"
                 if method_name in {"contains", "remove"} and len(args) == 1:
-                    elem = self._borrow_lookup_key(args[0], info.element_type)
+                    elem = self._borrow_lookup_key(args[0], info.element_type, arg_ctxs[0] if arg_ctxs else None)
                     return f"{target}.{method_name}({elem})"
 
             if receiver_type == BaseType.ARRAY and method_name == "push" and len(args) == 1:
@@ -2245,9 +2263,12 @@ class CodeGenVisitor(zincVisitor):
         for i, arg in enumerate(args):
             if i < len(func.arg_types):
                 param_type = func.arg_types[i]
+                arg_ctx = arg_ctxs[i] if arg_ctxs and i < len(arg_ctxs) else None
 
                 # Convert string literal to String::from() for String parameters
-                if param_type == BaseType.STRING and arg.startswith('"'):
+                if param_type == BaseType.STRING and (
+                    self._expr_is_string_literal(arg_ctx) or self._looks_like_rust_string_literal(arg)
+                ):
                     processed.append(f"String::from({arg})")
                 elif param_type == BaseType.CHANNEL and i in func.arg_channel_infos:
                     processed.append(f"{arg}.clone()")
@@ -2271,7 +2292,6 @@ class CodeGenVisitor(zincVisitor):
                     else:
                         processed.append(f"&{arg}")
                 elif param_type == BaseType.CALLABLE and i in func.arg_callable_infos:
-                    arg_ctx = arg_ctxs[i] if arg_ctxs and i < len(arg_ctxs) else None
                     arg_symbol = self._get_expr_symbol(arg_ctx) if arg_ctx is not None else None
                     if arg_symbol and arg_symbol.callable_info and self._is_direct_callable_expr(arg_ctx, arg_symbol):
                         processed.append(
@@ -2306,13 +2326,15 @@ class CodeGenVisitor(zincVisitor):
             if i < len(method.parameters):
                 _, type_ann, resolved = method.parameters[i]
                 param_type = type_ann or resolved
+                arg_ctx = arg_ctxs[i] if arg_ctxs and i < len(arg_ctxs) else None
 
                 # Convert string literal to String::from() for String parameters
-                if param_type and param_type.lower() == "string" and arg.startswith('"'):
+                if param_type and param_type.lower() == "string" and (
+                    self._expr_is_string_literal(arg_ctx) or self._looks_like_rust_string_literal(arg)
+                ):
                     processed.append(f"String::from({arg})")
                 # Apply integer narrowing for literals
                 elif param_type and param_type in ("i32", "i64"):
-                    arg_ctx = arg_ctxs[i] if arg_ctxs and i < len(arg_ctxs) else None
                     narrowed = self._apply_literal_narrowing(arg, param_type, arg_ctx)
                     processed.append(narrowed)
                 else:
@@ -2362,7 +2384,7 @@ class CodeGenVisitor(zincVisitor):
                 if primary.literal():
                     lit_text = primary.literal().getText()
                     # Check if it's a numeric literal (not a string)
-                    if lit_text and not lit_text.startswith('"'):
+                    if lit_text and not is_string_literal(lit_text):
                         return True
                 # Variable reference - check if it's a known literal variable
                 if primary.IDENTIFIER():
@@ -2416,7 +2438,7 @@ class CodeGenVisitor(zincVisitor):
             primary = expr.primaryExpression()
             if primary and primary.literal():
                 lit_text = primary.literal().getText()
-                return lit_text and not lit_text.startswith('"')
+                return lit_text and not is_string_literal(lit_text)
         return False
 
     def _render_print_call(self, args: list[str]) -> str:
@@ -2467,10 +2489,12 @@ class CodeGenVisitor(zincVisitor):
 
         # Get provided field values
         provided_fields: dict[str, str] = {}
+        provided_field_exprs: dict[str, ParserRuleContext] = {}
         for field_ctx in ctx.fieldInit():
             field_name = field_ctx.IDENTIFIER().getText()
             field_value = self.visit(field_ctx.expression())
             provided_fields[field_name] = field_value
+            provided_field_exprs[field_name] = field_ctx.expression()
 
         # Look up struct definition to get all fields with defaults
         if struct:
@@ -2479,7 +2503,10 @@ class CodeGenVisitor(zincVisitor):
                 if f.name in provided_fields:
                     value = provided_fields[f.name]
                     # Convert string literals to String::from() for String fields
-                    if f.rust_type() == "String" and value.startswith('"'):
+                    if f.rust_type() == "String" and (
+                        self._expr_is_string_literal(provided_field_exprs.get(f.name))
+                        or self._looks_like_rust_string_literal(value)
+                    ):
                         value = f"String::from({value})"
                     fields.append(f"{f.name}: {value}")
                 else:

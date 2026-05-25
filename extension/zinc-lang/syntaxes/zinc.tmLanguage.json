@@ -46,6 +46,23 @@
     "strings": {
       "patterns": [
         {
+          "name": "string.quoted.other.raw.zinc",
+          "begin": "`",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.string.begin.zinc" }
+          },
+          "end": "(?<!`)`(?!`)",
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.string.end.zinc" }
+          },
+          "patterns": [
+            {
+              "name": "constant.character.escape.zinc",
+              "match": "``"
+            }
+          ]
+        },
+        {
           "name": "string.quoted.double.zinc",
           "begin": "\"",
           "beginCaptures": {

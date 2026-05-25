@@ -567,6 +567,10 @@ name = "reassign_type"
 path = "src/reassign_type.rs"
 
 [[bin]]
+name = "strings_01_raw_multiline"
+path = "src/strings/01_raw_multiline.rs"
+
+[[bin]]
 name = "structs_01_basic_fields"
 path = "src/structs/01_basic_fields.rs"
 
