@@ -13,28 +13,39 @@ Implemented core pillars
 - [x] Arrays, dicts, sets, tuples
 - [x] Base types
 - [x] Multiline strings
+- [] closure support
+- [] metaprogramming model (seamless compile time)
+- [] decorators
 
+
+out x = 
 
 Currently (possibly forever) unsupported
 ------------------------------------------
-- locking primitives (mutex, semaphore, etc)
-- inheritance
-- macros
-- traits
+- locking primitives (mutex, semaphore, etc) (use channels)
+- inheritance (use composition)
+- macros (Do not use the dark arts)
+- traits (Not needed)
+- generics (Not needed)
 
 Highest-priority language gaps
 ------------------------------
 - [ ] Error handling story
       Today many runtime failure paths still lower to Rust `unwrap()`/panic.
       Need a real Zinc-level model for recoverable errors.
+- [] context managers and cleanup
 - [ ] Zinc stdlib
       The language has a solid core, but it still needs a standard library layer
       to make code generation and user programs feel simpler and more "Python-like".
 
+- more efficient/readable rust code generation
+- write the compilers in Zinc
+- language interop
+
 
 Language ergonomics
 -------------------
-- [ ] Decorators
+
 - [ ] Metadata/introspection surface
       Possible shape:
       - `name()`: symbol name

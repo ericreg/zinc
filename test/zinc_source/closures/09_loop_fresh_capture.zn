@@ -1,0 +1,14 @@
+fn main() {
+    funcs = []
+
+    for i in 0..3 {
+        funcs.push(fn() {
+            return i
+        })
+    }
+
+    print(funcs[0]())
+    print(funcs[1]())
+    print(funcs[2]())
+}
+

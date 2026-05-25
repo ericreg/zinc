@@ -1,5 +1,6 @@
 """Symbol Table for the Zinc compiler."""
 
+import re
 from dataclasses import dataclass, replace
 from enum import Enum, auto
 
@@ -63,6 +64,47 @@ class Symbol:
     anonymous_struct_info: AnonymousStructTypeInfo | None = None
     element_struct_qualified_name: str | None = None
     element_anonymous_struct_info: AnonymousStructTypeInfo | None = None
+    binding_unique_name: str | None = None  # For temps/captured refs: the underlying binding
+    is_captured_binding: bool = False  # True when this binding is shared with one or more closures
+    is_captured_ref: bool = False  # True for closure-local aliases of captured outer bindings
+
+
+@dataclass
+class CaptureBindingInfo:
+    """Metadata for one captured outer binding."""
+
+    name: str
+    binding_unique_name: str
+    resolved_type: BaseType
+    channel_info: ChannelTypeInfo | None = None
+    element_type: BaseType | None = None
+    dict_info: DictTypeInfo | None = None
+    set_info: SetTypeInfo | None = None
+    tuple_info: TupleTypeInfo | None = None
+    callable_info: CallableTypeInfo | None = None
+    struct_qualified_name: str | None = None
+    anonymous_struct_info: AnonymousStructTypeInfo | None = None
+    element_struct_qualified_name: str | None = None
+    element_anonymous_struct_info: AnonymousStructTypeInfo | None = None
+
+
+@dataclass
+class LexicalFunctionInfo:
+    """A nested function or lambda defined within another function specialization."""
+
+    name: str
+    qualified_name: str
+    owner_function: str
+    module_id: str
+    ctx: ParserRuleContext
+    is_async: bool
+    display_name: str
+    captures: list[CaptureBindingInfo] = None  # type: ignore[assignment]
+    finalized: bool = False
+
+    def __post_init__(self) -> None:
+        if self.captures is None:
+            self.captures = []
 
 
 class SymbolTable:
@@ -179,6 +221,13 @@ class SymbolTable:
         """Return all defined symbols."""
         return self._symbols.copy()
 
+    def lookup_by_unique_name(self, unique_name: str) -> Symbol | None:
+        """Look up the symbol with this scoped unique name."""
+        for symbol in reversed(self._symbols):
+            if symbol.unique_name == unique_name:
+                return symbol
+        return None
+
 
 class SymbolTableVisitor(zincVisitor):
     """Walks reachable code and builds a SymbolTable."""
@@ -209,6 +258,8 @@ class SymbolTableVisitor(zincVisitor):
         self._struct_analysis_stack: list[str] = []
         self._struct_symbol_bindings: dict[str, str] = {}
         self._lambda_counter = 0
+        self._lexical_function_scopes: list[dict[str, LexicalFunctionInfo]] = []
+        self.lexical_functions: dict[str, LexicalFunctionInfo] = {}
 
     def _resolve_const_symbol(self, path: list[str]) -> ConstInstance | None:
         """Resolve a const path in the current module."""
@@ -1712,13 +1763,35 @@ class SymbolTableVisitor(zincVisitor):
                         value_anonymous_struct_info
                     )
 
-    def _validate_channel_callable_send(self, callable_info: CallableTypeInfo | None) -> None:
-        """Reject callable categories that are not transportable over channels in v1."""
+    def _callable_is_transport_safe(
+        self,
+        callable_info: CallableTypeInfo | None,
+        seen: set[str] | None = None,
+    ) -> bool:
+        """Return True when a callable graph is safe to move across spawn/channel boundaries."""
         if callable_info is None:
-            return
+            return True
+        active = seen or set()
         for target in callable_info.targets:
             if target.kind == "bound_method":
-                raise ZincTypeError("bound methods cannot be sent over channels in v1")
+                return False
+            if target.kind == "closure":
+                if target.qualified_name in active:
+                    continue
+                closure_info = self.lexical_functions.get(target.qualified_name)
+                if closure_info is None:
+                    continue
+                active.add(target.qualified_name)
+                for capture in closure_info.captures:
+                    if not self._callable_is_transport_safe(capture.callable_info, active):
+                        return False
+                active.remove(target.qualified_name)
+        return True
+
+    def _validate_channel_callable_send(self, callable_info: CallableTypeInfo | None) -> None:
+        """Reject callable categories that are not transportable over channels in v1."""
+        if not self._callable_is_transport_safe(callable_info):
+            raise ZincTypeError("closure captures are not transport-safe for channel send")
 
     def _merge_key_type(self, current: BaseType, incoming: BaseType, label: str) -> BaseType:
         """Merge dict key or set element types, rejecting floats for Rust container keys."""
@@ -2084,6 +2157,7 @@ class SymbolTableVisitor(zincVisitor):
         self._block_counters.clear()
         self._current_function = func.mangled_name
         self._current_module = func.module_id
+        self._lexical_function_scopes = []
         self._current_return_type = BaseType.VOID  # Reset for this function
         self._current_return_dict_info = None
         self._current_return_set_info = None
@@ -2091,12 +2165,41 @@ class SymbolTableVisitor(zincVisitor):
         self._current_return_callable_info = None
         self._current_return_struct_qualified_name = None
         self._current_return_anonymous_struct_info = None
+        ctx = func.ctx
 
         # Use mangled name for scope so symbols are per-specialization
         self.symbols.enter_scope(func.mangled_name)
 
+        lexical_info = self.lexical_functions.get(func.qualified_name)
+        if lexical_info is not None:
+            if not lexical_info.finalized:
+                raise ZincTypeError(f"internal error: lexical function '{lexical_info.display_name}' was not finalized")
+            for capture in lexical_info.captures:
+                capture_symbol = self.symbols.define(
+                    id=capture.name,
+                    kind=SymbolKind.VARIABLE,
+                    resolved_type=capture.resolved_type,
+                    interval=ctx.getSourceInterval(),
+                )
+                capture_symbol.channel_info = self._copy_channel_info(capture.channel_info)
+                capture_symbol.element_type = capture.element_type
+                capture_symbol.dict_info = self._copy_dict_info(capture.dict_info)
+                capture_symbol.set_info = self._copy_set_info(capture.set_info)
+                capture_symbol.tuple_info = self._copy_tuple_info(capture.tuple_info)
+                capture_symbol.callable_info = self._copy_callable_info(capture.callable_info)
+                capture_symbol.anonymous_struct_info = self._copy_anonymous_struct_info(
+                    capture.anonymous_struct_info
+                )
+                capture_symbol.element_struct_qualified_name = capture.element_struct_qualified_name
+                capture_symbol.element_anonymous_struct_info = self._copy_anonymous_struct_info(
+                    capture.element_anonymous_struct_info
+                )
+                capture_symbol.is_captured_ref = True
+                capture_symbol.binding_unique_name = capture.binding_unique_name
+                if capture.struct_qualified_name is not None:
+                    self._struct_symbol_bindings[capture_symbol.unique_name] = capture.struct_qualified_name
+
         # Define parameters with types from func.arg_types
-        ctx = func.ctx
         # Track parameter names for mutation detection
         param_names: list[str] = []
         if hasattr(ctx, "parameterList") and ctx.parameterList():
@@ -2280,26 +2383,107 @@ class SymbolTableVisitor(zincVisitor):
                     f"cannot infer type for empty {symbol.set_info.kind} '{symbol.id}'"
                 )
 
-    def _ensure_lambda_registered(self, ctx: ZincParser.LambdaExpressionContext) -> str:
-        """Register a lambda body as a synthetic top-level function if needed."""
-        if self._current_module is None:
-            raise ZincTypeError("lambda expressions require a module context")
-        start, stop = ctx.getSourceInterval()
-        name = f"__lambda_{start}_{stop}"
-        qualified_name = self.module_graph.qualified_name(self._current_module, name)
-        if qualified_name not in self.atlas.function_defs:
-            self._validate_lambda_no_capture(ctx)
-            self.atlas.function_defs[qualified_name] = ctx
-        return qualified_name
+    def _sanitize_generated_name(self, text: str) -> str:
+        """Convert a compiler-generated name fragment into a Rust-safe identifier."""
+        cleaned = re.sub(r"[^0-9A-Za-z_]+", "_", text)
+        cleaned = cleaned.strip("_")
+        return cleaned or "closure"
 
-    def _validate_lambda_no_capture(self, ctx: ZincParser.LambdaExpressionContext) -> None:
-        """Reject references to enclosing locals, params, and self inside lambdas."""
+    def _current_lexical_function(self, name: str) -> LexicalFunctionInfo | None:
+        """Return the visible lexical function with this name, if any."""
+        for scope in reversed(self._lexical_function_scopes):
+            if name in scope:
+                return scope[name]
+        return None
+
+    def _register_lexical_function_stub(
+        self,
+        name: str,
+        ctx: ParserRuleContext,
+        *,
+        is_async: bool,
+        display_name: str,
+    ) -> LexicalFunctionInfo:
+        """Create or reuse a lexical function stub visible within the current block."""
+        if self._current_module is None or self._current_function is None:
+            raise ZincTypeError("lexical functions require an active function context")
+        if not self._lexical_function_scopes:
+            raise ZincTypeError("lexical function stubs require an active lexical scope")
+
+        current_scope = self._lexical_function_scopes[-1]
+        existing = current_scope.get(name)
+        if existing is not None:
+            return existing
+
+        start, stop = ctx.getSourceInterval()
+        owner_fragment = self._sanitize_generated_name(self._current_function)
+        name_fragment = self._sanitize_generated_name(name)
+        generated_name = f"__lexical_{owner_fragment}_{name_fragment}_{start}_{stop}"
+        qualified_name = self.module_graph.qualified_name(self._current_module, generated_name)
+        info = LexicalFunctionInfo(
+            name=name,
+            qualified_name=qualified_name,
+            owner_function=self._current_function,
+            module_id=self._current_module,
+            ctx=ctx,
+            is_async=is_async,
+            display_name=display_name,
+        )
+        current_scope[name] = info
+        self.lexical_functions[qualified_name] = info
+        self.atlas.function_defs[qualified_name] = ctx
+        return info
+
+    def _copy_capture_binding_info(self, symbol: Symbol) -> CaptureBindingInfo:
+        """Snapshot the relevant type metadata for one captured binding."""
+        return CaptureBindingInfo(
+            name=symbol.id or "",
+            binding_unique_name=symbol.unique_name,
+            resolved_type=symbol.resolved_type,
+            channel_info=self._copy_channel_info(symbol.channel_info),
+            element_type=symbol.element_type,
+            dict_info=self._copy_dict_info(symbol.dict_info),
+            set_info=self._copy_set_info(symbol.set_info),
+            tuple_info=self._copy_tuple_info(symbol.tuple_info),
+            callable_info=self._copy_callable_info(symbol.callable_info),
+            struct_qualified_name=self._struct_qualified_name_for_symbol(symbol),
+            anonymous_struct_info=self._copy_anonymous_struct_info(symbol.anonymous_struct_info),
+            element_struct_qualified_name=symbol.element_struct_qualified_name,
+            element_anonymous_struct_info=self._copy_anonymous_struct_info(symbol.element_anonymous_struct_info),
+        )
+
+    def _analyze_lexical_captures(self, info: LexicalFunctionInfo) -> None:
+        """Compute captures for a lambda or nested function using the current lexical environment."""
+        if info.finalized:
+            return
+
+        ctx = info.ctx
+        body_ctx = ctx.block() if hasattr(ctx, "block") else None
+        if body_ctx is None:
+            raise ZincTypeError("lexical functions require a block body")
+
         local_names: set[str] = set()
-        if ctx.parameterList():
+        if hasattr(ctx, "parameterList") and ctx.parameterList():
             local_names.update(
                 param_ctx.IDENTIFIER().getText()
                 for param_ctx in ctx.parameterList().parameter()
             )
+
+        local_function_names: set[str] = set()
+
+        def predeclare_nested(block_ctx) -> None:
+            if block_ctx is None:
+                return
+            for stmt in block_ctx.statement():
+                if stmt.functionDeclaration():
+                    local_function_names.add(stmt.functionDeclaration().IDENTIFIER().getText())
+                if stmt.asyncFunctionDeclaration():
+                    local_function_names.add(stmt.asyncFunctionDeclaration().IDENTIFIER().getText())
+
+        predeclare_nested(body_ctx)
+
+        captures: list[CaptureBindingInfo] = []
+        seen_bindings: set[str] = set()
 
         top_level_names: set[str] = set()
         if self._current_module is not None:
@@ -2308,19 +2492,41 @@ class SymbolTableVisitor(zincVisitor):
             top_level_names.update(module.injected_symbols.keys())
         top_level_names.update({"print", "chan", "close", "dict", "sort_dict", "set", "sort_set", "Context"})
 
+        def record_capture(name: str) -> None:
+            if name in local_names or name in local_function_names or name in top_level_names:
+                return
+            if name == "self":
+                raise ZincTypeError("closures cannot capture 'self'")
+            outer_symbol = self.symbols.lookup_by_id(name)
+            if outer_symbol is None:
+                return
+            if outer_symbol.kind not in {SymbolKind.VARIABLE, SymbolKind.PARAMETER}:
+                return
+            if outer_symbol.unique_name.startswith(f"{self._current_function}."):
+                pass
+            if outer_symbol.unique_name in seen_bindings:
+                return
+            outer_symbol.is_captured_binding = True
+            captures.append(self._copy_capture_binding_info(outer_symbol))
+            seen_bindings.add(outer_symbol.unique_name)
+
         def walk(node) -> None:
             if node is None:
                 return
             if isinstance(node, ZincParser.PrimaryExpressionContext):
-                if node.getText() == "self":
-                    raise ZincTypeError("lambda expressions cannot capture 'self'")
                 if node.IDENTIFIER():
-                    name = node.IDENTIFIER().getText()
-                    if name not in local_names and name not in top_level_names:
-                        raise ZincTypeError(
-                            f"lambda expressions cannot capture outer variable '{name}'"
-                        )
+                    record_capture(node.IDENTIFIER().getText())
+                return
+            if isinstance(node, ZincParser.SuperAssignmentContext):
+                record_capture(node.IDENTIFIER().getText())
+                walk(node.expression())
+                return
+            if isinstance(node, ZincParser.FunctionDeclarationContext):
+                return
+            if isinstance(node, ZincParser.AsyncFunctionDeclarationContext):
+                return
             if isinstance(node, ZincParser.VariableAssignmentContext):
+                walk(node.expression())
                 target = node.assignmentTarget()
                 if target.IDENTIFIER():
                     local_names.add(target.IDENTIFIER().getText())
@@ -2329,7 +2535,9 @@ class SymbolTableVisitor(zincVisitor):
                         token.getText()
                         for token in target.tupleAssignmentTarget().getTokens(ZincParser.IDENTIFIER)
                     )
+                return
             if isinstance(node, ZincParser.ForStatementContext):
+                walk(node.expression())
                 binding = node.forBinding()
                 if binding.IDENTIFIER():
                     local_names.add(binding.IDENTIFIER().getText())
@@ -2338,13 +2546,31 @@ class SymbolTableVisitor(zincVisitor):
                         token.getText()
                         for token in binding.tupleAssignmentTarget().getTokens(ZincParser.IDENTIFIER)
                     )
+                walk(node.block())
+                return
+            if isinstance(node, ZincParser.BlockContext):
+                nested_declared: list[str] = []
+                for stmt in node.statement():
+                    if stmt.functionDeclaration():
+                        nested_declared.append(stmt.functionDeclaration().IDENTIFIER().getText())
+                    if stmt.asyncFunctionDeclaration():
+                        nested_declared.append(stmt.asyncFunctionDeclaration().IDENTIFIER().getText())
+                previous_function_names = set(local_function_names)
+                local_function_names.update(nested_declared)
+                for stmt in node.statement():
+                    walk(stmt)
+                local_function_names.clear()
+                local_function_names.update(previous_function_names)
+                return
             if hasattr(node, "getChildCount"):
                 for i in range(node.getChildCount()):
                     child = node.getChild(i)
                     if isinstance(child, ParserRuleContext):
                         walk(child)
 
-        walk(ctx.block())
+        walk(body_ctx)
+        info.captures = captures
+        info.finalized = True
 
     def _callable_info_from_function_ctx(
         self,
@@ -2406,9 +2632,40 @@ class SymbolTableVisitor(zincVisitor):
             param_callable_infos=param_callable_infos,
             param_struct_qualified_names=param_struct_qualified_names,
             param_anonymous_struct_infos=param_anonymous_struct_infos,
-            return_type=BaseType.UNKNOWN,
+            return_type=self._callable_return_hint(ctx),
             targets=(target,),
         )
+
+    def _callable_return_hint(self, ctx) -> BaseType:
+        """Return a cheap initial return-type hint for callable declarations."""
+        block_ctx = ctx.block() if hasattr(ctx, "block") else None
+        if block_ctx is None:
+            return BaseType.UNKNOWN
+
+        saw_value_return = False
+
+        def walk(node) -> None:
+            nonlocal saw_value_return
+            if node is None or saw_value_return:
+                return
+            if isinstance(node, ZincParser.FunctionDeclarationContext):
+                return
+            if isinstance(node, ZincParser.AsyncFunctionDeclarationContext):
+                return
+            if isinstance(node, ZincParser.LambdaExpressionContext):
+                return
+            if isinstance(node, ZincParser.ReturnStatementContext):
+                if node.expression() is not None:
+                    saw_value_return = True
+                return
+            if hasattr(node, "getChildCount"):
+                for i in range(node.getChildCount()):
+                    child = node.getChild(i)
+                    if isinstance(child, ParserRuleContext):
+                        walk(child)
+
+        walk(block_ctx)
+        return BaseType.UNKNOWN if saw_value_return else BaseType.VOID
 
     def _callable_info_from_method(
         self,
@@ -2438,6 +2695,17 @@ class SymbolTableVisitor(zincVisitor):
                 ),
             ),
         )
+
+    def _callable_info_from_lexical_function(self, info: LexicalFunctionInfo) -> CallableTypeInfo:
+        """Build callable metadata for a nested sync function."""
+        if info.is_async:
+            raise ZincTypeError("async functions cannot be used as callable values")
+        target = CallableTarget(
+            kind="closure",
+            qualified_name=info.qualified_name,
+            display_name=info.display_name,
+        )
+        return self._callable_info_from_function_ctx(info.ctx, target)
 
     def _callable_info_from_symbol_path(self, path: list[str]) -> CallableTypeInfo | None:
         """Resolve a value-position path as a callable reference, if possible."""
@@ -2477,6 +2745,48 @@ class SymbolTableVisitor(zincVisitor):
             return self._callable_info_from_method(method, target)
 
         return None
+
+    def _callable_signature_is_concrete(self, callable_info: CallableTypeInfo | None) -> bool:
+        """Return True when a callable signature is concrete enough to specialize."""
+        if callable_info is None:
+            return False
+        if callable_info.return_type == BaseType.UNKNOWN:
+            return False
+        if any(base_type == BaseType.UNKNOWN for base_type in callable_info.param_types):
+            return False
+        return all(
+            self._callable_signature_is_concrete(nested)
+            for nested in callable_info.param_callable_infos.values()
+        )
+
+    def _materialize_callable_targets(self, callable_info: CallableTypeInfo | None) -> None:
+        """Ensure concrete callable values have emitted function specializations."""
+        if (
+            callable_info is None
+            or self._current_function is None
+            or not self._callable_signature_is_concrete(callable_info)
+        ):
+            return
+
+        for target in callable_info.targets:
+            if target.kind not in {"function", "lambda", "closure"}:
+                continue
+            func_def = self.atlas.function_defs.get(target.qualified_name)
+            if func_def is None:
+                continue
+            self.atlas.add_specialization(
+                target.qualified_name,
+                callable_info.param_types,
+                func_def,
+                self._current_function,
+                arg_array_infos=callable_info.param_array_infos,
+                arg_dict_infos=callable_info.param_dict_infos,
+                arg_set_infos=callable_info.param_set_infos,
+                arg_tuple_infos=callable_info.param_tuple_infos,
+                arg_callable_infos=callable_info.param_callable_infos,
+                arg_struct_qualified_names=callable_info.param_struct_qualified_names,
+                arg_anonymous_struct_infos=callable_info.param_anonymous_struct_infos,
+            )
 
     def _callable_return_info_from_function(self, func: FunctionInstance) -> CallableTypeInfo:
         """Convert a resolved function specialization into a callable signature."""
@@ -2645,6 +2955,9 @@ class SymbolTableVisitor(zincVisitor):
                 temp.element_anonymous_struct_info = self._copy_anonymous_struct_info(
                     symbol.element_anonymous_struct_info
                 )
+                temp.binding_unique_name = symbol.unique_name
+                temp.is_captured_binding = symbol.is_captured_binding
+                temp.is_captured_ref = symbol.is_captured_ref
                 struct_qualified_name = self._struct_qualified_name_for_symbol(symbol)
                 if struct_qualified_name is not None:
                     self._struct_symbol_bindings[temp.unique_name] = struct_qualified_name
@@ -2664,6 +2977,29 @@ class SymbolTableVisitor(zincVisitor):
                 )
                 return const_symbol.resolved_type
 
+            lexical_function = self._current_lexical_function(name)
+            if lexical_function is not None:
+                is_direct_call = (
+                    isinstance(ctx.parentCtx, ZincParser.PrimaryExprContext)
+                    and isinstance(ctx.parentCtx.parentCtx, ZincParser.FunctionCallExprContext)
+                    and ctx.parentCtx.parentCtx.expression() is ctx.parentCtx
+                )
+                if lexical_function.is_async:
+                    if is_direct_call:
+                        self.symbols.define_temp(
+                            resolved_type=BaseType.UNKNOWN,
+                            interval=ctx.getSourceInterval(),
+                        )
+                        return BaseType.UNKNOWN
+                    raise ZincTypeError("async functions cannot be used as callable values")
+                temp = self.symbols.define_temp(
+                    resolved_type=BaseType.CALLABLE,
+                    interval=ctx.getSourceInterval(),
+                )
+                temp.callable_info = self._callable_info_from_lexical_function(lexical_function)
+                self._materialize_callable_targets(temp.callable_info)
+                return BaseType.CALLABLE
+
             callable_info = self._callable_info_from_symbol_path([name])
             if callable_info is not None:
                 temp = self.symbols.define_temp(
@@ -2671,6 +3007,7 @@ class SymbolTableVisitor(zincVisitor):
                     interval=ctx.getSourceInterval(),
                 )
                 temp.callable_info = callable_info
+                self._materialize_callable_targets(callable_info)
                 return BaseType.CALLABLE
 
             self.symbols.define_temp(
@@ -2712,19 +3049,34 @@ class SymbolTableVisitor(zincVisitor):
         return self.visit(ctx.lambdaExpression())
 
     def visitLambdaExpression(self, ctx: ZincParser.LambdaExpressionContext) -> BaseType:
-        """Register a lambda as a synthetic callable target."""
-        qualified_name = self._ensure_lambda_registered(ctx)
-        target = CallableTarget(
-            kind="lambda",
-            qualified_name=qualified_name,
-            display_name="<lambda>",
-        )
-        callable_info = self._callable_info_from_function_ctx(ctx, target)
+        """Register a lambda as a lexical closure target."""
+        if self._current_module is None or self._current_function is None:
+            raise ZincTypeError("lambda expressions require a function context")
+        start, stop = ctx.getSourceInterval()
+        owner_fragment = self._sanitize_generated_name(self._current_function)
+        generated_name = f"__lambda_{owner_fragment}_{start}_{stop}"
+        qualified_name = self.module_graph.qualified_name(self._current_module, generated_name)
+        info = self.lexical_functions.get(qualified_name)
+        if info is None:
+            info = LexicalFunctionInfo(
+                name=generated_name,
+                qualified_name=qualified_name,
+                owner_function=self._current_function,
+                module_id=self._current_module,
+                ctx=ctx,
+                is_async=False,
+                display_name="<lambda>",
+            )
+            self.lexical_functions[qualified_name] = info
+            self.atlas.function_defs[qualified_name] = ctx
+        self._analyze_lexical_captures(info)
+        callable_info = self._callable_info_from_lexical_function(info)
         temp = self.symbols.define_temp(
             resolved_type=BaseType.CALLABLE,
             interval=ctx.getSourceInterval(),
         )
         temp.callable_info = callable_info
+        self._materialize_callable_targets(callable_info)
         return BaseType.CALLABLE
 
     def visitPrimaryExpr(self, ctx: ZincParser.PrimaryExprContext) -> BaseType:
@@ -3302,6 +3654,56 @@ class SymbolTableVisitor(zincVisitor):
         if isinstance(callee_ctx, ZincParser.PrimaryExprContext):
             primary = callee_ctx.primaryExpression()
             if primary and primary.IDENTIFIER():
+                lexical_function = self._current_lexical_function(primary.IDENTIFIER().getText())
+                if lexical_function is not None and BaseType.UNKNOWN not in arg_types:
+                    mangled = self.atlas.add_specialization(
+                        lexical_function.qualified_name,
+                        arg_types,
+                        lexical_function.ctx,
+                        self._current_function,
+                        arg_channel_infos,
+                        arg_array_infos,
+                        arg_dict_infos,
+                        arg_set_infos,
+                        arg_tuple_infos,
+                        arg_callable_infos,
+                        arg_struct_qualified_names,
+                        arg_anonymous_struct_infos,
+                    )
+                    key = (self._current_function, ctx.getSourceInterval())
+                    self.specialization_map[key] = mangled
+                    func_instance = self.atlas.functions.get(mangled)
+                    if func_instance:
+                        for idx, chan_info in arg_channel_infos.items():
+                            func_instance.arg_channel_infos.setdefault(idx, [])
+                            if all(existing is not chan_info for existing in func_instance.arg_channel_infos[idx]):
+                                func_instance.arg_channel_infos[idx].append(chan_info)
+                    if func_instance and func_instance.return_type != BaseType.VOID:
+                        temp = self.symbols.define_temp(
+                            resolved_type=func_instance.return_type,
+                            interval=ctx.getSourceInterval(),
+                        )
+                        temp.dict_info = self._copy_dict_info(func_instance.return_dict_info)
+                        temp.set_info = self._copy_set_info(func_instance.return_set_info)
+                        temp.tuple_info = self._copy_tuple_info(func_instance.return_tuple_info)
+                        temp.callable_info = self._copy_callable_info(func_instance.return_callable_info)
+                        temp.anonymous_struct_info = self._copy_anonymous_struct_info(
+                            func_instance.return_anonymous_struct_info
+                        )
+                        if func_instance.return_struct_qualified_name is not None:
+                            self._struct_symbol_bindings[temp.unique_name] = func_instance.return_struct_qualified_name
+                        return func_instance.return_type
+                    if func_instance is not None:
+                        if func_instance.return_type != BaseType.VOID:
+                            self.symbols.define_temp(
+                                resolved_type=func_instance.return_type,
+                                interval=ctx.getSourceInterval(),
+                            )
+                        return func_instance.return_type
+
+        if isinstance(callee_ctx, ZincParser.PrimaryExprContext):
+            primary = callee_ctx.primaryExpression()
+            if primary and primary.IDENTIFIER():
                 func_name = primary.IDENTIFIER().getText()
                 if func_name == "chan":
                     if len(arg_types) > 1:
@@ -3621,7 +4023,7 @@ class SymbolTableVisitor(zincVisitor):
 
                 if target.kind == "context_cancel":
                     candidate_type = BaseType.VOID
-                elif target.kind in {"function", "lambda"}:
+                elif target.kind in {"function", "lambda", "closure"}:
                     func_def = self.atlas.function_defs.get(target.qualified_name)
                     if func_def is None:
                         raise ZincTypeError(f"unknown callable target '{target.display_name}'")
@@ -3993,6 +4395,10 @@ class SymbolTableVisitor(zincVisitor):
         if target.IDENTIFIER():
             var_name = target.IDENTIFIER().getText()
             existing = self.symbols.lookup_by_id(var_name)
+            if existing is not None and existing.is_captured_ref:
+                raise ZincTypeError(
+                    f"assignment to captured outer variable '{var_name}' requires '<<-'"
+                )
 
             # Check if this is a chan() call - track channel info
             if expr_type == BaseType.CHANNEL and self._is_channel_constructor_call(ctx.expression()):
@@ -4048,6 +4454,30 @@ class SymbolTableVisitor(zincVisitor):
             expr_anonymous_struct_info = self._copy_anonymous_struct_info(
                 expr_symbol.anonymous_struct_info if expr_symbol else None
             )
+
+            if (
+                existing is not None
+                and existing.is_captured_binding
+                and not self._assignment_metadata_compatible(
+                    existing.resolved_type,
+                    expr_type,
+                    expected_array=self._array_info_from_symbol(existing),
+                    actual_array=expr_array_info,
+                    expected_dict=existing.dict_info,
+                    actual_dict=expr_dict_info,
+                    expected_set=existing.set_info,
+                    actual_set=expr_set_info,
+                    expected_tuple=existing.tuple_info,
+                    actual_tuple=expr_tuple_info,
+                    expected_callable=existing.callable_info,
+                    actual_callable=expr_callable_info,
+                    expected_struct_qualified_name=self._struct_qualified_name_for_symbol(existing),
+                    actual_struct_qualified_name=expr_struct_qualified_name,
+                    expected_anonymous_struct_info=existing.anonymous_struct_info,
+                    actual_anonymous_struct_info=expr_anonymous_struct_info,
+                )
+            ):
+                raise ZincTypeError(f"captured outer variable '{var_name}' cannot change type after capture")
 
             if expr_type == BaseType.CHANNEL and expr_channel_info is not None:
                 existing_channel_info = self._channel_infos.get(var_name)
@@ -4576,14 +5006,94 @@ class SymbolTableVisitor(zincVisitor):
         self.visit(ctx.block())
         self.symbols.exit_scope()
 
+    def visitFunctionDeclaration(self, ctx: ZincParser.FunctionDeclarationContext) -> None:
+        """Finalize a nested sync function declaration without visiting its body here."""
+        info = self._current_lexical_function(ctx.IDENTIFIER().getText())
+        if info is None:
+            info = self._register_lexical_function_stub(
+                ctx.IDENTIFIER().getText(),
+                ctx,
+                is_async=False,
+                display_name=ctx.IDENTIFIER().getText(),
+            )
+        self._analyze_lexical_captures(info)
+
+    def visitAsyncFunctionDeclaration(self, ctx: ZincParser.AsyncFunctionDeclarationContext) -> None:
+        """Finalize a nested async function declaration without visiting its body here."""
+        info = self._current_lexical_function(ctx.IDENTIFIER().getText())
+        if info is None:
+            info = self._register_lexical_function_stub(
+                ctx.IDENTIFIER().getText(),
+                ctx,
+                is_async=True,
+                display_name=ctx.IDENTIFIER().getText(),
+            )
+        self._analyze_lexical_captures(info)
+
     def visitBlock(self, ctx: ZincParser.BlockContext) -> None:
         """Visit a block of statements."""
-        for stmt in ctx.statement():
-            self.visit(stmt)
+        self._lexical_function_scopes.append({})
+        try:
+            for stmt in ctx.statement():
+                if stmt.functionDeclaration():
+                    fn_ctx = stmt.functionDeclaration()
+                    self._register_lexical_function_stub(
+                        fn_ctx.IDENTIFIER().getText(),
+                        fn_ctx,
+                        is_async=False,
+                        display_name=fn_ctx.IDENTIFIER().getText(),
+                    )
+                elif stmt.asyncFunctionDeclaration():
+                    fn_ctx = stmt.asyncFunctionDeclaration()
+                    self._register_lexical_function_stub(
+                        fn_ctx.IDENTIFIER().getText(),
+                        fn_ctx,
+                        is_async=True,
+                        display_name=fn_ctx.IDENTIFIER().getText(),
+                    )
+            for stmt in ctx.statement():
+                self.visit(stmt)
+        finally:
+            self._lexical_function_scopes.pop()
 
     def visitExpressionStatement(self, ctx: ZincParser.ExpressionStatementContext) -> None:
         """Visit expression statement."""
         self.visit(ctx.expression())
+
+    def visitSuperAssignment(self, ctx: ZincParser.SuperAssignmentContext) -> None:
+        """Visit closure super-assignment to a captured outer binding."""
+        name = ctx.IDENTIFIER().getText()
+        symbol = self.symbols.lookup_by_id(name)
+        if symbol is None or not symbol.is_captured_ref:
+            raise ZincTypeError(f"'<<-' expects a captured outer variable '{name}'")
+        expr_type = self.visit(ctx.expression())
+        if expr_type == BaseType.VOID:
+            raise ZincTypeError("mutating collection methods cannot be used as assignment values")
+        expr_symbol = self._expr_symbol(ctx.expression())
+        if not self._assignment_metadata_compatible(
+            symbol.resolved_type,
+            expr_type,
+            expected_dict=symbol.dict_info,
+            actual_dict=self._copy_dict_info(expr_symbol.dict_info) if expr_symbol else None,
+            expected_set=symbol.set_info,
+            actual_set=self._copy_set_info(expr_symbol.set_info) if expr_symbol else None,
+            expected_tuple=symbol.tuple_info,
+            actual_tuple=self._copy_tuple_info(expr_symbol.tuple_info) if expr_symbol else None,
+            expected_callable=symbol.callable_info,
+            actual_callable=self._copy_callable_info(expr_symbol.callable_info) if expr_symbol else None,
+            expected_struct_qualified_name=self._struct_qualified_name_for_symbol(symbol),
+            actual_struct_qualified_name=self._struct_qualified_name_for_symbol(expr_symbol),
+            expected_anonymous_struct_info=symbol.anonymous_struct_info,
+            actual_anonymous_struct_info=self._copy_anonymous_struct_info(
+                expr_symbol.anonymous_struct_info if expr_symbol else None
+            ),
+        ):
+            raise ZincTypeError(f"captured outer variable '{name}' cannot change type after capture")
+        symbol.is_mutated = True
+        self.symbols.define_temp(
+            resolved_type=symbol.resolved_type,
+            interval=ctx.getSourceInterval(),
+        )
 
     def visitSelectStatement(self, ctx: ZincParser.SelectStatementContext) -> None:
         """Visit a select statement and validate case structure."""
@@ -4697,8 +5207,6 @@ class SymbolTableVisitor(zincVisitor):
         """Visit spawn statement and create specialization for spawned function."""
         func_expr = ctx.expression()
         path = extract_identifier_path(func_expr)
-        if path is None or self._current_module is None:
-            return
 
         # Collect argument types and track channel arguments
         arg_types: list[BaseType] = []
@@ -4737,34 +5245,64 @@ class SymbolTableVisitor(zincVisitor):
                                 anonymous_struct_info
                             ) or AnonymousStructTypeInfo()
 
-        resolved_function = self.module_graph.resolve_function_path(self._current_module, path)
-        if resolved_function is None or resolved_function.name in ("print", "chan"):
-            return
+        if path and len(path) == 1:
+            lexical_function = self._current_lexical_function(path[0])
+            if lexical_function is not None and BaseType.UNKNOWN not in arg_types:
+                mangled = self.atlas.add_specialization(
+                    lexical_function.qualified_name,
+                    arg_types,
+                    lexical_function.ctx,
+                    self._current_function,
+                    arg_channel_infos,
+                    arg_callable_infos=arg_callable_infos,
+                    arg_struct_qualified_names=arg_struct_qualified_names,
+                    arg_anonymous_struct_infos=arg_anonymous_struct_infos,
+                )
+                key = (self._current_function, ctx.getSourceInterval())
+                self.specialization_map[key] = mangled
+                self.atlas.functions[mangled].is_async = lexical_function.is_async
+                for idx, chan_info in arg_channel_infos.items():
+                    self.atlas.functions[mangled].arg_channel_infos.setdefault(idx, [])
+                    if all(
+                        existing is not chan_info
+                        for existing in self.atlas.functions[mangled].arg_channel_infos[idx]
+                    ):
+                        self.atlas.functions[mangled].arg_channel_infos[idx].append(chan_info)
+                return
 
-        func_def = self.atlas.function_defs.get(resolved_function.qualified_name)
-        if func_def is None or BaseType.UNKNOWN in arg_types:
-            return
+        if path is not None and self._current_module is not None:
+            resolved_function = self.module_graph.resolve_function_path(self._current_module, path)
+            if resolved_function is not None and resolved_function.name not in ("print", "chan"):
+                func_def = self.atlas.function_defs.get(resolved_function.qualified_name)
+                if func_def is not None and BaseType.UNKNOWN not in arg_types:
+                    mangled = self.atlas.add_specialization(
+                        resolved_function.qualified_name,
+                        arg_types,
+                        func_def,
+                        self._current_function,
+                        arg_channel_infos,
+                        arg_callable_infos=arg_callable_infos,
+                        arg_struct_qualified_names=arg_struct_qualified_names,
+                        arg_anonymous_struct_infos=arg_anonymous_struct_infos,
+                    )
+                    key = (self._current_function, ctx.getSourceInterval())
+                    self.specialization_map[key] = mangled
+                    self.atlas.functions[mangled].is_async = True
+                    for idx, chan_info in arg_channel_infos.items():
+                        self.atlas.functions[mangled].arg_channel_infos.setdefault(idx, [])
+                        if all(
+                            existing is not chan_info
+                            for existing in self.atlas.functions[mangled].arg_channel_infos[idx]
+                        ):
+                            self.atlas.functions[mangled].arg_channel_infos[idx].append(chan_info)
+                    return
 
-        mangled = self.atlas.add_specialization(
-            resolved_function.qualified_name,
-            arg_types,
-            func_def,
-            self._current_function,
-            arg_channel_infos,
-            arg_callable_infos=arg_callable_infos,
-            arg_struct_qualified_names=arg_struct_qualified_names,
-            arg_anonymous_struct_infos=arg_anonymous_struct_infos,
-        )
-        key = (self._current_function, ctx.getSourceInterval())
-        self.specialization_map[key] = mangled
-        self.atlas.functions[mangled].is_async = True
-        for idx, chan_info in arg_channel_infos.items():
-            self.atlas.functions[mangled].arg_channel_infos.setdefault(idx, [])
-            if all(
-                existing is not chan_info
-                for existing in self.atlas.functions[mangled].arg_channel_infos[idx]
-            ):
-                self.atlas.functions[mangled].arg_channel_infos[idx].append(chan_info)
+        callee_type = self.visit(func_expr)
+        callee_symbol = self._expr_symbol(func_expr)
+        if callee_type == BaseType.CALLABLE and callee_symbol and callee_symbol.callable_info:
+            if not self._callable_is_transport_safe(callee_symbol.callable_info):
+                raise ZincTypeError("closure captures are not transport-safe for spawn")
+            return
 
     def visitChannelSendStatement(self, ctx: ZincParser.ChannelSendStatementContext) -> None:
         """Visit channel send statement and infer channel element type."""

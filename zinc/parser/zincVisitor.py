@@ -119,6 +119,11 @@ class zincVisitor(ParseTreeVisitor):
         return self.visitChildren(ctx)
 
 
+    # Visit a parse tree produced by zincParser#superAssignment.
+    def visitSuperAssignment(self, ctx:zincParser.SuperAssignmentContext):
+        return self.visitChildren(ctx)
+
+
     # Visit a parse tree produced by zincParser#assignmentTarget.
     def visitAssignmentTarget(self, ctx:zincParser.AssignmentTargetContext):
         return self.visitChildren(ctx)

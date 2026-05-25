@@ -1,0 +1,10 @@
+fn main() {
+    base = 2
+
+    async inner(x) {
+        print(base + x)
+    }
+
+    await inner(3)
+}
+

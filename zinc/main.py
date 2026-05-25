@@ -25,7 +25,11 @@ def _compile_pipeline(file: Path):
     symbol_visitor = SymbolTableVisitor(atlas)
     symbols = symbol_visitor.resolve()
     codegen = CodeGenVisitor(
-        atlas, symbols, symbol_visitor.specialization_map, symbol_visitor._channel_infos
+        atlas,
+        symbols,
+        symbol_visitor.specialization_map,
+        symbol_visitor._channel_infos,
+        symbol_visitor.lexical_functions,
     )
     return module_graph, atlas, symbols, codegen
 

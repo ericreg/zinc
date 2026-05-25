@@ -1,0 +1,10 @@
+fn apply(f, x) {
+    return f(x)
+}
+
+fn main() {
+    offset = 5
+    print(apply(fn(x: i64) {
+        return offset + x
+    }, 7))
+}

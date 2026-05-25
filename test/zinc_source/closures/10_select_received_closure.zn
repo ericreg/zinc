@@ -1,0 +1,15 @@
+fn main() {
+    base = 8
+    jobs = chan()
+    jobs <- fn(x) {
+        return base + x
+    }
+    close(jobs)
+
+    select {
+        case job = <-jobs {
+            print(job(2))
+        }
+    }
+}
+

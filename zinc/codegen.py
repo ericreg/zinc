@@ -8,7 +8,7 @@ from antlr4 import ParserRuleContext
 from zinc.parser.zincVisitor import zincVisitor
 from zinc.parser.zincParser import zincParser as ZincParser
 from zinc.atlas import Atlas, FunctionInstance, StructInstance, ConstInstance, StructFieldInfo, StructMethodInfo
-from zinc.symbols import SymbolTable, SymbolKind
+from zinc.symbols import LexicalFunctionInfo, SymbolTable, SymbolKind
 from zinc.ast.types import (
     AnonymousStructTypeInfo,
     ArrayTypeInfo,
@@ -82,12 +82,14 @@ class CodeGenVisitor(zincVisitor):
         symbols: SymbolTable,
         specialization_map: dict[tuple[str | None, tuple[int, int]], str] | None = None,
         channel_infos: dict[str, ChannelTypeInfo] | None = None,
+        lexical_functions: dict[str, LexicalFunctionInfo] | None = None,
     ):
         self.atlas = atlas
         self.module_graph = atlas.module_graph
         self.symbols = symbols
         self._specialization_map = specialization_map or {}  # (caller, interval) -> mangled
         self._channel_infos = channel_infos or {}  # var_name -> ChannelTypeInfo
+        self._lexical_functions = lexical_functions or {}
         self._uses_async = False
         self._current_function: str | None = None
         self._current_module: str | None = None
@@ -110,11 +112,13 @@ class CodeGenVisitor(zincVisitor):
         self._boxed_struct_vars: set[tuple[str | None, str]] = set()
         self._callable_signatures: dict[str, CallableTypeInfo] = {}
         self._anonymous_structs: dict[tuple, AnonymousStructTypeInfo] = {}
+        self._captured_binding_names: set[str] = set()
 
     def generate(self) -> RustProgram:
         """Main entry point - generate Rust code for all reachable code."""
         # Pre-scan to determine which struct vars need mut
         self._prescan_for_mut_vars()
+        self._collect_captured_binding_names()
         self._collect_callable_signatures()
         self._collect_anonymous_struct_types()
         self._mark_async_functions()
@@ -126,6 +130,11 @@ class CodeGenVisitor(zincVisitor):
             self._generate_callable_enum(info)
             for _, info in sorted(self._callable_signatures.items())
         ]
+        closure_envs = [
+            self._generate_closure_env_struct(info)
+            for _, info in sorted(self._lexical_functions.items())
+            if info.finalized
+        ]
         anonymous_structs = [
             self._generate_anonymous_struct(info)
             for _, info in sorted(
@@ -135,6 +144,7 @@ class CodeGenVisitor(zincVisitor):
         ]
         structs = [
             *runtime_helpers,
+            *closure_envs,
             *callable_enums,
             *anonymous_structs,
             *[self._generate_struct(s) for s in self.atlas.structs.values()],
@@ -173,6 +183,14 @@ class CodeGenVisitor(zincVisitor):
                 self._prescan_block(func.ctx.block())
         self._current_module = previous_module
         self._current_function = previous_function
+
+    def _collect_captured_binding_names(self) -> None:
+        """Collect symbols that need shared cell storage for closure captures."""
+        self._captured_binding_names = {
+            symbol.unique_name
+            for symbol in self.symbols.all_symbols()
+            if symbol.is_captured_binding
+        }
 
     def _prescan_block(self, block_ctx) -> None:
         """Recursively scan a block for struct assignments and method calls."""
@@ -302,6 +320,8 @@ class CodeGenVisitor(zincVisitor):
             return True
         if isinstance(node, ZincParser.ChannelSendStatementContext):
             return True
+        if isinstance(node, ZincParser.SpawnStatementContext):
+            return True
         if isinstance(node, ZincParser.FunctionCallExprContext):
             callee_name = self._function_call_name(node)
             if callee_name == "close":
@@ -368,6 +388,7 @@ class CodeGenVisitor(zincVisitor):
         imports = []
         collections: set[str] = set()
         needs_rc_refcell = bool(self._boxed_struct_vars)
+        needs_arc_mutex = bool(self._captured_binding_names)
         for symbol in self.symbols.all_symbols():
             if symbol.dict_info:
                 collections.add(symbol.dict_info.rust_container())
@@ -387,6 +408,8 @@ class CodeGenVisitor(zincVisitor):
         if needs_rc_refcell:
             imports.append("use std::cell::RefCell;")
             imports.append("use std::rc::Rc;")
+        if needs_arc_mutex:
+            imports.append("use std::sync::{Arc, Mutex};")
         return imports
 
     def _generate_runtime_helpers(self) -> list[str]:
@@ -919,7 +942,7 @@ class CodeGenVisitor(zincVisitor):
 
     def _callable_dispatch_target(self, info: CallableTypeInfo, target: CallableTarget) -> str:
         """Render the Rust callable target for a dispatcher arm."""
-        if target.kind in {"function", "lambda"}:
+        if target.kind in {"function", "lambda", "closure"}:
             return self.atlas._mangle_name(
                 target.qualified_name,
                 info.param_types,
@@ -946,6 +969,11 @@ class CodeGenVisitor(zincVisitor):
         """Return the Rust payload type for a callable enum variant."""
         if target.kind == "context_cancel":
             return "__ZincContext"
+        if target.kind == "closure":
+            info = self._closure_info(target.qualified_name)
+            if info is None:
+                return None
+            return self._closure_env_rust_name(info)
         if target.kind != "bound_method":
             return None
         struct_qualified_name = target.receiver_struct_qualified_name
@@ -1005,11 +1033,18 @@ class CodeGenVisitor(zincVisitor):
                     lines.append(f"            Self::{variant_name}(ctx) => {call_expr},")
             else:
                 callee = self._callable_dispatch_target(info, target)
-                call_expr = f"{callee}({args})"
-                if ret_type == "()":
-                    lines.append(f"            Self::{variant_name} => {{ {call_expr}; }}")
+                if target.kind == "closure":
+                    call_expr = f"{callee}(env.clone(){', ' if args else ''}{args})"
+                    if ret_type == "()":
+                        lines.append(f"            Self::{variant_name}(env) => {{ {call_expr}; }}")
+                    else:
+                        lines.append(f"            Self::{variant_name}(env) => {call_expr},")
                 else:
-                    lines.append(f"            Self::{variant_name} => {call_expr},")
+                    call_expr = f"{callee}({args})"
+                    if ret_type == "()":
+                        lines.append(f"            Self::{variant_name} => {{ {call_expr}; }}")
+                    else:
+                        lines.append(f"            Self::{variant_name} => {call_expr},")
         lines.append("        }")
         lines.append("    }")
         lines.append("}")
@@ -1028,6 +1063,11 @@ class CodeGenVisitor(zincVisitor):
         if target.kind == "bound_method":
             receiver_name = target.receiver_name or ""
             return f"{info.rust_type_name()}::{variant_name}({receiver_name}.clone())"
+        if target.kind == "closure":
+            closure_info = self._closure_info(target.qualified_name)
+            if closure_info is None:
+                return f"{info.rust_type_name()}::{variant_name}"
+            return f"{info.rust_type_name()}::{variant_name}({self._closure_env_constructor(closure_info)})"
         return f"{info.rust_type_name()}::{variant_name}"
 
     def _render_callable_value_for_signature(
@@ -1043,6 +1083,11 @@ class CodeGenVisitor(zincVisitor):
         if target.kind == "bound_method":
             receiver_name = target.receiver_name or ""
             return f"{expected_info.rust_type_name()}::{variant_name}({receiver_name}.clone())"
+        if target.kind == "closure":
+            closure_info = self._closure_info(target.qualified_name)
+            if closure_info is None:
+                return f"{expected_info.rust_type_name()}::{variant_name}"
+            return f"{expected_info.rust_type_name()}::{variant_name}({self._closure_env_constructor(closure_info)})"
         return f"{expected_info.rust_type_name()}::{variant_name}"
 
     def _is_direct_callable_expr(self, expr_ctx, expr_symbol=None) -> bool:
@@ -1177,6 +1222,100 @@ class CodeGenVisitor(zincVisitor):
         """Return the flattened Rust name for a const."""
         return self.module_graph.rust_base_name(const.qualified_name).upper()
 
+    def _sanitize_rust_identifier(self, text: str) -> str:
+        """Return a Rust-safe identifier fragment."""
+        cleaned = re.sub(r"[^0-9A-Za-z_]+", "_", text).strip("_")
+        if not cleaned:
+            cleaned = "value"
+        if cleaned[0].isdigit():
+            cleaned = f"v_{cleaned}"
+        return cleaned
+
+    def _rust_binding_name(self, unique_name: str) -> str:
+        """Render the Rust variable name for a symbol unique name."""
+        return f"__zv_{self._sanitize_rust_identifier(unique_name)}"
+
+    def _closure_info(self, qualified_name: str) -> LexicalFunctionInfo | None:
+        """Return lexical-function metadata for a qualified closure target."""
+        return self._lexical_functions.get(qualified_name)
+
+    def _closure_env_rust_name(self, info: LexicalFunctionInfo) -> str:
+        """Return the synthesized Rust env type name for a lexical function."""
+        return f"__ZincClosureEnv_{self._sanitize_rust_identifier(info.qualified_name)}"
+
+    def _closure_capture_field_name(self, capture) -> str:
+        """Return the env-struct field name for a capture."""
+        return self._sanitize_rust_identifier(capture.name)
+
+    def _closure_capture_inner_type(self, capture) -> str:
+        """Return the Rust type stored inside a captured binding cell."""
+        return self._type_with_metadata_to_rust(
+            capture.resolved_type,
+            array_info=ArrayTypeInfo(
+                element_type=capture.element_type,
+                element_tuple_info=capture.tuple_info if capture.element_type == BaseType.TUPLE else None,
+                element_callable_info=capture.callable_info if capture.element_type == BaseType.CALLABLE else None,
+                element_struct_qualified_name=capture.element_struct_qualified_name,
+                element_anonymous_struct_info=capture.element_anonymous_struct_info,
+            ) if capture.resolved_type == BaseType.ARRAY and capture.element_type is not None else None,
+            dict_info=capture.dict_info,
+            set_info=capture.set_info,
+            tuple_info=capture.tuple_info,
+            callable_info=capture.callable_info,
+            struct_qualified_name=capture.struct_qualified_name,
+            anonymous_struct_info=capture.anonymous_struct_info,
+            as_reference=False,
+        )
+
+    def _closure_capture_cell_type(self, capture) -> str:
+        """Return the shared-cell Rust type for a captured binding."""
+        return f"Arc<Mutex<{self._closure_capture_inner_type(capture)}>>"
+
+    def _closure_env_constructor(self, info: LexicalFunctionInfo) -> str:
+        """Construct an env literal from the currently visible captured bindings."""
+        if not info.captures:
+            return f"{self._closure_env_rust_name(info)} {{}}"
+        fields = []
+        for capture in info.captures:
+            fields.append(
+                f"{self._closure_capture_field_name(capture)}: {self._rust_binding_name(capture.binding_unique_name)}.clone()"
+            )
+        return f"{self._closure_env_rust_name(info)} {{ {', '.join(fields)} }}"
+
+    def _symbol_storage_unique_name(self, symbol) -> str | None:
+        """Return the storage-bearing symbol unique name for a symbol or temp."""
+        if symbol is None:
+            return None
+        if symbol.kind == SymbolKind.TEMPORARY and symbol.binding_unique_name is not None:
+            return symbol.binding_unique_name
+        if symbol.is_captured_ref:
+            return symbol.unique_name
+        return symbol.binding_unique_name or symbol.unique_name
+
+    def _symbol_is_captured_cell(self, symbol) -> bool:
+        """Return True when a symbol resolves to shared captured-cell storage."""
+        storage_name = self._symbol_storage_unique_name(symbol)
+        if storage_name is None:
+            return False
+        return storage_name in self._captured_binding_names or symbol.is_captured_ref
+
+    def _render_captured_read(self, symbol) -> str:
+        """Render a read from a captured binding cell."""
+        storage_name = self._symbol_storage_unique_name(symbol)
+        if storage_name is None:
+            return "Default::default()"
+        rust_name = self._rust_binding_name(storage_name)
+        if symbol.resolved_type in {BaseType.INTEGER, BaseType.FLOAT, BaseType.BOOLEAN}:
+            return f"*{rust_name}.lock().unwrap()"
+        return f"{rust_name}.lock().unwrap().clone()"
+
+    def _captured_binding_box_line(self, symbol, value_expr: str) -> str | None:
+        """Return a boxing line for a captured binding introduced from a raw value."""
+        if symbol is None or symbol.unique_name not in self._captured_binding_names:
+            return None
+        rust_name = self._rust_binding_name(symbol.unique_name)
+        return f"let {rust_name} = Arc::new(Mutex::new({value_expr}));"
+
     def _const_symbol(self, const: ConstInstance):
         """Return the resolved symbol-table entry for a const, if any."""
         return self.symbols.lookup_by_id(const.qualified_name)
@@ -1229,6 +1368,16 @@ class CodeGenVisitor(zincVisitor):
                 as_reference=False,
             )
             lines.append(f"    {field.name}: {rust_type},")
+        lines.append("}")
+        return "\n".join(lines)
+
+    def _generate_closure_env_struct(self, info: LexicalFunctionInfo) -> str:
+        """Generate the hidden environment struct for one lexical function."""
+        lines = ["#[derive(Clone)]", f"struct {self._closure_env_rust_name(info)} {{"]
+        for capture in info.captures:
+            lines.append(
+                f"    {self._closure_capture_field_name(capture)}: {self._closure_capture_cell_type(capture)},"
+            )
         lines.append("}")
         return "\n".join(lines)
 
@@ -1343,10 +1492,14 @@ class CodeGenVisitor(zincVisitor):
         self._current_module = func.module_id
         self._declared_vars.clear()
         self._current_channel_params = set()
-        ctx: ZincParser.FunctionDeclarationContext = func.ctx
+        ctx = func.ctx
+        lexical_info = self._closure_info(func.qualified_name)
 
         # Get parameter names and types from func.arg_types
         params = []
+        param_prelude: list[str] = []
+        if lexical_info is not None:
+            params.append(f"__env: {self._closure_env_rust_name(lexical_info)}")
         if ctx.parameterList():
             for i, param_ctx in enumerate(ctx.parameterList().parameter()):
                 param_name = param_ctx.IDENTIFIER().getText()
@@ -1385,8 +1538,29 @@ class CodeGenVisitor(zincVisitor):
                 else:
                     params.append(param_name)
                 self._declared_vars.add(param_name)
+                param_symbol = self._lookup_local_symbol(param_name)
+                box_line = self._captured_binding_box_line(param_symbol, param_name)
+                if box_line is not None:
+                    param_prelude.append(box_line)
 
         body_stmts = self._generate_function_body(func)
+        if param_prelude:
+            body_stmts = [*param_prelude, *body_stmts]
+        if lexical_info is not None:
+            prelude = []
+            for capture in lexical_info.captures:
+                capture_symbol = self._lookup_captured_ref_symbol(capture.name)
+                alias_unique_name = (
+                    capture_symbol.unique_name
+                    if capture_symbol is not None
+                    else f"{self._current_function}.{capture.name}/capture"
+                )
+                alias_name = self._rust_binding_name(alias_unique_name)
+                prelude.append(
+                    f"let {alias_name} = __env.{self._closure_capture_field_name(capture)}.clone();"
+                )
+                self._declared_vars.add(capture.name)
+            body_stmts = [*prelude, *body_stmts]
         param_str = ", ".join(params)
 
         # Build return type suffix if not void
@@ -1585,6 +1759,8 @@ class CodeGenVisitor(zincVisitor):
                 and not is_direct_call
             ):
                 return self._render_callable_value(expr_symbol.callable_info)
+            if expr_symbol and self._symbol_is_captured_cell(expr_symbol):
+                return self._render_captured_read(expr_symbol)
             if self._current_module is not None:
                 const_symbol = self.module_graph.resolve_const_path(self._current_module, [name])
                 if const_symbol:
@@ -1728,6 +1904,28 @@ class CodeGenVisitor(zincVisitor):
             symbol
             for symbol in self.symbols.all_symbols()
             if symbol.id == name and symbol.unique_name.startswith(prefix)
+        ]
+        return matches[-1] if matches else None
+
+    def _lookup_identifier_symbol(self, name: str):
+        """Resolve an identifier name to the nearest local symbol, if any."""
+        symbol = self._lookup_local_symbol(name)
+        if symbol is not None:
+            return symbol
+        return self.symbols.lookup_by_id(name)
+
+    def _staged_temp_name(self, prefix: str, ctx: ParserRuleContext) -> str:
+        """Build a stable temporary name for staged expression evaluation."""
+        start, stop = ctx.getSourceInterval()
+        return f"__zinc_{prefix}_{start}_{stop}"
+
+    def _lookup_captured_ref_symbol(self, name: str):
+        """Return the closure-local captured-ref symbol for a given source name."""
+        prefix = f"{self._current_function}."
+        matches = [
+            symbol
+            for symbol in self.symbols.all_symbols()
+            if symbol.id == name and symbol.unique_name.startswith(prefix) and symbol.is_captured_ref
         ]
         return matches[-1] if matches else None
 
@@ -1908,11 +2106,19 @@ class CodeGenVisitor(zincVisitor):
     def visitIndexAccessExpr(self, ctx: ZincParser.IndexAccessExprContext) -> str:
         """Visit index access."""
         collection_type = self._get_expr_type(ctx.expression(0))
+        receiver_symbol = self._get_expr_symbol(ctx.expression(0))
+        captured_collection_name = None
+        if receiver_symbol and self._symbol_is_captured_cell(receiver_symbol):
+            storage_name = self._symbol_storage_unique_name(receiver_symbol)
+            if storage_name is not None:
+                captured_collection_name = self._rust_binding_name(storage_name)
         collection = self.visit(ctx.expression(0))
         index = self.visit(ctx.expression(1))
         if collection_type == BaseType.DICT:
             info = self._get_dict_info(ctx.expression(0)) or DictTypeInfo()
             key = self._borrow_lookup_key(index, info.key_type, ctx.expression(1))
+            if captured_collection_name is not None:
+                return f"{captured_collection_name}.lock().unwrap().get({key}).unwrap().clone()"
             return f"{collection}.get({key}).unwrap().clone()"
         if collection_type == BaseType.TUPLE:
             tuple_index = self._integer_literal_value(ctx.expression(1))
@@ -1924,6 +2130,11 @@ class CodeGenVisitor(zincVisitor):
         index_type = self._get_expr_type(index_ctx)
         if index_type == BaseType.INTEGER and not self._is_integer_literal(index_ctx):
             index = f"({index} as usize)"
+        if captured_collection_name is not None:
+            result_type = self._get_expr_type(ctx)
+            if result_type in {BaseType.INTEGER, BaseType.FLOAT, BaseType.BOOLEAN}:
+                return f"{captured_collection_name}.lock().unwrap()[{index}]"
+            return f"{captured_collection_name}.lock().unwrap()[{index}].clone()"
         return f"{collection}[{index}]"
 
     def _is_integer_literal(self, ctx) -> bool:
@@ -1984,12 +2195,27 @@ class CodeGenVisitor(zincVisitor):
                         return self._struct_rust_name(struct)
                     return self.module_graph.rust_base_name(struct_symbol.qualified_name)
 
-        # Regular member access (field or instance method)
-        obj = self.visit(ctx.expression())
         if isinstance(ctx.expression(), ZincParser.PrimaryExprContext):
             primary = ctx.expression().primaryExpression()
             if primary and primary.IDENTIFIER():
                 receiver_name = primary.IDENTIFIER().getText()
+                receiver_symbol = self._get_expr_symbol(ctx.expression())
+                if receiver_symbol and self._symbol_is_captured_cell(receiver_symbol):
+                    storage_name = self._symbol_storage_unique_name(receiver_symbol)
+                    if storage_name is not None:
+                        field_expr = f"{self._rust_binding_name(storage_name)}.lock().unwrap().{ctx.IDENTIFIER().getText()}"
+                        expr_type = self._get_expr_type(ctx)
+                        if expr_type in {
+                            BaseType.STRING,
+                            BaseType.ARRAY,
+                            BaseType.DICT,
+                            BaseType.SET,
+                            BaseType.TUPLE,
+                            BaseType.CALLABLE,
+                            BaseType.STRUCT,
+                        }:
+                            return f"{field_expr}.clone()"
+                        return field_expr
                 if self._boxed_struct_key(receiver_name) in self._boxed_struct_vars:
                     field_expr = f"{receiver_name}.borrow().{ctx.IDENTIFIER().getText()}"
                     expr_type = self._get_expr_type(ctx)
@@ -2004,6 +2230,8 @@ class CodeGenVisitor(zincVisitor):
                     }:
                         return f"{field_expr}.clone()"
                     return field_expr
+        # Regular member access (field or instance method)
+        obj = self.visit(ctx.expression())
         return f"{obj}.{ctx.IDENTIFIER().getText()}"
 
     def visitFunctionCallExpr(self, ctx: ZincParser.FunctionCallExprContext) -> str:
@@ -2051,6 +2279,19 @@ class CodeGenVisitor(zincVisitor):
         # Get callee text first to check for static method
         callee = self.visit(callee_ctx)
         callee_symbol = self._get_expr_symbol(callee_ctx)
+        direct_key = (self._current_function, ctx.getSourceInterval())
+        direct_mangled = self._specialization_map.get(direct_key)
+        if direct_mangled:
+            args = self._process_function_args(direct_mangled, args, arg_ctxs)
+            func = self.atlas.functions.get(direct_mangled)
+            if func is not None:
+                closure_info = self._closure_info(func.qualified_name)
+                if closure_info is not None:
+                    args = [self._closure_env_constructor(closure_info), *args]
+            call = f"{direct_mangled}({', '.join(args)})"
+            if func and func.is_async:
+                return f"{call}.await"
+            return call
 
         if isinstance(callee_ctx, ZincParser.MemberAccessExprContext):
             receiver_ctx = callee_ctx.expression()
@@ -2150,46 +2391,54 @@ class CodeGenVisitor(zincVisitor):
             target_ctx = callee_ctx.expression()
             method_name = callee_ctx.IDENTIFIER().getText()
             receiver_type = self._get_expr_type(target_ctx)
+            receiver_symbol = self._get_expr_symbol(target_ctx)
+            captured_receiver_name = None
+            if receiver_symbol and self._symbol_is_captured_cell(receiver_symbol):
+                storage_name = self._symbol_storage_unique_name(receiver_symbol)
+                if storage_name is not None:
+                    captured_receiver_name = self._rust_binding_name(storage_name)
             if receiver_type == BaseType.DICT:
                 target = self.visit(target_ctx)
+                dict_target = f"{captured_receiver_name}.lock().unwrap()" if captured_receiver_name else target
                 info = self._get_dict_info(target_ctx) or DictTypeInfo()
                 if method_name == "len":
-                    return f"({target}.len() as i64)"
+                    return f"({dict_target}.len() as i64)"
                 if method_name == "is_empty":
-                    return f"{target}.is_empty()"
+                    return f"{dict_target}.is_empty()"
                 if method_name == "clear":
-                    return f"{target}.clear()"
+                    return f"{dict_target}.clear()"
                 if method_name == "keys":
-                    return f"{target}.keys().cloned().collect::<Vec<_>>()"
+                    return f"{dict_target}.keys().cloned().collect::<Vec<_>>()"
                 if method_name == "values":
-                    return f"{target}.values().cloned().collect::<Vec<_>>()"
+                    return f"{dict_target}.values().cloned().collect::<Vec<_>>()"
                 if method_name == "items":
-                    return f"{target}.iter().map(|(k, v)| (k.clone(), v.clone())).collect::<Vec<_>>()"
+                    return f"{dict_target}.iter().map(|(k, v)| (k.clone(), v.clone())).collect::<Vec<_>>()"
                 if method_name == "insert" and len(args) == 2:
                     key = self._coerce_owned(args[0], info.key_type, arg_ctxs[0] if arg_ctxs else None)
                     value = self._coerce_owned(args[1], info.value_type, arg_ctxs[1] if arg_ctxs else None)
-                    return f"{target}.insert({key}, {value})"
+                    return f"{dict_target}.insert({key}, {value})"
                 if method_name in {"get", "contains_key", "remove"} and len(args) == 1:
                     key = self._borrow_lookup_key(args[0], info.key_type, arg_ctxs[0] if arg_ctxs else None)
                     if method_name == "get":
-                        return f"{target}.get({key}).unwrap().clone()"
-                    return f"{target}.{method_name}({key})"
+                        return f"{dict_target}.get({key}).unwrap().clone()"
+                    return f"{dict_target}.{method_name}({key})"
 
             if receiver_type == BaseType.SET:
                 target = self.visit(target_ctx)
+                set_target = f"{captured_receiver_name}.lock().unwrap()" if captured_receiver_name else target
                 info = self._get_set_info(target_ctx) or SetTypeInfo()
                 if method_name == "len":
-                    return f"({target}.len() as i64)"
+                    return f"({set_target}.len() as i64)"
                 if method_name == "is_empty":
-                    return f"{target}.is_empty()"
+                    return f"{set_target}.is_empty()"
                 if method_name == "clear":
-                    return f"{target}.clear()"
+                    return f"{set_target}.clear()"
                 if method_name in {"push", "insert"} and len(args) == 1:
                     elem = self._coerce_owned(args[0], info.element_type, arg_ctxs[0] if arg_ctxs else None)
-                    return f"{target}.insert({elem})"
+                    return f"{set_target}.insert({elem})"
                 if method_name in {"contains", "remove"} and len(args) == 1:
                     elem = self._borrow_lookup_key(args[0], info.element_type, arg_ctxs[0] if arg_ctxs else None)
-                    return f"{target}.{method_name}({elem})"
+                    return f"{set_target}.{method_name}({elem})"
 
             if receiver_type == BaseType.ARRAY and method_name == "push" and len(args) == 1:
                 receiver_symbol = self._get_expr_symbol(target_ctx)
@@ -2211,6 +2460,8 @@ class CodeGenVisitor(zincVisitor):
                         arg_symbol.callable_info,
                         receiver_symbol.callable_info,
                     )
+                if captured_receiver_name is not None:
+                    return f"{captured_receiver_name}.lock().unwrap().push({args[0]})"
 
             if isinstance(target_ctx, ZincParser.PrimaryExprContext):
                 primary = target_ctx.primaryExpression()
@@ -2223,6 +2474,11 @@ class CodeGenVisitor(zincVisitor):
                         if struct:
                             args = self._process_method_args(struct, method_name, args, arg_ctxs)
                             method = next((m for m in struct.methods if m.name == method_name), None)
+                            if captured_receiver_name is not None and method:
+                                result = f"{captured_receiver_name}.lock().unwrap().{method_name}({', '.join(args)})"
+                                if method_name == "len":
+                                    return f"({result} as i64)"
+                                return result
                             if self._boxed_struct_key(target_var) in self._boxed_struct_vars and method:
                                 borrow = "borrow_mut" if method.self_mutability == "&mut self" else "borrow"
                                 result = f"{target_var}.{borrow}().{method_name}({', '.join(args)})"
@@ -2241,8 +2497,13 @@ class CodeGenVisitor(zincVisitor):
         if mangled:
             # Process arguments for string literal conversion
             args = self._process_function_args(mangled, args, arg_ctxs)
+            func = self.atlas.functions.get(mangled)
+            if func is not None:
+                closure_info = self._closure_info(func.qualified_name)
+                if closure_info is not None:
+                    args = [self._closure_env_constructor(closure_info), *args]
             call = f"{mangled}({', '.join(args)})"
-            if self.atlas.functions.get(mangled) and self.atlas.functions[mangled].is_async:
+            if func and func.is_async:
                 return f"{call}.await"
             return call
 
@@ -2522,6 +2783,29 @@ class CodeGenVisitor(zincVisitor):
 
     # --- Statement Visitors (return Rust statement strings) ---
 
+    def visitFunctionDeclaration(self, ctx: ZincParser.FunctionDeclarationContext) -> str | None:
+        """Nested functions are generated separately as hidden top-level Rust functions."""
+        return None
+
+    def visitAsyncFunctionDeclaration(self, ctx: ZincParser.AsyncFunctionDeclarationContext) -> str | None:
+        """Nested async functions are generated separately as hidden top-level Rust functions."""
+        return None
+
+    def visitSuperAssignment(self, ctx: ZincParser.SuperAssignmentContext) -> str:
+        """Write through a captured outer binding cell."""
+        symbol = self.symbols.lookup_by_interval(
+            ctx.IDENTIFIER().getSourceInterval(), self._current_function
+        ) or self._lookup_captured_ref_symbol(ctx.IDENTIFIER().getText())
+        storage_name = self._symbol_storage_unique_name(symbol)
+        value = self.visit(ctx.expression())
+        if storage_name is None:
+            return "panic!(\"missing captured binding\");"
+        temp_name = self._staged_temp_name("captured_write", ctx)
+        return (
+            f"let {temp_name} = {value};\n"
+            f"*{self._rust_binding_name(storage_name)}.lock().unwrap() = {temp_name};"
+        )
+
     def visitVariableAssignment(self, ctx: ZincParser.VariableAssignmentContext) -> str:
         """Visit variable assignment with shadowing support."""
         target = ctx.assignmentTarget().getText()
@@ -2640,6 +2924,20 @@ class CodeGenVisitor(zincVisitor):
                 else:
                     value = f"Rc::new(RefCell::new({value}))"
 
+        captured_target = (
+            target_symbol is not None
+            and target_symbol.unique_name in self._captured_binding_names
+        )
+        rendered_target = (
+            self._rust_binding_name(target_symbol.unique_name)
+            if captured_target and target_symbol is not None
+            else target
+        )
+        if captured_target:
+            value = f"Arc::new(Mutex::new({value}))" if (
+                target_symbol.is_shadow or target not in self._declared_vars
+            ) else value
+
         if target_ctx.tupleAssignmentTarget():
             names = self._binding_names(target_ctx.tupleAssignmentTarget())
             target_symbols = [
@@ -2668,10 +2966,30 @@ class CodeGenVisitor(zincVisitor):
             collection_type = self._get_expr_type(index_access.expression(0))
             if collection_type == BaseType.DICT:
                 info = self._get_dict_info(index_access.expression(0)) or DictTypeInfo()
-                collection = self.visit(index_access.expression(0))
+                collection_symbol = self._get_expr_symbol(index_access.expression(0))
+                if (
+                    collection_symbol is None
+                    and isinstance(index_access.expression(0), ZincParser.PrimaryExprContext)
+                ):
+                    primary = index_access.expression(0).primaryExpression()
+                    if primary and primary.IDENTIFIER():
+                        collection_symbol = self._lookup_identifier_symbol(primary.IDENTIFIER().getText())
+                if collection_symbol and self._symbol_is_captured_cell(collection_symbol):
+                    storage_name = self._symbol_storage_unique_name(collection_symbol)
+                    collection = f"{self._rust_binding_name(storage_name)}.lock().unwrap()" if storage_name else self.visit(index_access.expression(0))
+                else:
+                    collection = self.visit(index_access.expression(0))
                 key_ctx = index_access.expression(1)
                 key = self._coerce_owned(self.visit(key_ctx), info.key_type, key_ctx)
                 coerced_value = self._coerce_owned(value, info.value_type, expr)
+                if collection_symbol and self._symbol_is_captured_cell(collection_symbol):
+                    key_temp = self._staged_temp_name("captured_key", key_ctx)
+                    value_temp = self._staged_temp_name("captured_value", expr)
+                    return (
+                        f"let {key_temp} = {key};\n"
+                        f"let {value_temp} = {coerced_value};\n"
+                        f"{collection}.insert({key_temp}, {value_temp});"
+                    )
                 return f"{collection}.insert({key}, {coerced_value});"
 
         if target_ctx.IDENTIFIER():
@@ -2682,17 +3000,44 @@ class CodeGenVisitor(zincVisitor):
                 # Fallback - shouldn't happen
                 return f"let {var_name} = {value};"
 
+            if symbol.unique_name in self._captured_binding_names and not (
+                symbol.is_shadow or var_name not in self._declared_vars
+            ):
+                temp_name = self._staged_temp_name("captured_write", ctx)
+                return (
+                    f"let {temp_name} = {value};\n"
+                    f"*{self._rust_binding_name(symbol.unique_name)}.lock().unwrap() = {temp_name};"
+                )
+
             if symbol.is_shadow or var_name not in self._declared_vars:
                 # First declaration OR shadow (type change) -> use let
                 self._declared_vars.add(var_name)
                 # Check if this is a struct var that needs mut
                 needs_mut = symbol.is_mutated or var_name in self._mut_struct_vars
                 if needs_mut:
-                    return f"let mut {var_name} = {value};"
-                return f"let {var_name} = {value};"
+                    return f"let mut {rendered_target} = {value};"
+                return f"let {rendered_target} = {value};"
             else:
                 # Same-type reassignment -> bare assignment
-                return f"{var_name} = {value};"
+                return f"{rendered_target} = {value};"
+
+        if target_ctx.memberAccess():
+            member_ctx = target_ctx.memberAccess()
+            receiver_ctx = member_ctx.expression()
+            receiver_symbol = self._get_expr_symbol(receiver_ctx)
+            if receiver_symbol is None and isinstance(receiver_ctx, ZincParser.PrimaryExprContext):
+                primary = receiver_ctx.primaryExpression()
+                if primary and primary.IDENTIFIER():
+                    receiver_symbol = self._lookup_identifier_symbol(primary.IDENTIFIER().getText())
+            if receiver_symbol and self._symbol_is_captured_cell(receiver_symbol):
+                storage_name = self._symbol_storage_unique_name(receiver_symbol)
+                if storage_name is not None:
+                    temp_name = self._staged_temp_name("captured_field", ctx)
+                    return (
+                        f"let {temp_name} = {value};\n"
+                        f"{self._rust_binding_name(storage_name)}.lock().unwrap()."
+                        f"{member_ctx.IDENTIFIER().getText()} = {temp_name};"
+                    )
 
         return f"{target} = {value};"
 
@@ -2753,7 +3098,32 @@ class CodeGenVisitor(zincVisitor):
         binding = ctx.forBinding()
         binding_ctx = binding.tupleAssignmentTarget() or binding
         names = self._binding_names(binding_ctx)
-        var_name = names[0] if len(names) == 1 else self._render_tuple_pattern(names)
+        binding_symbols = [
+            self.symbols.lookup_by_interval(token.getSourceInterval(), self._current_function)
+            for token in binding_ctx.getTokens(ZincParser.IDENTIFIER)
+        ]
+        raw_loop_value = f"__zinc_for_value_{self._next_select_id()}"
+        has_captured_binding = any(
+            symbol is not None and symbol.unique_name in self._captured_binding_names
+            for symbol in binding_symbols
+        )
+        loop_pattern = names[0] if len(names) == 1 else self._render_tuple_pattern(names)
+        loop_header_pattern = loop_pattern
+        loop_prelude: list[str] = []
+        if has_captured_binding:
+            if len(names) == 1:
+                loop_header_pattern = raw_loop_value
+                box_line = self._captured_binding_box_line(binding_symbols[0], raw_loop_value)
+                if box_line is not None:
+                    loop_prelude.append(box_line)
+            else:
+                loop_header_pattern = raw_loop_value
+                raw_pattern = self._render_tuple_pattern(names)
+                loop_prelude.append(f"let {raw_pattern} = {raw_loop_value};")
+                for name, symbol in zip(names, binding_symbols, strict=False):
+                    box_line = self._captured_binding_box_line(symbol, name)
+                    if box_line is not None:
+                        loop_prelude.append(box_line)
         body_stmts = self._generate_block(ctx.block())
 
         if self._get_expr_type(ctx.expression()) == BaseType.CHANNEL:
@@ -2764,10 +3134,12 @@ class CodeGenVisitor(zincVisitor):
                 "{",
                 f"    let {channel_iter} = {iterable_expr}.clone();",
                 "    loop {",
-                f"        let Some({var_name}) = {channel_iter}.recv_option().await else {{",
+                f"        let Some({loop_header_pattern}) = {channel_iter}.recv_option().await else {{",
                 "            break;",
                 "        };",
             ]
+            for stmt in loop_prelude:
+                lines.append(f"        {stmt}")
             for stmt in body_stmts:
                 for line in stmt.split("\n"):
                     lines.append(f"        {line}")
@@ -2777,7 +3149,9 @@ class CodeGenVisitor(zincVisitor):
 
         iterable = self._render_for_iterable(ctx.expression())
 
-        lines = [f"for {var_name} in {iterable} {{"]
+        lines = [f"for {loop_header_pattern} in {iterable} {{"]
+        for stmt in loop_prelude:
+            lines.append(f"    {stmt}")
         for stmt in body_stmts:
             # Handle multi-line statements (like nested if/while)
             for line in stmt.split("\n"):
@@ -3020,7 +3394,9 @@ class CodeGenVisitor(zincVisitor):
         self._uses_async = True
         # Grammar: spawn expression '(' argumentList? ')'
         # The expression is the function name, and args are in argumentList
-        func_name = self.visit(ctx.expression())
+        func_expr = ctx.expression()
+        func_name = self.visit(func_expr)
+        callee_symbol = self._get_expr_symbol(func_expr)
         args = []
         setup = []
         if ctx.argumentList():
@@ -3035,14 +3411,32 @@ class CodeGenVisitor(zincVisitor):
         # Look up mangled name from specialization map (scoped by current function)
         key = (self._current_function, ctx.getSourceInterval())
         mangled = self._specialization_map.get(key)
+        call_needs_await = False
         if mangled:
+            func = self.atlas.functions.get(mangled)
+            if func is not None:
+                closure_info = self._closure_info(func.qualified_name)
+                if closure_info is not None:
+                    args = [self._closure_env_constructor(closure_info), *args]
+                call_needs_await = func.is_async
             call = f"{mangled}({', '.join(args)})"
+        elif callee_symbol and callee_symbol.callable_info:
+            args = self._process_callable_args(
+                callee_symbol.callable_info,
+                args,
+                list(ctx.argumentList().expression()) if ctx.argumentList() else None,
+            )
+            callable_expr = func_name
+            if self._is_direct_callable_expr(func_expr, callee_symbol):
+                callable_expr = self._render_callable_value(callee_symbol.callable_info)
+            call = f"{callable_expr}.call({', '.join(args)})"
         else:
             call = f"{func_name}({', '.join(args)})"
+        async_call = f"{call}.await" if call_needs_await else call
         if setup:
-            task = f"tokio::spawn({{ {' '.join(setup)} async move {{ {call}.await; }} }})"
+            task = f"tokio::spawn({{ {' '.join(setup)} async move {{ {async_call}; }} }})"
         else:
-            task = f"tokio::spawn(async move {{ {call}.await; }})"
+            task = f"tokio::spawn(async move {{ {async_call}; }})"
         if self._spawn_handles_var:
             return f"{self._spawn_handles_var}.push({task});"
         return f"{task}.await.unwrap();"

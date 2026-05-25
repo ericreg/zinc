@@ -1,6 +1,7 @@
-// expected-error: lambda expressions cannot capture outer variable 'x'
+// expected-error: assignment to captured outer variable 'x' requires '<<-'
 fn wrap(x) {
     f = fn() {
+        x = x + 1
         return x
     }
 

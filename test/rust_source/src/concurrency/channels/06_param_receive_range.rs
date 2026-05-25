@@ -206,9 +206,9 @@ impl __ZincContext {
 async fn concurrency_channels_06_param_receive_range__sum_Channel(values: __ZincChannel<i64>) -> i64 {
     let mut total = 0;
     {
-        let __zinc_channel_iter_0 = values.clone();
+        let __zinc_channel_iter_1 = values.clone();
         loop {
-            let Some(value) = __zinc_channel_iter_0.recv_option().await else {
+            let Some(value) = __zinc_channel_iter_1.recv_option().await else {
                 break;
             };
             total = (total + value);

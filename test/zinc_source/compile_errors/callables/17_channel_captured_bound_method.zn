@@ -1,0 +1,18 @@
+// expected-error: closure captures are not transport-safe for channel send
+struct Counter {
+    count: 0
+
+    fn inc() {
+        self.count = self.count + 1
+    }
+}
+
+fn main() {
+    c = Counter {}
+    step = c.inc
+    jobs = chan()
+    jobs <- fn() {
+        step()
+    }
+}
+

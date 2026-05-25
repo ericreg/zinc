@@ -1,0 +1,9 @@
+// expected-error: async functions cannot be used as callable values
+fn main() {
+    async inner() {
+        print(1)
+    }
+
+    f = inner
+    f()
+}

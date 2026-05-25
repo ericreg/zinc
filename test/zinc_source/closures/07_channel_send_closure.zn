@@ -1,0 +1,12 @@
+fn main() {
+    base = 4
+    jobs = chan()
+    jobs <- fn(x) {
+        return base + x
+    }
+    close(jobs)
+
+    job = <-jobs
+    print(job(3))
+}
+

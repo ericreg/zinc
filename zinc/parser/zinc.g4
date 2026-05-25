@@ -14,6 +14,7 @@ statement
     | structDeclaration
     | functionDeclaration
     | asyncFunctionDeclaration
+    | superAssignment
     | variableAssignment
     | channelSendStatement
     | expressionStatement
@@ -119,6 +120,10 @@ tupleType
 // --- Statements ---
 variableAssignment
     : assignmentTarget '=' expression
+    ;
+
+superAssignment
+    : IDENTIFIER '<<-' expression
     ;
 
 assignmentTarget
@@ -395,6 +400,7 @@ MINUS       : '-';
 STAR        : '*';
 SLASH       : '/';
 PERCENT     : '%';
+SUPER_ASSIGN: '<<-';
 EQ          : '=';
 EQEQ        : '==';
 NEQ         : '!=';

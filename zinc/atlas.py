@@ -41,7 +41,7 @@ class FunctionInstance:
     mangled_name: str  # Unique Rust name
     ctx: ParserRuleContext  # Parse tree reference
     arg_types: list[BaseType]  # Concrete argument types
-    return_type: BaseType = field(default=BaseType.VOID)  # Inferred return type
+    return_type: BaseType = field(default=BaseType.UNKNOWN)  # Inferred return type
     is_async: bool = False  # True if called via spawn (becomes async fn)
     # Rich type info for channel arguments (arg_index -> list of ChannelTypeInfos from all call sites)
     arg_channel_infos: dict[int, list[ChannelTypeInfo]] = field(default_factory=dict)

@@ -1,0 +1,16 @@
+struct Counter {
+    count: 0
+}
+
+fn main() {
+    counter = Counter {}
+
+    bump = fn() {
+        counter.count = counter.count + 1
+    }
+
+    bump()
+    bump()
+    print(counter.count)
+}
+

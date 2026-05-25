@@ -1,4 +1,4 @@
-// expected-error: bound methods cannot be sent over channels in v1
+// expected-error: closure captures are not transport-safe for channel send
 struct Counter {
     count: 0
 

@@ -1,0 +1,13 @@
+fn main() {
+    items = [1]
+
+    push_item = fn(x) {
+        items.push(x)
+    }
+
+    push_item(3)
+    push_item(4)
+
+    print(items[1])
+    print(items[2])
+}

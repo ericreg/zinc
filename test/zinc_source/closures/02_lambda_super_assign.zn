@@ -1,0 +1,14 @@
+fn make_counter(start) {
+    x = start
+    return fn() {
+        x <<- x + 1
+        return x
+    }
+}
+
+fn main() {
+    counter = make_counter(0)
+    print(counter())
+    print(counter())
+}
+

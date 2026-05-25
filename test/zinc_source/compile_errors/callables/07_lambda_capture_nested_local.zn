@@ -1,10 +1,11 @@
-// expected-error: lambda expressions cannot capture outer variable 'y'
+// expected-error: captured outer variable 'y' cannot change type after capture
 fn main() {
     if true {
         y = 2
         f = fn() {
             return y
         }
+        y = "oops"
         print(f())
     }
 }

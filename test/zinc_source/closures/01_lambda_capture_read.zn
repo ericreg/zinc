@@ -1,0 +1,8 @@
+fn main() {
+    x = 3
+    f = fn() {
+        return x + 1
+    }
+    print(f())
+}
+

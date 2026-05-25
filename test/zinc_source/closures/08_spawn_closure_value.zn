@@ -1,0 +1,9 @@
+fn main() {
+    base = 4
+
+    worker = fn() {
+        print(base + 1)
+    }
+
+    spawn worker()
+}

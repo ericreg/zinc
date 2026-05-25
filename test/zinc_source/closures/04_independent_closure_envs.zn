@@ -1,0 +1,17 @@
+fn make_counter(start) {
+    x = start
+    return fn() {
+        x <<- x + 1
+        return x
+    }
+}
+
+fn main() {
+    first = make_counter(0)
+    second = make_counter(10)
+
+    print(first())
+    print(first())
+    print(second())
+}
+

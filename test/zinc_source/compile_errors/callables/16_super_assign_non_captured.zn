@@ -1,0 +1,6 @@
+// expected-error: '<<-' expects a captured outer variable 'x'
+fn main() {
+    x = 1
+    x <<- 2
+}
+

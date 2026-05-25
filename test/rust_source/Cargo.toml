@@ -103,6 +103,58 @@ name = "callables_21_channel_same_signature_mix"
 path = "src/callables/21_channel_same_signature_mix.rs"
 
 [[bin]]
+name = "closures_01_lambda_capture_read"
+path = "src/closures/01_lambda_capture_read.rs"
+
+[[bin]]
+name = "closures_02_lambda_super_assign"
+path = "src/closures/02_lambda_super_assign.rs"
+
+[[bin]]
+name = "closures_03_nested_named_function_value"
+path = "src/closures/03_nested_named_function_value.rs"
+
+[[bin]]
+name = "closures_04_independent_closure_envs"
+path = "src/closures/04_independent_closure_envs.rs"
+
+[[bin]]
+name = "closures_05_sibling_closures_shared_cell"
+path = "src/closures/05_sibling_closures_shared_cell.rs"
+
+[[bin]]
+name = "closures_06_generic_apply_capture"
+path = "src/closures/06_generic_apply_capture.rs"
+
+[[bin]]
+name = "closures_07_channel_send_closure"
+path = "src/closures/07_channel_send_closure.rs"
+
+[[bin]]
+name = "closures_08_spawn_closure_value"
+path = "src/closures/08_spawn_closure_value.rs"
+
+[[bin]]
+name = "closures_09_loop_fresh_capture"
+path = "src/closures/09_loop_fresh_capture.rs"
+
+[[bin]]
+name = "closures_10_select_received_closure"
+path = "src/closures/10_select_received_closure.rs"
+
+[[bin]]
+name = "closures_11_nested_async_capture"
+path = "src/closures/11_nested_async_capture.rs"
+
+[[bin]]
+name = "closures_12_captured_array_mutation"
+path = "src/closures/12_captured_array_mutation.rs"
+
+[[bin]]
+name = "closures_13_captured_struct_field_mutation"
+path = "src/closures/13_captured_struct_field_mutation.rs"
+
+[[bin]]
 name = "collections_01_dict_literal"
 path = "src/collections/01_dict_literal.rs"
 

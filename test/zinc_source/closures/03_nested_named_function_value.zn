@@ -1,0 +1,12 @@
+fn main() {
+    x = 2
+
+    fn add(y) {
+        return x + y
+    }
+
+    print(add(3))
+    f = add
+    print(f(4))
+}
+

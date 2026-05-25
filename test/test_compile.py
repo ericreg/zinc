@@ -1,6 +1,7 @@
 """Parameterized tests for Zinc compilation."""
 
 import subprocess
+import tempfile
 from collections import Counter
 from pathlib import Path
 
@@ -121,7 +122,11 @@ def compile_zinc(source_path: Path) -> str:
     symbol_visitor = SymbolTableVisitor(atlas)
     symbols = symbol_visitor.resolve()
     codegen = CodeGenVisitor(
-        atlas, symbols, symbol_visitor.specialization_map, symbol_visitor._channel_infos
+        atlas,
+        symbols,
+        symbol_visitor.specialization_map,
+        symbol_visitor._channel_infos,
+        symbol_visitor.lexical_functions,
     )
     program = codegen.generate()
     return program.render()
@@ -182,17 +187,33 @@ def run_cargo_bin(test_path: str) -> str:
     """
     # Binary name uses underscores for path separators
     bin_name = test_path.replace("/", "_")
-    result = subprocess.run(
-        ["cargo", "run", "--bin", bin_name, "-q", "--release"],
-        capture_output=True,
-        text=True,
-        cwd=RUST_SOURCE_DIR,
-    )
+    binary_path = RUST_SOURCE_DIR / "target" / "release" / bin_name
+    if not binary_path.exists():
+        build_result = subprocess.run(
+            ["cargo", "build", "--bin", bin_name, "--release"],
+            capture_output=True,
+            text=True,
+            cwd=RUST_SOURCE_DIR,
+        )
+        if build_result.returncode != 0:
+            raise RuntimeError(
+                f"Cargo build failed for {bin_name}:\n{build_result.stderr}"
+            )
+    with tempfile.NamedTemporaryFile(mode="w+", encoding="utf-8") as stdout_file:
+        result = subprocess.run(
+            [str(binary_path)],
+            stdout=stdout_file,
+            stderr=subprocess.PIPE,
+            text=True,
+            cwd=RUST_SOURCE_DIR,
+        )
+        stdout_file.seek(0)
+        stdout = stdout_file.read()
     if result.returncode != 0:
         raise RuntimeError(
             f"Cargo run failed for {bin_name}:\n{result.stderr}"
         )
-    return result.stdout
+    return stdout
 
 
 def build_cargo_project() -> None:

@@ -206,6 +206,15 @@ class zincListener(ParseTreeListener):
         pass
 
 
+    # Enter a parse tree produced by zincParser#superAssignment.
+    def enterSuperAssignment(self, ctx:zincParser.SuperAssignmentContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#superAssignment.
+    def exitSuperAssignment(self, ctx:zincParser.SuperAssignmentContext):
+        pass
+
+
     # Enter a parse tree produced by zincParser#assignmentTarget.
     def enterAssignmentTarget(self, ctx:zincParser.AssignmentTargetContext):
         pass
