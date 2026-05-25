@@ -3,5 +3,8 @@
         "./core",
         "./parser",
     ],
-    "python-envs.defaultEnvManager": "ms-python.python:venv"
+    "python-envs.defaultEnvManager": "ms-python.python:venv",
+    "cSpell.words": [
+        "metaprogramming"
+    ]
 }

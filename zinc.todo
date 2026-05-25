@@ -7,11 +7,20 @@ Implemented core pillars
 - [x] Dynamic variable rebinding
 - [x] Monomorphized functions
 - [x] Structs with methods
-- [x] Struct composition
+- [x] Struct composition, forward and orthogonal
 - [x] First-class callables
 - [x] Channels, spawn, bounded channels, and select
 - [x] Arrays, dicts, sets, tuples
-- [x] Base integer and float annotation surface, including unsigned ints
+- [x] Base types
+- [x] Multiline strings
+
+
+Currently (possibly forever) unsupported
+------------------------------------------
+- locking primitives (mutex, semaphore, etc)
+- inheritance
+- macros
+- traits
 
 Highest-priority language gaps
 ------------------------------
@@ -26,11 +35,12 @@ Highest-priority language gaps
 Language ergonomics
 -------------------
 - [ ] Decorators
-- [ ] Multiline strings
 - [ ] Metadata/introspection surface
       Possible shape:
-      - `name()`
-      - `self._fields` only when used
+      - `name()`: symbol name
+      - `fields()`:
+      - `type()`
+      - `components()`
 
 Docs that need to catch up to the implementation
 ------------------------------------------------
