@@ -53,6 +53,8 @@ Language ergonomics
       - `type()`
       - `components()`
 
+      ternary operators
+
 Docs that need to catch up to the implementation
 ------------------------------------------------
 - [ ] Document first-class callables
@@ -72,3 +74,9 @@ Research / design notes
 -----------------------
 - [ ] Evaluate depending on `fixed-num`
       https://docs.rs/fixed-num/latest/fixed_num/
+
+
+
+Example Applications:
+- raytracing in one weekend
+- cli/ps1 todo app
