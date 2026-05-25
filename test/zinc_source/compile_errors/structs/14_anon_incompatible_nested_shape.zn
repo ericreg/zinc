@@ -1,0 +1,20 @@
+// expected-error: parameter 'post' expects a compatible 'struct\{meta:struct\{author:stringactive:bool\}\}' value
+
+fn publish(post: struct {
+    meta: struct {
+        author: string
+        active: bool
+    }
+}) {
+    print(post.meta.author)
+}
+
+fn main() {
+    post = struct {
+        meta: struct {
+            author: "alice"
+            score: 10
+        }
+    }
+    publish(post)
+}

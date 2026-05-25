@@ -1,0 +1,8 @@
+// expected-error: anonymous struct has no field 'y'
+
+fn main() {
+    point = struct {
+        x: 1
+    }
+    print(point.y)
+}

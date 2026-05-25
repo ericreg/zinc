@@ -1,0 +1,21 @@
+// expected-error: parameter 'point' expects a compatible 'struct\{x:i64y:i64\}' value
+
+struct Point {
+    x: i64
+    y: i64
+}
+
+fn show(point: struct {
+    x: i64
+    y: i64
+}) {
+    print(point.x)
+}
+
+fn main() {
+    named = Point {
+        x: 1
+        y: 2
+    }
+    show(named)
+}

@@ -1,0 +1,34 @@
+// Test: Anonymous structs work in parameter and return positions with exact structural typing.
+
+fn area(rect: struct {
+    width: i64
+    height: i64
+}) {
+    return rect.width * rect.height
+}
+
+fn grow(rect: struct {
+    width: i64
+    height: i64
+}) {
+    return struct {
+        height: rect.height + 1
+        width: rect.width + 2
+    }
+}
+
+fn main() {
+    measured = struct {
+        height: 4
+        width: 3
+    }
+
+    print(area(measured))
+
+    resized = grow(struct {
+        height: 4
+        width: 3
+    })
+    print(resized.width)
+    print(resized.height)
+}

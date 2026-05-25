@@ -1,0 +1,27 @@
+// Test: Named structs can contain anonymous struct-typed fields.
+
+struct Holder {
+    point: struct {
+        x: i64
+        y: i64
+    }
+    label: string
+}
+
+fn show(holder) {
+    print(holder.point.x)
+    print(holder.label)
+}
+
+fn main() {
+    holder = Holder {
+        point: struct {
+            y: 9
+            x: 7
+        }
+        label: "origin"
+    }
+
+    print(holder.point.y)
+    show(holder)
+}

@@ -1,0 +1,15 @@
+// Test: Anonymous struct literals support field access, mutation, and empty shapes.
+
+fn main() {
+    point = struct {
+        x: 10
+        y: 20
+    }
+    point.x = point.x + 5
+
+    print(point.x)
+    print(point.y)
+
+    empty = struct {}
+    print("empty ready")
+}

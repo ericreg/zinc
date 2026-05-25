@@ -1,0 +1,15 @@
+// expected-error: parameter 'point' expects a compatible 'struct\{x:i64\}' value
+
+fn only_x(point: struct {
+    x: i64
+}) {
+    return point.x
+}
+
+fn main() {
+    point = struct {
+        x: 1
+        y: 2
+    }
+    print(only_x(point))
+}

@@ -1,0 +1,19 @@
+// Test: Anonymous structs may be nested and accessed recursively.
+
+fn main() {
+    post = struct {
+        meta: struct {
+            author: "alice"
+            active: true
+        }
+        stats: struct {
+            views: 10
+            likes: 2
+        }
+    }
+
+    print(post.meta.author)
+    print(post.meta.active)
+    print(post.stats.views)
+    print(post.stats.likes)
+}

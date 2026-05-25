@@ -1,0 +1,14 @@
+// expected-error: parameter 'record' expects a compatible 'struct\{name:string\}' value
+
+fn greet(record: struct {
+    name: string
+}) {
+    print(record.name)
+}
+
+fn main() {
+    record = struct {
+        name: 7
+    }
+    greet(record)
+}

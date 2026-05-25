@@ -1,0 +1,15 @@
+// expected-error: parameter 'rect' expects a compatible 'struct\{width:i64height:i64\}' value
+
+fn area(rect: struct {
+    width: i64
+    height: i64
+}) {
+    return rect.width * rect.height
+}
+
+fn main() {
+    rect = struct {
+        width: 3
+    }
+    print(area(rect))
+}
