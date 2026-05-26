@@ -11,6 +11,22 @@ name = "annotations_01_typed_locals_and_params"
 path = "src/annotations/01_typed_locals_and_params.rs"
 
 [[bin]]
+name = "annotations_02_typed_shadowing_in_nested_scope"
+path = "src/annotations/02_typed_shadowing_in_nested_scope.rs"
+
+[[bin]]
+name = "annotations_03_exact_numeric_width_shadowing"
+path = "src/annotations/03_exact_numeric_width_shadowing.rs"
+
+[[bin]]
+name = "annotations_04_mixed_specialization_with_annotated_slot"
+path = "src/annotations/04_mixed_specialization_with_annotated_slot.rs"
+
+[[bin]]
+name = "annotations_05_callable_exact_i64_success"
+path = "src/annotations/05_callable_exact_i64_success.rs"
+
+[[bin]]
 name = "arithmetic"
 path = "src/arithmetic.rs"
 

@@ -1,0 +1,10 @@
+fn add_to_float(x: f32, y) {
+    return x + y
+}
+
+fn main() {
+    base: f32 = 1.5
+    step: i32 = 3
+    print(add_to_float(base, 2))
+    print(add_to_float(base, step))
+}

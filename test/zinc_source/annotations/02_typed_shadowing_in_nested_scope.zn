@@ -1,0 +1,12 @@
+fn main() {
+    value = "seed"
+    value: i32 = 6
+    print(value)
+
+    if true {
+        value: f32 = 1.25
+        print(value)
+    }
+
+    print(value)
+}

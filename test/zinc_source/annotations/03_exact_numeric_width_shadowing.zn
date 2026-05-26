@@ -1,0 +1,29 @@
+fn keep_i32(x: i32) {
+    return x
+}
+
+fn keep_i64(x: i64) {
+    return x
+}
+
+fn keep_f32(x: f32) {
+    return x
+}
+
+fn keep_f64(x: f64) {
+    return x
+}
+
+fn main() {
+    total: i32 = 10
+    print(keep_i32(total))
+
+    total: i64 = 100
+    print(keep_i64(total))
+
+    ratio: f32 = 1.25
+    print(keep_f32(ratio))
+
+    ratio: f64 = 2.5
+    print(keep_f64(ratio))
+}

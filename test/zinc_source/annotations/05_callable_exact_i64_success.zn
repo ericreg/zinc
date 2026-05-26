@@ -1,0 +1,14 @@
+fn apply_twice(f: (i64) -> i64, x: i64) {
+    return f(f(x))
+}
+
+fn inc(x: i64) {
+    return x + 1
+}
+
+fn main() {
+    print(apply_twice(inc, 4))
+    print(apply_twice(fn(value: i64) {
+        return value + 2
+    }, 4))
+}

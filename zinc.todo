@@ -14,8 +14,10 @@ Implemented core pillars
 - [x] Base types
 - [x] Multiline strings
 - [x] Closure support
+- [x] strict type annotations
 - [] metaprogramming model (seamless compile time)
 - [] decorators
+- [] support for lambda expressions
 
 
 out x = 
@@ -66,6 +68,7 @@ Tooling and quality
 -------------------
 - [ ] Add a formatter
 - [ ] Write `galv` build CLI
+- [ ] Add breakpoint debugging
 - [ ] Fuzz tests
 - [ ] Easy-win code reduction / simplification / cleanup pass
 - [ ] Scratch Docker image
@@ -82,19 +85,17 @@ Research / design notes
 Benchmarks:
 -----------
 - example programs benchmarks in the following languages
-
-C3
-Nim
-Zig
-C
-C++ (latest)
-Rust
-Python
-Java
-Typescript
-Julia
-go
-
+      C3
+      Nim
+      Zig
+      C
+      C++ (latest)
+      Rust
+      Python
+      Java
+      Typescript
+      Julia
+      go
 
 Measure
 - wallclock time
@@ -102,10 +103,12 @@ Measure
 - allocations
 - binary size
 
+Use rust benchmarks to optimize rust codegen
+
 
 Example Applications:
 - raytracing in one weekend
 - cli/ps1 todo app
 - kalman filter
 - webserver
--  math benchmarks
+- math benchmarks

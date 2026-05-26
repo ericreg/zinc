@@ -360,6 +360,29 @@ Zinc uses a 3-pass compiler:
 
 ## TODO / Roadmap
 
+
+- [x] Modules and imports
+- [x] Dynamic variable rebinding
+- [x] Monomorphized functions
+- [x] Structs with methods
+- [x] Struct composition, forward and orthogonal
+- [x] First-class callables
+- [x] Channels, spawn, bounded channels, and select
+- [x] Arrays, dicts, sets, tuples, sorted maps, sorted sets
+- [x] Base types
+- [x] Multiline strings
+- [x] Closure support
+- [x] Strict type annotations
+- [ ] Error handling
+- [ ] Metaprogramming model (seamless compile time)
+- [ ] Decorators
+- [ ] Lambda expressions
+- [ ] Bimaps
+- [ ] Priority queues
+
+
+
+
 - [x] Dynamic variable assignments
 - [x] Functions with monomorphic overloading
 - [x] Arithmetic expressions
@@ -373,7 +396,7 @@ Zinc uses a 3-pass compiler:
 - [x] While loops
 - [x] Maps
 - [x] Sets
-- [ ] Error handling
+
 - [x] Modules and imports
 - [ ] A ton of tests
 - [ ] Tiny book documentation
@@ -402,5 +425,10 @@ If you use the vscode devcontainer, you may just run the `regen` command directl
 ### Running Tests
 
 ```sh
-uv run pytest -v
+uv run pytest -n autp
+```
+
+To regenerate rust source
+```sh
+uv run python test/test_compile.py --update-output
 ```

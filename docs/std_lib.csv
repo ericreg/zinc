@@ -1,25 +1,28 @@
 
 library,description
-std/collections/concurrent,concurrent_hashmap
+std/collections,"concurrent_hashmap, bimap, queue, priority_queue"
 std/collections/spatial,"octree, quadtree, rtree, kd-tree, m-tree, vp-tree, ball-tree"
 std/data/frame,polars like data manipulation library
 std/data/serde,serialization
 std/file,file manipulation library
 std/regex,regular expressions
-std/network,networking library
-std/math/num,numpy
+std/net,networking library
+std/math/num,numpy linear algebra and calculus
+std/math/symbolic,sympy clone
 std/math/stat,statistics
 std/math/random,random number generation
 std/crypto,cryptographic
 std/data/compress,"zstd, zip, bzip2, gzip, lz4, tar"
-std/image,"image files, tiff, png, ppm, jpeg, raw"
-std/ffi,
-std/gui,gui library / squint
+std/img,"image files, tiff, png, ppm, jpeg, raw"
+std/ffi,language interop
+std/gui,gui library / squint / gpu acclerated / vulkan
+std/tui,tui library for cli apps
 std/meta,metaprogramming
 std/log,logging library
 std/date,datetime library
 ext/tempdb,redis clone
 ext/msg,"capnproto clone, zeromq clone"
-ext/db
+ext/db,"orm, postgres, nosql"
 ext/sqlite
 ext/video,lib-av bindings
+ext/minus,minimal library os for running in containers
