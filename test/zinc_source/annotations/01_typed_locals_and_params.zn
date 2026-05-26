@@ -1,0 +1,27 @@
+struct Pair {
+    a: i32
+    b: f32
+}
+
+fn add_i32(x: i32, y: i32) {
+    return x + y
+}
+
+fn add_f32(x: f32, y) {
+    return x + y
+}
+
+fn main() {
+    x: i32 = 5
+    x = 4
+    y = add_i32(x, 6)
+    print("{y}")
+
+    x: f32 = 5.0
+    z = add_f32(x, 3)
+    print("{z}")
+
+    pair = Pair { a: 7, b: 1.5 }
+    print("{pair.a}")
+    print("{pair.b}")
+}

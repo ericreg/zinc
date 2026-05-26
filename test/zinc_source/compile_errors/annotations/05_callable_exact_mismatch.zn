@@ -1,0 +1,12 @@
+// expected-error: parameter 'f' expects a compatible '\(i32\)->i32' value
+fn apply(f: (i32)->i32) {
+    return f(1)
+}
+
+fn inc64(x: i64) {
+    return x + 1
+}
+
+fn main() {
+    print(apply(inc64))
+}

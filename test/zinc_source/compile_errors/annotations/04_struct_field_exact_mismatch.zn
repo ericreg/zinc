@@ -1,0 +1,9 @@
+// expected-error: struct field 'Stuff.a' expects a compatible 'i32' value
+struct Stuff {
+    a: i32
+    b: f32
+}
+
+fn main() {
+    stuff = Stuff { a: 3.0, b: 4.0 }
+}

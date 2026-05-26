@@ -288,6 +288,17 @@ fn double(x: i64) {
 
 Common annotation names include `i32`, `i64`, `f32`, `f64`, `string`, and `bool`.
 
+Annotations are enforced as compile-time contracts. They are not optional hints.
+This also applies to local bindings:
+
+```zinc
+fn main() {
+    x: i32 = 5
+    x = 4      // ok
+    // x = 4.0 // compile-time error
+}
+```
+
 ## Constants
 
 Global constants use `const`:
@@ -1110,7 +1121,7 @@ fn main() {
 - Float dictionary keys and float set elements are rejected.
 - Tuple indexing requires ..a literal integer index.
 - Dictionary mutation during dictionary iteration is rejected.
-- Local variable type annotations are not part of the current syntax.
+- Local variable annotations use `name: Type = expression` and are strict.
 - External package dependencies and re-export syntax are not implemented yet.
 
 ## Development Tests

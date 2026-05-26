@@ -1,0 +1,9 @@
+// expected-error: parameter 'x' expects a compatible 'i32' value
+fn add_i32(x: i32) {
+    return x
+}
+
+fn main() {
+    y: i64 = 5
+    print(add_i32(y))
+}

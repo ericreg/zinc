@@ -104,6 +104,124 @@ def type_to_rust(base_type: BaseType) -> str:
     return mapping.get(base_type, "unknown")
 
 
+def normalize_exact_type(type_name: str | None) -> str | None:
+    """Normalize a scalar exact type name to the Rust spelling used in codegen."""
+    if type_name is None:
+        return None
+    mapping = {
+        "i8": "i8",
+        "i16": "i16",
+        "i32": "i32",
+        "i64": "i64",
+        "i128": "i128",
+        "u8": "u8",
+        "u16": "u16",
+        "u32": "u32",
+        "u64": "u64",
+        "u128": "u128",
+        "f8": "f8",
+        "f16": "f16",
+        "f32": "f32",
+        "f64": "f64",
+        "f128": "f128",
+        "string": "String",
+        "String": "String",
+        "bool": "bool",
+        "Context": "__ZincContext",
+        "context": "__ZincContext",
+    }
+    return mapping.get(type_name, type_name)
+
+
+def exact_type_to_base(type_name: str | None) -> BaseType:
+    """Map an exact scalar type name to a Zinc base type."""
+    normalized = normalize_exact_type(type_name)
+    mapping = {
+        "i8": BaseType.INTEGER,
+        "i16": BaseType.INTEGER,
+        "i32": BaseType.INTEGER,
+        "i64": BaseType.INTEGER,
+        "i128": BaseType.INTEGER,
+        "u8": BaseType.INTEGER,
+        "u16": BaseType.INTEGER,
+        "u32": BaseType.INTEGER,
+        "u64": BaseType.INTEGER,
+        "u128": BaseType.INTEGER,
+        "f8": BaseType.FLOAT,
+        "f16": BaseType.FLOAT,
+        "f32": BaseType.FLOAT,
+        "f64": BaseType.FLOAT,
+        "f128": BaseType.FLOAT,
+        "String": BaseType.STRING,
+        "bool": BaseType.BOOLEAN,
+        "__ZincContext": BaseType.CONTEXT,
+    }
+    return mapping.get(normalized, BaseType.UNKNOWN)
+
+
+def default_exact_type(base_type: BaseType) -> str | None:
+    """Return the default exact scalar type used for unannotated primitive values."""
+    mapping = {
+        BaseType.INTEGER: "i64",
+        BaseType.FLOAT: "f64",
+        BaseType.STRING: "String",
+        BaseType.BOOLEAN: "bool",
+        BaseType.CONTEXT: "__ZincContext",
+    }
+    return mapping.get(base_type)
+
+
+def exact_type_to_rust(exact_type: str | None, base_type: BaseType) -> str:
+    """Render an exact scalar type, falling back to the base-type default."""
+    normalized = normalize_exact_type(exact_type)
+    if normalized is not None:
+        return normalized
+    return type_to_rust(base_type)
+
+
+def _numeric_type_parts(type_name: str | None) -> tuple[str, int] | None:
+    """Return the family/bits for a normalized numeric exact type."""
+    normalized = normalize_exact_type(type_name)
+    if normalized is None or len(normalized) < 2:
+        return None
+    family = normalized[0]
+    if family not in {"i", "u", "f"}:
+        return None
+    try:
+        return family, int(normalized[1:])
+    except ValueError:
+        return None
+
+
+def promote_exact_numeric(left: str | None, right: str | None, result_base: BaseType) -> str | None:
+    """Promote exact numeric spellings for expression results."""
+    left = normalize_exact_type(left) or default_exact_type(result_base)
+    right = normalize_exact_type(right) or default_exact_type(result_base)
+    if left is None:
+        return right
+    if right is None:
+        return left
+    if left == right:
+        return left
+    left_parts = _numeric_type_parts(left)
+    right_parts = _numeric_type_parts(right)
+    if left_parts is None or right_parts is None:
+        return default_exact_type(result_base)
+    left_family, left_bits = left_parts
+    right_family, right_bits = right_parts
+    if result_base == BaseType.FLOAT:
+        float_bits = max(
+            left_bits if left_family == "f" else 32,
+            right_bits if right_family == "f" else 32,
+        )
+        return f"f{float_bits}"
+    if result_base == BaseType.INTEGER:
+        if left_family == right_family:
+            return f"{left_family}{max(left_bits, right_bits)}"
+        return "i128"
+    return default_exact_type(result_base)
+
+
 def _sanitize_type_fragment(text: str) -> str:
     """Convert a type/signature fragment into a Rust-safe identifier chunk."""
     cleaned = []
@@ -148,6 +266,7 @@ class AnonymousStructFieldInfo:
 
     name: str
     resolved_type: BaseType = BaseType.UNKNOWN
+    exact_type: str | None = None
     array_info: ArrayTypeInfo | None = None
     dict_info: DictTypeInfo | None = None
     set_info: SetTypeInfo | None = None
@@ -161,6 +280,7 @@ class AnonymousStructFieldInfo:
         return AnonymousStructFieldInfo(
             name=self.name,
             resolved_type=self.resolved_type,
+            exact_type=self.exact_type,
             array_info=self.array_info.copy() if self.array_info else None,
             dict_info=self.dict_info.copy() if self.dict_info else None,
             set_info=self.set_info.copy() if self.set_info else None,
@@ -176,6 +296,7 @@ class AnonymousStructFieldInfo:
             self.name,
             value_type_key(
                 self.resolved_type,
+                exact_type=self.exact_type,
                 array_info=self.array_info,
                 dict_info=self.dict_info,
                 set_info=self.set_info,
@@ -190,6 +311,7 @@ class AnonymousStructFieldInfo:
         """Return a Rust-safe suffix fragment for this field type."""
         return value_type_suffix(
             self.resolved_type,
+            exact_type=self.exact_type,
             array_info=self.array_info,
             dict_info=self.dict_info,
             set_info=self.set_info,
@@ -249,6 +371,7 @@ class ChannelTypeInfo:
     """Type information for channel types."""
 
     element_type: BaseType = BaseType.UNKNOWN  # Type of values sent/received
+    element_exact_type: str | None = None
     element_tuple_info: TupleTypeInfo | None = None
     element_callable_info: CallableTypeInfo | None = None
     element_struct_qualified_name: str | None = None
@@ -265,7 +388,7 @@ class ChannelTypeInfo:
             if self.element_anonymous_struct_info:
                 return self.element_anonymous_struct_info.rust_type_name()
             return _named_struct_rust_name(self.element_struct_qualified_name)
-        return type_to_rust(self.element_type)
+        return exact_type_to_rust(self.element_exact_type, self.element_type)
 
     def to_rust_type(self) -> str:
         """Generate the shared Rust channel-wrapper type."""
@@ -300,6 +423,7 @@ class ChannelTypeInfo:
         """Deep-copy channel metadata."""
         return ChannelTypeInfo(
             element_type=self.element_type,
+            element_exact_type=self.element_exact_type,
             element_tuple_info=self.element_tuple_info.copy() if self.element_tuple_info else None,
             element_callable_info=self.element_callable_info.copy() if self.element_callable_info else None,
             element_struct_qualified_name=self.element_struct_qualified_name,
@@ -315,6 +439,7 @@ class ArrayTypeInfo:
     """Type information for arrays."""
 
     element_type: BaseType = BaseType.UNKNOWN
+    element_exact_type: str | None = None
     element_tuple_info: TupleTypeInfo | None = None
     element_callable_info: CallableTypeInfo | None = None
     element_struct_qualified_name: str | None = None
@@ -331,7 +456,7 @@ class ArrayTypeInfo:
             if self.element_anonymous_struct_info:
                 return self.element_anonymous_struct_info.rust_type_name()
             return _named_struct_rust_name(self.element_struct_qualified_name)
-        return type_to_rust(self.element_type)
+        return exact_type_to_rust(self.element_exact_type, self.element_type)
 
     def to_rust_type(self, as_reference: bool = True) -> str:
         """Generate Rust type string (always Vec in Zinc).
@@ -357,13 +482,14 @@ class ArrayTypeInfo:
                 anonymous_struct_info=self.element_anonymous_struct_info,
             )
         else:
-            elem = type_to_rust(self.element_type)
+            elem = exact_type_to_rust(self.element_exact_type, self.element_type)
         return f"Vec_{elem}"
 
     def copy(self) -> ArrayTypeInfo:
         """Deep-copy array metadata."""
         return ArrayTypeInfo(
             element_type=self.element_type,
+            element_exact_type=self.element_exact_type,
             element_tuple_info=self.element_tuple_info.copy() if self.element_tuple_info else None,
             element_callable_info=self.element_callable_info.copy() if self.element_callable_info else None,
             element_struct_qualified_name=self.element_struct_qualified_name,
@@ -380,6 +506,8 @@ class DictTypeInfo:
 
     key_type: BaseType = BaseType.UNKNOWN
     value_type: BaseType = BaseType.UNKNOWN
+    key_exact_type: str | None = None
+    value_exact_type: str | None = None
     key_callable_info: CallableTypeInfo | None = None
     value_callable_info: CallableTypeInfo | None = None
     key_struct_qualified_name: str | None = None
@@ -403,7 +531,7 @@ class DictTypeInfo:
             else:
                 key = _named_struct_rust_name(self.key_struct_qualified_name)
         else:
-            key = type_to_rust(self.key_type)
+            key = exact_type_to_rust(self.key_exact_type, self.key_type)
         if self.value_type == BaseType.CALLABLE and self.value_callable_info:
             value = self.value_callable_info.rust_type_name()
         elif self.value_type == BaseType.STRUCT:
@@ -412,7 +540,7 @@ class DictTypeInfo:
             else:
                 value = _named_struct_rust_name(self.value_struct_qualified_name)
         else:
-            value = type_to_rust(self.value_type)
+            value = exact_type_to_rust(self.value_exact_type, self.value_type)
         collection_type = f"{self.rust_container()}<{key}, {value}>"
         if as_reference:
             if self.is_mutated:
@@ -431,7 +559,7 @@ class DictTypeInfo:
                 anonymous_struct_info=self.key_anonymous_struct_info,
             )
         else:
-            key = type_to_rust(self.key_type)
+            key = exact_type_to_rust(self.key_exact_type, self.key_type)
         if self.value_type == BaseType.CALLABLE and self.value_callable_info:
             value = self.value_callable_info.to_rust_type_suffix()
         elif self.value_type == BaseType.STRUCT:
@@ -441,7 +569,7 @@ class DictTypeInfo:
                 anonymous_struct_info=self.value_anonymous_struct_info,
             )
         else:
-            value = type_to_rust(self.value_type)
+            value = exact_type_to_rust(self.value_exact_type, self.value_type)
         return f"{self.rust_container()}_{key}_{value}"
 
     def copy(self) -> DictTypeInfo:
@@ -449,6 +577,8 @@ class DictTypeInfo:
         return DictTypeInfo(
             key_type=self.key_type,
             value_type=self.value_type,
+            key_exact_type=self.key_exact_type,
+            value_exact_type=self.value_exact_type,
             key_callable_info=self.key_callable_info.copy() if self.key_callable_info else None,
             value_callable_info=self.value_callable_info.copy() if self.value_callable_info else None,
             key_struct_qualified_name=self.key_struct_qualified_name,
@@ -467,6 +597,7 @@ class SetTypeInfo:
     """Type information for set/sort_set containers."""
 
     element_type: BaseType = BaseType.UNKNOWN
+    element_exact_type: str | None = None
     element_struct_qualified_name: str | None = None
     element_anonymous_struct_info: AnonymousStructTypeInfo | None = None
     kind: str = "set"  # "set" or "sort_set"
@@ -484,7 +615,7 @@ class SetTypeInfo:
             else:
                 elem = _named_struct_rust_name(self.element_struct_qualified_name)
         else:
-            elem = type_to_rust(self.element_type)
+            elem = exact_type_to_rust(self.element_exact_type, self.element_type)
         collection_type = f"{self.rust_container()}<{elem}>"
         if as_reference:
             if self.is_mutated:
@@ -501,13 +632,14 @@ class SetTypeInfo:
                 anonymous_struct_info=self.element_anonymous_struct_info,
             )
         else:
-            elem = type_to_rust(self.element_type)
+            elem = exact_type_to_rust(self.element_exact_type, self.element_type)
         return f"{self.rust_container()}_{elem}"
 
     def copy(self) -> SetTypeInfo:
         """Deep-copy set metadata."""
         return SetTypeInfo(
             element_type=self.element_type,
+            element_exact_type=self.element_exact_type,
             element_struct_qualified_name=self.element_struct_qualified_name,
             element_anonymous_struct_info=self.element_anonymous_struct_info.copy()
             if self.element_anonymous_struct_info
@@ -522,6 +654,7 @@ class TupleTypeInfo:
     """Type information for tuple values."""
 
     element_types: list[BaseType] = field(default_factory=list)
+    element_exact_types: list[str | None] = field(default_factory=list)
     element_tuple_infos: dict[int, TupleTypeInfo] = field(default_factory=dict)
     element_callable_infos: dict[int, CallableTypeInfo] = field(default_factory=dict)
     element_struct_qualified_names: dict[int, str] = field(default_factory=dict)
@@ -538,7 +671,8 @@ class TupleTypeInfo:
             if index in self.element_anonymous_struct_infos:
                 return self.element_anonymous_struct_infos[index].rust_type_name()
             return _named_struct_rust_name(self.element_struct_qualified_names.get(index))
-        return type_to_rust(element_type)
+        exact_type = self.element_exact_types[index] if index < len(self.element_exact_types) else None
+        return exact_type_to_rust(exact_type, element_type)
 
     def to_rust_type(self) -> str:
         """Generate Rust tuple type syntax."""
@@ -560,7 +694,8 @@ class TupleTypeInfo:
                 struct_qualified_name=self.element_struct_qualified_names.get(index),
                 anonymous_struct_info=self.element_anonymous_struct_infos.get(index),
             )
-        return type_to_rust(element_type)
+        exact_type = self.element_exact_types[index] if index < len(self.element_exact_types) else None
+        return exact_type_to_rust(exact_type, element_type)
 
     def to_rust_type_suffix(self) -> str:
         """Generate type suffix for mangled names."""
@@ -574,6 +709,7 @@ class TupleTypeInfo:
         """Deep-copy tuple metadata."""
         return TupleTypeInfo(
             element_types=list(self.element_types),
+            element_exact_types=list(self.element_exact_types),
             element_tuple_infos={
                 index: info.copy()
                 for index, info in self.element_tuple_infos.items()
@@ -611,6 +747,7 @@ class CallableTypeInfo:
     """Type information for first-class callable values."""
 
     param_types: list[BaseType] = field(default_factory=list)
+    param_exact_types: list[str | None] = field(default_factory=list)
     param_array_infos: dict[int, ArrayTypeInfo] = field(default_factory=dict)
     param_dict_infos: dict[int, DictTypeInfo] = field(default_factory=dict)
     param_set_infos: dict[int, SetTypeInfo] = field(default_factory=dict)
@@ -619,6 +756,7 @@ class CallableTypeInfo:
     param_struct_qualified_names: dict[int, str] = field(default_factory=dict)
     param_anonymous_struct_infos: dict[int, AnonymousStructTypeInfo] = field(default_factory=dict)
     return_type: BaseType = BaseType.UNKNOWN
+    return_exact_type: str | None = None
     return_dict_info: DictTypeInfo | None = None
     return_set_info: SetTypeInfo | None = None
     return_tuple_info: TupleTypeInfo | None = None
@@ -631,6 +769,7 @@ class CallableTypeInfo:
         """Deep-copy callable metadata."""
         return CallableTypeInfo(
             param_types=list(self.param_types),
+            param_exact_types=list(self.param_exact_types),
             param_array_infos={
                 index: info.copy()
                 for index, info in self.param_array_infos.items()
@@ -658,6 +797,7 @@ class CallableTypeInfo:
                 for index, info in self.param_anonymous_struct_infos.items()
             },
             return_type=self.return_type,
+            return_exact_type=self.return_exact_type,
             return_dict_info=self.return_dict_info.copy() if self.return_dict_info else None,
             return_set_info=self.return_set_info.copy() if self.return_set_info else None,
             return_tuple_info=self.return_tuple_info.copy() if self.return_tuple_info else None,
@@ -677,6 +817,7 @@ class CallableTypeInfo:
             tuple(self._param_key(index, base_type) for index, base_type in enumerate(self.param_types)),
             self._value_key(
                 self.return_type,
+                exact_type=self.return_exact_type,
                 dict_info=self.return_dict_info,
                 set_info=self.return_set_info,
                 tuple_info=self.return_tuple_info,
@@ -729,6 +870,7 @@ class CallableTypeInfo:
     def _param_key(self, index: int, base_type: BaseType) -> tuple:
         return self._value_key(
             base_type,
+            exact_type=self.param_exact_types[index] if index < len(self.param_exact_types) else None,
             array_info=self.param_array_infos.get(index),
             dict_info=self.param_dict_infos.get(index),
             set_info=self.param_set_infos.get(index),
@@ -742,6 +884,7 @@ class CallableTypeInfo:
         self,
         base_type: BaseType,
         *,
+        exact_type: str | None = None,
         array_info: ArrayTypeInfo | None = None,
         dict_info: DictTypeInfo | None = None,
         set_info: SetTypeInfo | None = None,
@@ -752,6 +895,7 @@ class CallableTypeInfo:
     ) -> tuple:
         return value_type_key(
             base_type,
+            exact_type=exact_type,
             array_info=array_info,
             dict_info=dict_info,
             set_info=set_info,
@@ -764,6 +908,7 @@ class CallableTypeInfo:
     def _param_suffix(self, index: int, base_type: BaseType) -> str:
         return self._value_suffix(
             base_type,
+            exact_type=self.param_exact_types[index] if index < len(self.param_exact_types) else None,
             array_info=self.param_array_infos.get(index),
             dict_info=self.param_dict_infos.get(index),
             set_info=self.param_set_infos.get(index),
@@ -777,6 +922,7 @@ class CallableTypeInfo:
         self,
         base_type: BaseType,
         *,
+        exact_type: str | None = None,
         array_info: ArrayTypeInfo | None = None,
         dict_info: DictTypeInfo | None = None,
         set_info: SetTypeInfo | None = None,
@@ -787,6 +933,7 @@ class CallableTypeInfo:
     ) -> str:
         return value_type_suffix(
             base_type,
+            exact_type=exact_type,
             array_info=array_info,
             dict_info=dict_info,
             set_info=set_info,
@@ -800,6 +947,7 @@ class CallableTypeInfo:
 def value_type_key(
     base_type: BaseType,
     *,
+    exact_type: str | None = None,
     array_info: ArrayTypeInfo | None = None,
     dict_info: DictTypeInfo | None = None,
     set_info: SetTypeInfo | None = None,
@@ -831,12 +979,16 @@ def value_type_key(
         return ("never",)
     if base_type == BaseType.CONTEXT:
         return ("context",)
+    normalized_exact = normalize_exact_type(exact_type)
+    if normalized_exact is not None:
+        return (base_type.name.lower(), normalized_exact)
     return (base_type.name.lower(),)
 
 
 def value_type_suffix(
     base_type: BaseType,
     *,
+    exact_type: str | None = None,
     array_info: ArrayTypeInfo | None = None,
     dict_info: DictTypeInfo | None = None,
     set_info: SetTypeInfo | None = None,
@@ -866,7 +1018,7 @@ def value_type_suffix(
         return "Never"
     if base_type == BaseType.CONTEXT:
         return "Context"
-    return type_to_rust(base_type)
+    return exact_type_to_rust(exact_type, base_type)
 
 
 # Registry of mutating methods by type

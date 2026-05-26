@@ -17,6 +17,7 @@ from zinc.ast.types import (
     DictTypeInfo,
     SetTypeInfo,
     TupleTypeInfo,
+    normalize_exact_type,
     type_to_rust,
 )
 from zinc.modules import (
@@ -41,7 +42,9 @@ class FunctionInstance:
     mangled_name: str  # Unique Rust name
     ctx: ParserRuleContext  # Parse tree reference
     arg_types: list[BaseType]  # Concrete argument types
+    arg_exact_types: list[str | None] = field(default_factory=list)
     return_type: BaseType = field(default=BaseType.UNKNOWN)  # Inferred return type
+    return_exact_type: str | None = None
     is_async: bool = False  # True if called via spawn (becomes async fn)
     # Rich type info for channel arguments (arg_index -> list of ChannelTypeInfos from all call sites)
     arg_channel_infos: dict[int, list[ChannelTypeInfo]] = field(default_factory=dict)
@@ -77,6 +80,7 @@ class StructFieldInfo:
     is_private: bool = False
     is_const: bool = False
     resolved_type: BaseType = field(default=BaseType.UNKNOWN)
+    exact_type: str | None = None
     array_info: ArrayTypeInfo | None = None
     dict_info: DictTypeInfo | None = None
     set_info: SetTypeInfo | None = None
@@ -102,6 +106,8 @@ class StructFieldInfo:
             return self.anonymous_struct_info.rust_type_name()
         if self.struct_qualified_name is not None:
             return self.struct_qualified_name.rpartition("::")[2] or self.struct_qualified_name
+        if self.exact_type:
+            return self.exact_type
         if self.type_annotation:
             mapping = {
                 "i8": "i8",
@@ -215,6 +221,7 @@ class Atlas:
         self,
         qualified_name: str,
         arg_types: list[BaseType],
+        arg_exact_types: list[str | None],
         ctx: ParserRuleContext,
         caller_mangled: str | None = None,
         arg_channel_infos: dict[int, ChannelTypeInfo] | None = None,
@@ -227,9 +234,11 @@ class Atlas:
         arg_anonymous_struct_infos: dict[int, AnonymousStructTypeInfo] | None = None,
     ) -> str:
         """Create a new function specialization and return its mangled name."""
+        effective_arg_exact_types = self._specialization_arg_exact_types(ctx, arg_exact_types)
         mangled = self._mangle_name(
             qualified_name,
             arg_types,
+            effective_arg_exact_types,
             arg_channel_infos,
             arg_array_infos,
             arg_dict_infos,
@@ -248,6 +257,7 @@ class Atlas:
                 mangled_name=mangled,
                 ctx=ctx,
                 arg_types=list(arg_types),
+                arg_exact_types=list(effective_arg_exact_types),
                 is_async=isinstance(ctx, ZincParser.AsyncFunctionDeclarationContext),
                 arg_channel_infos={
                     index: [info]
@@ -300,10 +310,31 @@ class Atlas:
 
         return mangled
 
+    def _specialization_arg_exact_types(
+        self,
+        ctx: ParserRuleContext,
+        arg_exact_types: list[str | None],
+    ) -> list[str | None]:
+        """Use declared scalar annotations for specialization identity when present."""
+        exact_types = list(arg_exact_types)
+        if not hasattr(ctx, "parameterList") or ctx.parameterList() is None:
+            return exact_types
+        for i, param_ctx in enumerate(ctx.parameterList().parameter()):
+            if param_ctx.type_() is None:
+                continue
+            annotated_exact_type = normalize_exact_type(param_ctx.type_().getText())
+            if annotated_exact_type is None:
+                continue
+            while len(exact_types) <= i:
+                exact_types.append(None)
+            exact_types[i] = annotated_exact_type
+        return exact_types
+
     def _mangle_name(
         self,
         qualified_name: str,
         arg_types: list[BaseType],
+        arg_exact_types: list[str | None],
         arg_channel_infos: dict[int, ChannelTypeInfo] | None = None,
         arg_array_infos: dict[int, ArrayTypeInfo] | None = None,
         arg_dict_infos: dict[int, DictTypeInfo] | None = None,
@@ -320,6 +351,7 @@ class Atlas:
 
         type_parts = []
         for i, base_type in enumerate(arg_types):
+            exact_type = arg_exact_types[i] if i < len(arg_exact_types) else None
             if base_type == BaseType.CHANNEL and arg_channel_infos and i in arg_channel_infos:
                 type_parts.append(arg_channel_infos[i].to_rust_type_suffix())
             elif base_type == BaseType.ARRAY and arg_array_infos and i in arg_array_infos:
@@ -337,7 +369,7 @@ class Atlas:
             elif base_type == BaseType.STRUCT and arg_struct_qualified_names and i in arg_struct_qualified_names:
                 type_parts.append(f"Struct_{re.sub(r'[^0-9A-Za-z]+', '_', arg_struct_qualified_names[i])}")
             else:
-                type_parts.append(type_to_rust(base_type))
+                type_parts.append(exact_type or type_to_rust(base_type))
 
         return f"{base_name}_{'_'.join(type_parts)}"
 
@@ -414,6 +446,7 @@ class AtlasBuilder:
                 mangled_name=self.module_graph.rust_base_name(main_symbol.qualified_name),
                 ctx=main_symbol.ctx,
                 arg_types=[],
+                arg_exact_types=[],
                 is_async=isinstance(main_symbol.ctx, ZincParser.AsyncFunctionDeclarationContext),
             ),
             function_defs=self._function_defs,

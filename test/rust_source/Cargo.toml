@@ -7,6 +7,10 @@ edition = "2021"
 tokio = { version = "1", features = ["full"] }
 
 [[bin]]
+name = "annotations_01_typed_locals_and_params"
+path = "src/annotations/01_typed_locals_and_params.rs"
+
+[[bin]]
 name = "arithmetic"
 path = "src/arithmetic.rs"
 

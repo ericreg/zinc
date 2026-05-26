@@ -24,6 +24,7 @@ OUTPUT_DIR = TEST_DIR / "output"
 CARGO_TOML = RUST_SOURCE_DIR / "Cargo.toml"
 NON_DETERMINISTIC_FOLDER = "non_deterministic"
 COMPILE_ERROR_GROUPS = (
+    "annotations",
     "collections",
     "tuples",
     "iterations",
@@ -37,7 +38,7 @@ COMPILE_ERROR_GROUPS = (
 
 def is_entry_fixture(relative: Path) -> bool:
     """Return True when a Zinc fixture should be treated as a test entrypoint."""
-    return all(not part.startswith("_") for part in relative.parts)
+    return all(not part.startswith("_") and "." not in part for part in relative.parts)
 
 
 def get_test_cases() -> list[str]:

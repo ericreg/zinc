@@ -15,6 +15,7 @@ statement
     | functionDeclaration
     | asyncFunctionDeclaration
     | superAssignment
+    | typedVariableAssignment
     | variableAssignment
     | channelSendStatement
     | ifStatement
@@ -118,6 +119,10 @@ tupleType
     ;
 
 // --- Statements ---
+typedVariableAssignment
+    : IDENTIFIER ':' type '=' expression
+    ;
+
 variableAssignment
     : assignmentTarget '=' expression
     ;

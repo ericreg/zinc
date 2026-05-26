@@ -1,0 +1,4 @@
+// expected-error: variable 'x' expects a compatible 'i32' value
+fn main() {
+    x: i32 = 3.0
+}

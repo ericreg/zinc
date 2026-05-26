@@ -8,6 +8,7 @@ Zinc is a modern programming language that compiles to Rust. It combines Go-like
 - **Go-style Concurrency** - Channels and `spawn` for easy concurrent programming
 - **Dynamic Typing** - Variables can be reassigned to different types
 - **Type Inference** - No explicit type annotations required
+- **Strict Annotations** - Any written type annotation is enforced at compile time
 - **Monomorphization** - Generic functions are specialized at compile time
 - **Structs with Methods** - Object-oriented programming with static and instance methods
 
@@ -42,6 +43,17 @@ fn main() {
 }
 ```
 
+If you want a local binding to stay fixed, annotate it directly. Typed locals are
+strictly enforced:
+
+```zinc
+fn main() {
+    x: i32 = 5
+    x = 4      // ok
+    // x = 3.0 // compile-time error
+}
+```
+
 ### Functions
 
 Functions are declared with `fn`. Parameters don't require type annotations - the compiler infers types through monomorphization:
@@ -60,6 +72,17 @@ fn main() {
 ```
 
 The compiler creates specialized versions of functions based on the argument types at each call site.
+
+Annotated parameters are strict contracts:
+
+```zinc
+fn add_i32(x: i32, y: i32) {
+    return x + y
+}
+```
+
+`add_i32(1, 2)` is valid, but passing an already-typed `i64` or a float is a
+compile-time error.
 
 ### Control Flow
 

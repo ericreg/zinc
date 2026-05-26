@@ -19,6 +19,7 @@ from zinc.ast.types import (
     DictTypeInfo,
     SetTypeInfo,
     TupleTypeInfo,
+    exact_type_to_rust,
     type_to_rust,
 )
 from zinc.modules import extract_identifier_path, struct_path_from_ctx
@@ -234,6 +235,15 @@ class CodeGenVisitor(zincVisitor):
     def _prescan_statement(self, stmt_ctx) -> None:
         """Scan a statement for struct tracking and literal variable tracking."""
         # Track variable assignments of struct instances and literal values
+        if stmt_ctx.typedVariableAssignment():
+            var_ctx = stmt_ctx.typedVariableAssignment()
+            var_name = var_ctx.IDENTIFIER().getText()
+            expr = var_ctx.expression()
+            struct_name = self._detect_struct_assignment(expr)
+            if struct_name:
+                self._struct_instance_vars[f"{self._current_function}:{var_name}"] = struct_name
+            elif self._is_compile_time_literal_expr(expr):
+                self._literal_vars.add(var_name)
         if stmt_ctx.variableAssignment():
             var_ctx = stmt_ctx.variableAssignment()
             target = var_ctx.assignmentTarget()
@@ -270,6 +280,8 @@ class CodeGenVisitor(zincVisitor):
     def _statement_expressions(self, stmt_ctx) -> list[ParserRuleContext]:
         """Collect the direct expression children of a statement."""
         expressions: list[ParserRuleContext] = []
+        if stmt_ctx.typedVariableAssignment():
+            expressions.append(stmt_ctx.typedVariableAssignment().expression())
         if stmt_ctx.variableAssignment():
             expressions.append(stmt_ctx.variableAssignment().expression())
         if stmt_ctx.expressionStatement():
@@ -935,7 +947,19 @@ class CodeGenVisitor(zincVisitor):
         if existing is None:
             self._callable_signatures[key] = info.copy()
         else:
-            self._callable_signatures[key] = existing.merge_targets_from(info)
+            try:
+                self._callable_signatures[key] = existing.merge_targets_from(info)
+            except ValueError:
+                def specificity(callable_info: CallableTypeInfo) -> int:
+                    unknowns = sum(
+                        1 for base_type in callable_info.param_types if base_type == BaseType.UNKNOWN
+                    )
+                    if callable_info.return_type == BaseType.UNKNOWN:
+                        unknowns += 1
+                    return unknowns
+
+                chosen = existing if specificity(existing) <= specificity(info) else info
+                self._callable_signatures[key] = chosen.copy()
 
         for nested in info.param_callable_infos.values():
             self._register_callable_info(nested)
@@ -1189,6 +1213,7 @@ class CodeGenVisitor(zincVisitor):
         self,
         base_type: BaseType,
         *,
+        exact_type: str | None = None,
         array_info: ArrayTypeInfo | None = None,
         dict_info: DictTypeInfo | None = None,
         set_info: SetTypeInfo | None = None,
@@ -1215,12 +1240,36 @@ class CodeGenVisitor(zincVisitor):
             return self._named_struct_rust_name(struct_qualified_name)
         if base_type == BaseType.VOID:
             return "()"
-        return type_to_rust(base_type)
+        return exact_type_to_rust(exact_type, base_type)
+
+    def _symbol_rust_type(self, symbol) -> str:
+        """Render the full Rust type for a resolved symbol binding."""
+        array_info = None
+        if symbol.resolved_type == BaseType.ARRAY and symbol.element_type is not None:
+            array_info = ArrayTypeInfo(
+                element_type=symbol.element_type,
+                element_exact_type=symbol.element_exact_type,
+                element_tuple_info=symbol.tuple_info if symbol.element_type == BaseType.TUPLE else None,
+                element_callable_info=symbol.callable_info if symbol.element_type == BaseType.CALLABLE else None,
+                element_struct_qualified_name=symbol.element_struct_qualified_name,
+                element_anonymous_struct_info=symbol.element_anonymous_struct_info,
+            )
+        return self._type_with_metadata_to_rust(
+            symbol.resolved_type,
+            exact_type=symbol.exact_type,
+            array_info=array_info,
+            dict_info=symbol.dict_info,
+            set_info=symbol.set_info,
+            tuple_info=symbol.tuple_info if symbol.resolved_type == BaseType.TUPLE else None,
+            callable_info=symbol.callable_info if symbol.resolved_type == BaseType.CALLABLE else None,
+            anonymous_struct_info=symbol.anonymous_struct_info,
+        )
 
     def _callable_param_rust_type(self, info: CallableTypeInfo, index: int) -> str:
         """Render the Rust type for a callable parameter slot."""
         return self._type_with_metadata_to_rust(
             info.param_types[index],
+            exact_type=info.param_exact_types[index] if index < len(info.param_exact_types) else None,
             array_info=info.param_array_infos.get(index),
             dict_info=info.param_dict_infos.get(index),
             set_info=info.param_set_infos.get(index),
@@ -1235,6 +1284,7 @@ class CodeGenVisitor(zincVisitor):
         """Render the Rust return type for a callable signature."""
         return self._type_with_metadata_to_rust(
             info.return_type,
+            exact_type=info.return_exact_type,
             dict_info=info.return_dict_info,
             set_info=info.return_set_info,
             tuple_info=info.return_tuple_info,
@@ -1250,6 +1300,7 @@ class CodeGenVisitor(zincVisitor):
             return self.atlas._mangle_name(
                 target.qualified_name,
                 info.param_types,
+                info.param_exact_types,
                 arg_array_infos=info.param_array_infos,
                 arg_dict_infos=info.param_dict_infos,
                 arg_set_infos=info.param_set_infos,
@@ -1648,7 +1699,25 @@ class CodeGenVisitor(zincVisitor):
         name = self._const_rust_name(const)
         symbol = self._const_symbol(const)
         if symbol:
-            type_str = type_to_rust(symbol.resolved_type)
+            type_str = self._type_with_metadata_to_rust(
+                symbol.resolved_type,
+                exact_type=symbol.exact_type,
+                array_info=ArrayTypeInfo(
+                    element_type=symbol.element_type,
+                    element_exact_type=symbol.element_exact_type,
+                    element_tuple_info=symbol.tuple_info if symbol.element_type == BaseType.TUPLE else None,
+                    element_callable_info=symbol.callable_info if symbol.element_type == BaseType.CALLABLE else None,
+                    element_struct_qualified_name=symbol.element_struct_qualified_name,
+                    element_anonymous_struct_info=symbol.element_anonymous_struct_info,
+                )
+                if symbol.resolved_type == BaseType.ARRAY and symbol.element_type is not None
+                else None,
+                dict_info=symbol.dict_info,
+                set_info=symbol.set_info,
+                tuple_info=symbol.tuple_info if symbol.resolved_type == BaseType.TUPLE else None,
+                callable_info=symbol.callable_info if symbol.resolved_type == BaseType.CALLABLE else None,
+                anonymous_struct_info=symbol.anonymous_struct_info,
+            )
             if type_str == "String":
                 if self._expr_is_string_literal(ctx.expression()) or self._looks_like_rust_string_literal(value):
                     value = f"String::from({value})"
@@ -1662,6 +1731,7 @@ class CodeGenVisitor(zincVisitor):
         for field in info.canonical_fields():
             rust_type = self._type_with_metadata_to_rust(
                 field.resolved_type,
+                exact_type=field.exact_type,
                 array_info=field.array_info,
                 dict_info=field.dict_info,
                 set_info=field.set_info,
@@ -1837,7 +1907,10 @@ class CodeGenVisitor(zincVisitor):
                             as_reference=False,
                         )
                     else:
-                        type_str = type_to_rust(func.arg_types[i])
+                        type_str = self._type_with_metadata_to_rust(
+                            func.arg_types[i],
+                            exact_type=func.arg_exact_types[i] if i < len(func.arg_exact_types) else None,
+                        )
                     params.append(f"{param_name}: {type_str}")
                 else:
                     params.append(param_name)
@@ -1888,7 +1961,13 @@ class CodeGenVisitor(zincVisitor):
                     )
                 )
             else:
-                return_type_str = f" -> {type_to_rust(func.return_type)}"
+                return_type_str = (
+                    " -> "
+                    + self._type_with_metadata_to_rust(
+                        func.return_type,
+                        exact_type=func.return_exact_type,
+                    )
+                )
         else:
             return_type_str = ""
 
@@ -2160,15 +2239,12 @@ class CodeGenVisitor(zincVisitor):
         left = self.visit(ctx.expression(0))
         op = ctx.getChild(1).getText()
         right = self.visit(ctx.expression(1))
-
-        # Handle type promotion: int + float -> cast int to f64
-        left_type = self._get_expr_type(ctx.expression(0))
-        right_type = self._get_expr_type(ctx.expression(1))
-
-        if left_type == BaseType.INTEGER and right_type == BaseType.FLOAT:
-            left = f"({left} as f64)"
-        elif left_type == BaseType.FLOAT and right_type == BaseType.INTEGER:
-            right = f"({right} as f64)"
+        left, right = self._promote_numeric_operands(
+            left,
+            ctx.expression(0),
+            right,
+            ctx.expression(1),
+        )
 
         return f"({left} {op} {right})"
 
@@ -2177,15 +2253,12 @@ class CodeGenVisitor(zincVisitor):
         left = self.visit(ctx.expression(0))
         op = ctx.getChild(1).getText()
         right = self.visit(ctx.expression(1))
-
-        # Handle type promotion: int * float -> cast int to f64
-        left_type = self._get_expr_type(ctx.expression(0))
-        right_type = self._get_expr_type(ctx.expression(1))
-
-        if left_type == BaseType.INTEGER and right_type == BaseType.FLOAT:
-            left = f"({left} as f64)"
-        elif left_type == BaseType.FLOAT and right_type == BaseType.INTEGER:
-            right = f"({right} as f64)"
+        left, right = self._promote_numeric_operands(
+            left,
+            ctx.expression(0),
+            right,
+            ctx.expression(1),
+        )
 
         return f"({left} {op} {right})"
 
@@ -2204,6 +2277,34 @@ class CodeGenVisitor(zincVisitor):
         if symbol:
             return symbol.resolved_type
         return BaseType.UNKNOWN
+
+    def _get_expr_exact_type(self, ctx) -> str | None:
+        """Get the resolved exact scalar type for an expression, when known."""
+        if isinstance(ctx, ZincParser.FunctionCallExprContext):
+            key = (self._current_function, ctx.getSourceInterval())
+            mangled = self._specialization_map.get(key)
+            if mangled and mangled in self.atlas.functions:
+                return self.atlas.functions[mangled].return_exact_type
+
+        symbol = self.symbols.lookup_by_interval(
+            ctx.getSourceInterval(), self._current_function
+        )
+        if symbol:
+            return symbol.exact_type
+        return None
+
+    def _promote_numeric_operands(self, left: str, left_ctx, right: str, right_ctx) -> tuple[str, str]:
+        """Cast mixed int/float operands to the float operand's exact type."""
+        left_type = self._get_expr_type(left_ctx)
+        right_type = self._get_expr_type(right_ctx)
+
+        if left_type == BaseType.INTEGER and right_type == BaseType.FLOAT:
+            float_exact = exact_type_to_rust(self._get_expr_exact_type(right_ctx), BaseType.FLOAT)
+            return f"({left} as {float_exact})", right
+        if left_type == BaseType.FLOAT and right_type == BaseType.INTEGER:
+            float_exact = exact_type_to_rust(self._get_expr_exact_type(left_ctx), BaseType.FLOAT)
+            return left, f"({right} as {float_exact})"
+        return left, right
 
     def _get_expr_symbol(self, ctx):
         """Get the resolved symbol for an expression-like context."""
@@ -2358,15 +2459,12 @@ class CodeGenVisitor(zincVisitor):
         left = self.visit(ctx.expression(0))
         op = ctx.getChild(1).getText()
         right = self.visit(ctx.expression(1))
-
-        # Handle type promotion for comparisons: int < float -> cast int to f64
-        left_type = self._get_expr_type(ctx.expression(0))
-        right_type = self._get_expr_type(ctx.expression(1))
-
-        if left_type == BaseType.INTEGER and right_type == BaseType.FLOAT:
-            left = f"({left} as f64)"
-        elif left_type == BaseType.FLOAT and right_type == BaseType.INTEGER:
-            right = f"({right} as f64)"
+        left, right = self._promote_numeric_operands(
+            left,
+            ctx.expression(0),
+            right,
+            ctx.expression(1),
+        )
 
         return f"({left} {op} {right})"
 
@@ -2375,15 +2473,12 @@ class CodeGenVisitor(zincVisitor):
         left = self.visit(ctx.expression(0))
         op = ctx.getChild(1).getText()
         right = self.visit(ctx.expression(1))
-
-        # Handle type promotion for equality: int == float -> cast int to f64
-        left_type = self._get_expr_type(ctx.expression(0))
-        right_type = self._get_expr_type(ctx.expression(1))
-
-        if left_type == BaseType.INTEGER and right_type == BaseType.FLOAT:
-            left = f"({left} as f64)"
-        elif left_type == BaseType.FLOAT and right_type == BaseType.INTEGER:
-            right = f"({right} as f64)"
+        left, right = self._promote_numeric_operands(
+            left,
+            ctx.expression(0),
+            right,
+            ctx.expression(1),
+        )
 
         return f"({left} {op} {right})"
 
@@ -3204,6 +3299,36 @@ class CodeGenVisitor(zincVisitor):
             f"let {temp_name} = {value};\n"
             f"*{self._rust_binding_name(storage_name)}.lock().unwrap() = {temp_name};"
         )
+
+    def visitTypedVariableAssignment(self, ctx: ZincParser.TypedVariableAssignmentContext) -> str:
+        """Visit a typed local declaration."""
+        var_name = ctx.IDENTIFIER().getText()
+        symbol = self.symbols.lookup_by_interval(
+            ctx.IDENTIFIER().getSourceInterval(), self._current_function
+        )
+        value = self._visit_expression_with_expectations(
+            ctx.expression(),
+            expected_type=symbol.resolved_type if symbol else None,
+            dict_info=symbol.dict_info if symbol else None,
+            set_info=symbol.set_info if symbol else None,
+            tuple_info=symbol.tuple_info if symbol else None,
+            callable_info=symbol.callable_info if symbol else None,
+            coerce_scalar=False,
+        )
+        if symbol is None:
+            return f"let {var_name} = {value};"
+
+        rendered_target = var_name
+        if symbol.unique_name in self._captured_binding_names:
+            rendered_target = self._rust_binding_name(symbol.unique_name)
+            value = f"Arc::new(Mutex::new({value}))"
+
+        type_str = self._symbol_rust_type(symbol)
+        self._declared_vars.add(var_name)
+        needs_mut = symbol.is_mutated or var_name in self._mut_struct_vars
+        if needs_mut:
+            return f"let mut {rendered_target}: {type_str} = {value};"
+        return f"let {rendered_target}: {type_str} = {value};"
 
     def visitVariableAssignment(self, ctx: ZincParser.VariableAssignmentContext) -> str:
         """Visit variable assignment with shadowing support."""
