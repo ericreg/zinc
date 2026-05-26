@@ -494,6 +494,15 @@ class zincListener(ParseTreeListener):
         pass
 
 
+    # Enter a parse tree produced by zincParser#ifExpr.
+    def enterIfExpr(self, ctx:zincParser.IfExprContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#ifExpr.
+    def exitIfExpr(self, ctx:zincParser.IfExprContext):
+        pass
+
+
     # Enter a parse tree produced by zincParser#channelReceiveExpr.
     def enterChannelReceiveExpr(self, ctx:zincParser.ChannelReceiveExprContext):
         pass
@@ -536,6 +545,15 @@ class zincListener(ParseTreeListener):
 
     # Exit a parse tree produced by zincParser#equalityExpr.
     def exitEqualityExpr(self, ctx:zincParser.EqualityExprContext):
+        pass
+
+
+    # Enter a parse tree produced by zincParser#ifExpression.
+    def enterIfExpression(self, ctx:zincParser.IfExpressionContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#ifExpression.
+    def exitIfExpression(self, ctx:zincParser.IfExpressionContext):
         pass
 
 

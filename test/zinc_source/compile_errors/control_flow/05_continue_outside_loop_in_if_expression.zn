@@ -1,0 +1,9 @@
+// expected-error: continue is only valid inside a loop
+
+fn main() {
+    value = if true {
+        continue
+    } else {
+        1
+    }
+}

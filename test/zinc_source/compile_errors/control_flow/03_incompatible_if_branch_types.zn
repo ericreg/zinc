@@ -1,0 +1,10 @@
+// expected-error: if-expression branches have incompatible types
+
+fn main() {
+    debug = true
+    value = if debug {
+        1
+    } else {
+        "oops"
+    }
+}

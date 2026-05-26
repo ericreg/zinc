@@ -103,6 +103,8 @@ class CodeGenVisitor(zincVisitor):
         self._current_constructor_owner: str | None = None
         # Track variables that hold compile-time literal values
         self._literal_vars: set[str] = set()
+        self._expected_result_type: BaseType | None = None
+        self._expected_callable_info: CallableTypeInfo | None = None
         self._expected_dict_info: DictTypeInfo | None = None
         self._expected_set_info: SetTypeInfo | None = None
         self._expected_tuple_info: TupleTypeInfo | None = None
@@ -119,6 +121,7 @@ class CodeGenVisitor(zincVisitor):
         # Pre-scan to determine which struct vars need mut
         self._prescan_for_mut_vars()
         self._collect_captured_binding_names()
+        self._refine_function_return_callables()
         self._collect_callable_signatures()
         self._collect_anonymous_struct_types()
         self._mark_async_functions()
@@ -172,6 +175,37 @@ class CodeGenVisitor(zincVisitor):
             uses_async=self._uses_async,
         )
 
+    def _callable_info_is_concrete(self, info: CallableTypeInfo | None) -> bool:
+        """Return True when a callable signature contains no unknown slots."""
+        if info is None:
+            return False
+        return all(param != BaseType.UNKNOWN for param in info.param_types) and info.return_type != BaseType.UNKNOWN
+
+    def _refine_function_return_callables(self) -> None:
+        """Refine abstract callable return signatures from concrete call sites."""
+        for func in self.atlas.functions.values():
+            if func.return_type != BaseType.CALLABLE or self._callable_info_is_concrete(func.return_callable_info):
+                continue
+            refined = self._concrete_callable_return_from_call_sites(func.mangled_name)
+            if refined is not None:
+                func.return_callable_info = refined
+
+    def _concrete_callable_return_from_call_sites(self, mangled_name: str) -> CallableTypeInfo | None:
+        """Find a concrete callable return signature for one function from its call sites."""
+        resolved: CallableTypeInfo | None = None
+        for (caller_name, interval), target_name in self._specialization_map.items():
+            if target_name != mangled_name:
+                continue
+            symbol = self.symbols.lookup_by_interval(interval, caller_name)
+            if symbol is None or not self._callable_info_is_concrete(symbol.callable_info):
+                continue
+            if resolved is None:
+                resolved = symbol.callable_info.copy()
+                continue
+            if resolved.structural_key() == symbol.callable_info.structural_key():
+                resolved = resolved.merge_targets_from(symbol.callable_info)
+        return resolved
+
     def _prescan_for_mut_vars(self) -> None:
         """Scan all code to find struct variables that call &mut self methods."""
         previous_module = self._current_module
@@ -219,6 +253,8 @@ class CodeGenVisitor(zincVisitor):
         if stmt_ctx.expressionStatement():
             expr = stmt_ctx.expressionStatement().expression()
             self._check_for_mut_method_call(expr)
+        for expr_ctx in self._statement_expressions(stmt_ctx):
+            self._walk_expression_if_blocks(expr_ctx, self._prescan_block)
 
         # Recurse into blocks
         if stmt_ctx.ifStatement():
@@ -230,6 +266,49 @@ class CodeGenVisitor(zincVisitor):
             self._prescan_block(stmt_ctx.whileStatement().block())
         if stmt_ctx.loopStatement():
             self._prescan_block(stmt_ctx.loopStatement().block())
+
+    def _statement_expressions(self, stmt_ctx) -> list[ParserRuleContext]:
+        """Collect the direct expression children of a statement."""
+        expressions: list[ParserRuleContext] = []
+        if stmt_ctx.variableAssignment():
+            expressions.append(stmt_ctx.variableAssignment().expression())
+        if stmt_ctx.expressionStatement():
+            expressions.append(stmt_ctx.expressionStatement().expression())
+        if stmt_ctx.returnStatement() and stmt_ctx.returnStatement().expression():
+            expressions.append(stmt_ctx.returnStatement().expression())
+        if stmt_ctx.superAssignment():
+            expressions.append(stmt_ctx.superAssignment().expression())
+        if stmt_ctx.channelSendStatement():
+            expressions.append(stmt_ctx.channelSendStatement().expression())
+        if stmt_ctx.ifStatement():
+            expressions.extend(stmt_ctx.ifStatement().expression())
+        if stmt_ctx.forStatement():
+            expressions.append(stmt_ctx.forStatement().expression())
+        if stmt_ctx.whileStatement():
+            expressions.append(stmt_ctx.whileStatement().expression())
+        if stmt_ctx.spawnStatement():
+            expressions.append(stmt_ctx.spawnStatement().expression())
+            if stmt_ctx.spawnStatement().argumentList():
+                expressions.extend(stmt_ctx.spawnStatement().argumentList().expression())
+        return expressions
+
+    def _walk_expression_if_blocks(self, node, visit_block) -> None:
+        """Visit each block nested inside expression-form if subtrees."""
+        if node is None:
+            return
+        if isinstance(node, ZincParser.IfExpressionContext):
+            self._walk_expression_if_blocks(node.expression(), visit_block)
+            visit_block(node.block(0))
+            if len(node.block()) > 1:
+                visit_block(node.block(1))
+            if node.ifExpression():
+                self._walk_expression_if_blocks(node.ifExpression(), visit_block)
+            return
+        if isinstance(node, ParserRuleContext):
+            for i in range(node.getChildCount()):
+                child = node.getChild(i)
+                if isinstance(child, ParserRuleContext):
+                    self._walk_expression_if_blocks(child, visit_block)
 
     def _prescan_callable_escapes(self, node) -> None:
         """Collect struct receivers whose bound methods escape as callable values."""
@@ -349,9 +428,16 @@ class CodeGenVisitor(zincVisitor):
 
     def _render_channel_value(self, channel_name: str, expr_ctx) -> str:
         """Render a channel payload with the channel element type's ownership rules."""
-        value = self.visit(expr_ctx)
         chan_info = self._channel_infos.get(channel_name)
         target_type = chan_info.element_type if chan_info else self._get_expr_type(expr_ctx)
+        value = self._visit_expression_with_expectations(
+            expr_ctx,
+            expected_type=target_type,
+            tuple_info=chan_info.element_tuple_info if chan_info else None,
+            callable_info=chan_info.element_callable_info if chan_info else None,
+            coerce_scalar=False,
+            coerce_callable=False,
+        )
         if target_type == BaseType.CALLABLE and chan_info and chan_info.element_callable_info:
             expr_symbol = self._get_expr_symbol(expr_ctx)
             if expr_symbol and expr_symbol.callable_info:
@@ -376,12 +462,230 @@ class CodeGenVisitor(zincVisitor):
             return [*prelude, *body]
         return body
 
+    def _render_scoped_value_block(self, block_ctx) -> list[str]:
+        """Render a value-producing block while keeping local bindings scoped."""
+        previous_declared = set(self._declared_vars)
+        try:
+            return self._generate_value_block(block_ctx)
+        finally:
+            self._declared_vars = previous_declared
+
     def _append_block_lines(self, lines: list[str], stmts: list[str], indent: int) -> None:
         """Append rendered statements with a fixed indentation level."""
         prefix = "    " * indent
         for stmt in stmts:
             for line in stmt.split("\n"):
                 lines.append(f"{prefix}{line}")
+
+    def _append_rendered_statement(self, stmts: list[str], rendered) -> None:
+        """Append a rendered statement or statement list to a block."""
+        if not rendered:
+            return
+        if isinstance(rendered, list):
+            stmts.extend(rendered)
+        else:
+            stmts.append(rendered)
+
+    def _expected_type_for_expression(self, expr_ctx) -> BaseType | None:
+        """Return the best result type expectation for an expression."""
+        if self._expected_result_type not in {None, BaseType.UNKNOWN}:
+            return self._expected_result_type
+        expr_type = self._get_expr_type(expr_ctx)
+        if expr_type != BaseType.UNKNOWN:
+            return expr_type
+        return None
+
+    def _expected_callable_for_expression(self, expr_ctx) -> CallableTypeInfo | None:
+        """Return the best callable expectation for an expression."""
+        if self._expected_callable_info is not None:
+            return self._expected_callable_info
+        expr_symbol = self._get_expr_symbol(expr_ctx)
+        if expr_symbol and expr_symbol.callable_info:
+            return expr_symbol.callable_info
+        return None
+
+    def _coerce_rendered_value(
+        self,
+        value: str,
+        expr_ctx,
+        *,
+        expected_type: BaseType | None = None,
+        expected_callable_info: CallableTypeInfo | None = None,
+        coerce_scalar: bool = True,
+        coerce_callable: bool = True,
+    ) -> str:
+        """Coerce a rendered expression into the surrounding expected type."""
+        resolved_expected_type = expected_type if expected_type is not None else self._expected_result_type
+        resolved_callable_info = (
+            expected_callable_info if expected_callable_info is not None else self._expected_callable_info
+        )
+        is_if_expression = isinstance(
+            expr_ctx,
+            (ZincParser.IfExprContext, ZincParser.IfExpressionContext),
+        )
+
+        if (
+            coerce_callable
+            and not is_if_expression
+            and resolved_expected_type == BaseType.CALLABLE
+            and resolved_callable_info is not None
+        ):
+            expr_symbol = self._get_expr_symbol(expr_ctx)
+            if (
+                expr_symbol
+                and expr_symbol.callable_info
+                and self._is_direct_callable_expr(expr_ctx, expr_symbol)
+            ):
+                return self._render_callable_value_for_signature(
+                    expr_symbol.callable_info,
+                    resolved_callable_info,
+                )
+
+        if not coerce_scalar or is_if_expression:
+            return value
+        if resolved_expected_type == BaseType.STRING:
+            return self._coerce_owned(value, BaseType.STRING, expr_ctx)
+        if resolved_expected_type == BaseType.FLOAT and expr_ctx is not None:
+            if self._get_expr_type(expr_ctx) == BaseType.INTEGER:
+                return f"({value} as f64)"
+        return value
+
+    def _visit_expression_with_expectations(
+        self,
+        expr_ctx,
+        *,
+        expected_type: BaseType | None = None,
+        dict_info: DictTypeInfo | None = None,
+        set_info: SetTypeInfo | None = None,
+        tuple_info: TupleTypeInfo | None = None,
+        callable_info: CallableTypeInfo | None = None,
+        coerce_scalar: bool = True,
+        coerce_callable: bool = True,
+    ) -> str:
+        """Visit an expression with temporary expected result metadata."""
+        previous_result_type = self._expected_result_type
+        previous_callable_info = self._expected_callable_info
+        previous_dict_info = self._expected_dict_info
+        previous_set_info = self._expected_set_info
+        previous_tuple_info = self._expected_tuple_info
+        if expected_type is not None:
+            self._expected_result_type = expected_type
+        if callable_info is not None:
+            self._expected_callable_info = callable_info
+        if dict_info is not None:
+            self._expected_dict_info = dict_info
+        if set_info is not None:
+            self._expected_set_info = set_info
+        if tuple_info is not None:
+            self._expected_tuple_info = tuple_info
+        try:
+            value = self.visit(expr_ctx)
+        finally:
+            self._expected_result_type = previous_result_type
+            self._expected_callable_info = previous_callable_info
+            self._expected_dict_info = previous_dict_info
+            self._expected_set_info = previous_set_info
+            self._expected_tuple_info = previous_tuple_info
+        return self._coerce_rendered_value(
+            value,
+            expr_ctx,
+            expected_type=expected_type,
+            expected_callable_info=callable_info,
+            coerce_scalar=coerce_scalar,
+            coerce_callable=coerce_callable,
+        )
+
+    def _render_expression_value(self, expr_ctx) -> str:
+        """Render a tail-position expression with the current expectations."""
+        return self._coerce_rendered_value(self.visit(expr_ctx), expr_ctx)
+
+    def _render_value_tail(self, stmt_ctx) -> list[str]:
+        """Render the final statement of a value-producing block."""
+        if stmt_ctx.expressionStatement():
+            return [self._render_expression_value(stmt_ctx.expressionStatement().expression())]
+        if stmt_ctx.block():
+            return [self._render_value_block_expr(stmt_ctx.block())]
+        if stmt_ctx.ifStatement():
+            return [self._render_if_statement(stmt_ctx.ifStatement(), as_expression=True)]
+        if stmt_ctx.returnStatement():
+            return [self.visit(stmt_ctx.returnStatement())]
+        if stmt_ctx.breakStatement():
+            return [self.visit(stmt_ctx.breakStatement())]
+        if stmt_ctx.continueStatement():
+            return [self.visit(stmt_ctx.continueStatement())]
+        rendered = self.visit(stmt_ctx)
+        if not rendered:
+            return ["()"]
+        return [rendered, "()"]
+
+    def _generate_value_block(self, ctx: ZincParser.BlockContext) -> list[str]:
+        """Generate statements for a block whose final statement yields a value."""
+        statements = list(ctx.statement())
+        if not statements:
+            return ["()"]
+        stmts: list[str] = []
+        for stmt_ctx in statements[:-1]:
+            self._append_rendered_statement(stmts, self.visit(stmt_ctx))
+        stmts.extend(self._render_value_tail(statements[-1]))
+        return stmts
+
+    def _render_value_block_expr(self, block_ctx) -> str:
+        """Render a value-producing block as a Rust block expression."""
+        lines = ["{"]
+        self._append_block_lines(lines, self._render_scoped_value_block(block_ctx), 1)
+        lines.append("}")
+        return "\n".join(lines)
+
+    def _render_if_chain(
+        self,
+        conditions: list,
+        blocks: list,
+        else_block,
+        *,
+        as_expression: bool,
+    ) -> str:
+        """Render an if/else-if chain in statement or expression position."""
+        lines: list[str] = []
+        for i, expr_ctx in enumerate(conditions):
+            cond = self.visit(expr_ctx)
+            body_stmts = (
+                self._render_scoped_value_block(blocks[i])
+                if as_expression
+                else self._render_scoped_block(blocks[i])
+            )
+            keyword = "if" if i == 0 else "} else if"
+            lines.append(f"{keyword} {cond} {{")
+            self._append_block_lines(lines, body_stmts, 1)
+
+        if else_block is not None:
+            lines.append("} else {")
+            else_stmts = (
+                self._render_scoped_value_block(else_block)
+                if as_expression
+                else self._render_scoped_block(else_block)
+            )
+            self._append_block_lines(lines, else_stmts, 1)
+        elif as_expression:
+            lines.append("} else {")
+            lines.append("    ()")
+
+        lines.append("}")
+        return "\n".join(lines)
+
+    def _flatten_if_expression(self, ctx: ZincParser.IfExpressionContext) -> tuple[list, list, ParserRuleContext | None]:
+        """Flatten nested expression-form else-if chains into a single sequence."""
+        conditions = []
+        blocks = []
+        current = ctx
+        else_block = None
+        while current is not None:
+            conditions.append(current.expression())
+            blocks.append(current.block(0))
+            if len(current.block()) > 1:
+                else_block = current.block(1)
+                break
+            current = current.ifExpression()
+        return conditions, blocks, else_block
 
     def _generate_imports(self) -> list[str]:
         """Generate import statements based on what's used."""
@@ -1626,6 +1930,9 @@ class CodeGenVisitor(zincVisitor):
         for stmt in ctx.statement():
             if stmt.spawnStatement():
                 return True
+            for expr_ctx in self._statement_expressions(stmt):
+                if self._expression_if_blocks_contain_spawn(expr_ctx):
+                    return True
             if stmt.ifStatement():
                 if any(self._block_contains_spawn(block) for block in stmt.ifStatement().block()):
                     return True
@@ -1636,6 +1943,18 @@ class CodeGenVisitor(zincVisitor):
             if stmt.loopStatement() and self._block_contains_spawn(stmt.loopStatement().block()):
                 return True
         return False
+
+    def _expression_if_blocks_contain_spawn(self, expr_ctx) -> bool:
+        """Return True when an expression-form if subtree contains a spawn."""
+        found = False
+
+        def visit_block(block_ctx) -> None:
+            nonlocal found
+            if not found and self._block_contains_spawn(block_ctx):
+                found = True
+
+        self._walk_expression_if_blocks(expr_ctx, visit_block)
+        return found
 
     def _render_spawn_handle_awaits(self, handle_var: str) -> str:
         """Render code that waits for all spawned tasks in this function."""
@@ -1649,12 +1968,7 @@ class CodeGenVisitor(zincVisitor):
         """Generate statements for a block."""
         stmts = []
         for stmt_ctx in ctx.statement():
-            result = self.visit(stmt_ctx)
-            if result:
-                if isinstance(result, list):
-                    stmts.extend(result)
-                else:
-                    stmts.append(result)
+            self._append_rendered_statement(stmts, self.visit(stmt_ctx))
         return stmts
 
     def _indent(self, text: str) -> str:
@@ -1827,8 +2141,15 @@ class CodeGenVisitor(zincVisitor):
         info = self._expected_tuple_info or self._get_tuple_info(ctx) or TupleTypeInfo()
         elements = []
         for i, expr_ctx in enumerate(ctx.expression()):
-            value = self.visit(expr_ctx)
             target_type = info.element_types[i] if i < len(info.element_types) else self._get_expr_type(expr_ctx)
+            value = self._visit_expression_with_expectations(
+                expr_ctx,
+                expected_type=target_type,
+                tuple_info=info.element_tuple_infos.get(i),
+                callable_info=info.element_callable_infos.get(i),
+                coerce_scalar=False,
+                coerce_callable=False,
+            )
             elements.append(self._coerce_owned(value, target_type, expr_ctx))
         if len(elements) == 1:
             return f"({elements[0]},)"
@@ -1984,7 +2305,7 @@ class CodeGenVisitor(zincVisitor):
         if target_type == BaseType.STRING:
             if self._expr_is_string_literal(value_ctx) or self._looks_like_rust_string_literal(value):
                 return f"String::from({value})"
-            return f"{value}.to_string()"
+            return value
         if target_type == BaseType.FLOAT and value_ctx is not None:
             if self._get_expr_type(value_ctx) == BaseType.INTEGER:
                 return f"({value} as f64)"
@@ -2091,15 +2412,35 @@ class CodeGenVisitor(zincVisitor):
             for entry_ctx in ctx.dictEntry():
                 key_ctx = entry_ctx.expression(0)
                 value_ctx = entry_ctx.expression(1)
-                key = self._coerce_owned(self.visit(key_ctx), info.key_type, key_ctx)
-                value = self._coerce_owned(self.visit(value_ctx), info.value_type, value_ctx)
+                key = self._visit_expression_with_expectations(
+                    key_ctx,
+                    expected_type=info.key_type,
+                    callable_info=info.key_callable_info,
+                    coerce_scalar=False,
+                    coerce_callable=False,
+                )
+                value = self._visit_expression_with_expectations(
+                    value_ctx,
+                    expected_type=info.value_type,
+                    callable_info=info.value_callable_info,
+                    coerce_scalar=False,
+                    coerce_callable=False,
+                )
+                key = self._coerce_owned(key, info.key_type, key_ctx)
+                value = self._coerce_owned(value, info.value_type, value_ctx)
                 entries.append(f"({key}, {value})")
             return f"{info.rust_container()}::from([{', '.join(entries)}])"
 
         info = self._expected_set_info or self._get_set_info(ctx) or SetTypeInfo()
         elements = []
         for expr_ctx in ctx.expression():
-            elem = self._coerce_owned(self.visit(expr_ctx), info.element_type, expr_ctx)
+            elem = self._visit_expression_with_expectations(
+                expr_ctx,
+                expected_type=info.element_type,
+                coerce_scalar=False,
+                coerce_callable=False,
+            )
+            elem = self._coerce_owned(elem, info.element_type, expr_ctx)
             elements.append(elem)
         return f"{info.rust_container()}::from([{', '.join(elements)}])"
 
@@ -2282,8 +2623,12 @@ class CodeGenVisitor(zincVisitor):
         direct_key = (self._current_function, ctx.getSourceInterval())
         direct_mangled = self._specialization_map.get(direct_key)
         if direct_mangled:
-            args = self._process_function_args(direct_mangled, args, arg_ctxs)
             func = self.atlas.functions.get(direct_mangled)
+            if func is not None:
+                args = self._render_function_args_for_instance(func, arg_ctxs)
+            else:
+                args = [self.visit(arg) for arg in arg_ctxs]
+            args = self._process_function_args(direct_mangled, args, arg_ctxs)
             if func is not None:
                 closure_info = self._closure_info(func.qualified_name)
                 if closure_info is not None:
@@ -2364,6 +2709,7 @@ class CodeGenVisitor(zincVisitor):
                         and self.module_graph.resolve_function_path(self._current_module, [name]) is not None
                     )
             if not is_bare_top_level_function:
+                args = self._render_callable_args_for_signature(callee_symbol.callable_info, arg_ctxs)
                 args = self._process_callable_args(callee_symbol.callable_info, args, arg_ctxs)
                 callable_expr = callee
                 if isinstance(callee_ctx, ZincParser.MemberAccessExprContext):
@@ -2379,6 +2725,11 @@ class CodeGenVisitor(zincVisitor):
                     mangled = self._specialization_map.get(key) or self.module_graph.rust_base_name(
                         resolved_function.qualified_name
                     )
+                    func = self.atlas.functions.get(mangled)
+                    if func is not None:
+                        args = self._render_function_args_for_instance(func, arg_ctxs)
+                    else:
+                        args = [self.visit(arg) for arg in arg_ctxs]
                     args = self._process_function_args(mangled, args, arg_ctxs)
                     call = f"{mangled}({', '.join(args)})"
                     if self.atlas.functions.get(mangled) and self.atlas.functions[mangled].is_async:
@@ -2406,7 +2757,7 @@ class CodeGenVisitor(zincVisitor):
                 if method_name == "is_empty":
                     return f"{dict_target}.is_empty()"
                 if method_name == "clear":
-                    return f"{dict_target}.clear()"
+                    return f"{{ {dict_target}.clear(); () }}"
                 if method_name == "keys":
                     return f"{dict_target}.keys().cloned().collect::<Vec<_>>()"
                 if method_name == "values":
@@ -2416,11 +2767,13 @@ class CodeGenVisitor(zincVisitor):
                 if method_name == "insert" and len(args) == 2:
                     key = self._coerce_owned(args[0], info.key_type, arg_ctxs[0] if arg_ctxs else None)
                     value = self._coerce_owned(args[1], info.value_type, arg_ctxs[1] if arg_ctxs else None)
-                    return f"{dict_target}.insert({key}, {value})"
+                    return f"{{ {dict_target}.insert({key}, {value}); () }}"
                 if method_name in {"get", "contains_key", "remove"} and len(args) == 1:
                     key = self._borrow_lookup_key(args[0], info.key_type, arg_ctxs[0] if arg_ctxs else None)
                     if method_name == "get":
                         return f"{dict_target}.get({key}).unwrap().clone()"
+                    if method_name == "remove":
+                        return f"{{ {dict_target}.remove({key}); () }}"
                     return f"{dict_target}.{method_name}({key})"
 
             if receiver_type == BaseType.SET:
@@ -2432,12 +2785,14 @@ class CodeGenVisitor(zincVisitor):
                 if method_name == "is_empty":
                     return f"{set_target}.is_empty()"
                 if method_name == "clear":
-                    return f"{set_target}.clear()"
+                    return f"{{ {set_target}.clear(); () }}"
                 if method_name in {"push", "insert"} and len(args) == 1:
                     elem = self._coerce_owned(args[0], info.element_type, arg_ctxs[0] if arg_ctxs else None)
-                    return f"{set_target}.insert({elem})"
+                    return f"{{ {set_target}.insert({elem}); () }}"
                 if method_name in {"contains", "remove"} and len(args) == 1:
                     elem = self._borrow_lookup_key(args[0], info.element_type, arg_ctxs[0] if arg_ctxs else None)
+                    if method_name == "remove":
+                        return f"{{ {set_target}.remove({elem}); () }}"
                     return f"{set_target}.{method_name}({elem})"
 
             if receiver_type == BaseType.ARRAY and method_name == "push" and len(args) == 1:
@@ -2508,6 +2863,42 @@ class CodeGenVisitor(zincVisitor):
             return call
 
         return f"{callee}({', '.join(args)})"
+
+    def _render_function_args_for_instance(self, func: FunctionInstance, arg_ctxs: list) -> list[str]:
+        """Render function-call arguments with the function signature as context."""
+        rendered: list[str] = []
+        for i, arg_ctx in enumerate(arg_ctxs):
+            rendered.append(
+                self._visit_expression_with_expectations(
+                    arg_ctx,
+                    expected_type=func.arg_types[i] if i < len(func.arg_types) else None,
+                    dict_info=func.arg_dict_infos.get(i),
+                    set_info=func.arg_set_infos.get(i),
+                    tuple_info=func.arg_tuple_infos.get(i),
+                    callable_info=func.arg_callable_infos.get(i),
+                    coerce_scalar=False,
+                    coerce_callable=False,
+                )
+            )
+        return rendered
+
+    def _render_callable_args_for_signature(self, callable_info: CallableTypeInfo, arg_ctxs: list) -> list[str]:
+        """Render indirect-call arguments with a callable signature as context."""
+        rendered: list[str] = []
+        for i, arg_ctx in enumerate(arg_ctxs):
+            rendered.append(
+                self._visit_expression_with_expectations(
+                    arg_ctx,
+                    expected_type=callable_info.param_types[i] if i < len(callable_info.param_types) else None,
+                    dict_info=callable_info.param_dict_infos.get(i),
+                    set_info=callable_info.param_set_infos.get(i),
+                    tuple_info=callable_info.param_tuple_infos.get(i),
+                    callable_info=callable_info.param_callable_infos.get(i),
+                    coerce_scalar=False,
+                    coerce_callable=False,
+                )
+            )
+        return rendered
 
     def _process_function_args(
         self,
@@ -2797,7 +3188,15 @@ class CodeGenVisitor(zincVisitor):
             ctx.IDENTIFIER().getSourceInterval(), self._current_function
         ) or self._lookup_captured_ref_symbol(ctx.IDENTIFIER().getText())
         storage_name = self._symbol_storage_unique_name(symbol)
-        value = self.visit(ctx.expression())
+        value = self._visit_expression_with_expectations(
+            ctx.expression(),
+            expected_type=symbol.resolved_type if symbol else None,
+            dict_info=symbol.dict_info if symbol else None,
+            set_info=symbol.set_info if symbol else None,
+            tuple_info=symbol.tuple_info if symbol else None,
+            callable_info=symbol.callable_info if symbol else None,
+            coerce_scalar=False,
+        )
         if storage_name is None:
             return "panic!(\"missing captured binding\");"
         temp_name = self._staged_temp_name("captured_write", ctx)
@@ -2881,32 +3280,18 @@ class CodeGenVisitor(zincVisitor):
         previous_dict_info = self._expected_dict_info
         previous_set_info = self._expected_set_info
         previous_tuple_info = self._expected_tuple_info
-        if target_symbol and target_symbol.dict_info:
-            self._expected_dict_info = target_symbol.dict_info
-        if target_symbol and target_symbol.set_info:
-            self._expected_set_info = target_symbol.set_info
-        if target_symbol and target_symbol.tuple_info:
-            self._expected_tuple_info = target_symbol.tuple_info
-        try:
-            value = self.visit(expr)
-        finally:
-            self._expected_dict_info = previous_dict_info
-            self._expected_set_info = previous_set_info
-            self._expected_tuple_info = previous_tuple_info
-
-        expr_symbol = self._get_expr_symbol(expr)
-        if (
-            target_symbol
-            and target_symbol.resolved_type == BaseType.CALLABLE
-            and target_symbol.callable_info
-            and expr_symbol
-            and expr_symbol.callable_info
-            and self._is_direct_callable_expr(expr, expr_symbol)
-        ):
-            value = self._render_callable_value_for_signature(
-                expr_symbol.callable_info,
-                target_symbol.callable_info,
-            )
+        value = self._visit_expression_with_expectations(
+            expr,
+            expected_type=target_symbol.resolved_type if target_symbol else None,
+            dict_info=target_symbol.dict_info if target_symbol else None,
+            set_info=target_symbol.set_info if target_symbol else None,
+            tuple_info=target_symbol.tuple_info if target_symbol else None,
+            callable_info=target_symbol.callable_info if target_symbol else None,
+            coerce_scalar=False,
+        )
+        self._expected_dict_info = previous_dict_info
+        self._expected_set_info = previous_set_info
+        self._expected_tuple_info = previous_tuple_info
 
         if target_ctx.IDENTIFIER():
             boxed_key = self._boxed_struct_key(target)
@@ -3041,31 +3426,51 @@ class CodeGenVisitor(zincVisitor):
 
         return f"{target} = {value};"
 
+    def visitIfExpr(self, ctx: ZincParser.IfExprContext) -> str:
+        """Visit an if-expression wrapper."""
+        return self.visit(ctx.ifExpression())
+
+    def visitIfExpression(self, ctx: ZincParser.IfExpressionContext) -> str:
+        """Visit an expression-form if and lower it to a Rust if expression."""
+        expr_symbol = self._get_expr_symbol(ctx)
+        expected_type = self._expected_type_for_expression(ctx)
+        expected_callable_info = self._expected_callable_for_expression(ctx)
+        previous_result_type = self._expected_result_type
+        previous_callable_info = self._expected_callable_info
+        previous_dict_info = self._expected_dict_info
+        previous_set_info = self._expected_set_info
+        previous_tuple_info = self._expected_tuple_info
+        if expected_type is not None:
+            self._expected_result_type = expected_type
+        if expected_callable_info is not None:
+            self._expected_callable_info = expected_callable_info
+        if expr_symbol and expr_symbol.dict_info:
+            self._expected_dict_info = expr_symbol.dict_info
+        if expr_symbol and expr_symbol.set_info:
+            self._expected_set_info = expr_symbol.set_info
+        if expr_symbol and expr_symbol.tuple_info:
+            self._expected_tuple_info = expr_symbol.tuple_info
+        try:
+            conditions, blocks, else_block = self._flatten_if_expression(ctx)
+            return self._render_if_chain(conditions, blocks, else_block, as_expression=True)
+        finally:
+            self._expected_result_type = previous_result_type
+            self._expected_callable_info = previous_callable_info
+            self._expected_dict_info = previous_dict_info
+            self._expected_set_info = previous_set_info
+            self._expected_tuple_info = previous_tuple_info
+
+    def _render_if_statement(self, ctx: ZincParser.IfStatementContext, *, as_expression: bool) -> str:
+        """Render a statement-form if chain."""
+        expressions = list(ctx.expression())
+        blocks = list(ctx.block())
+        else_block = blocks[-1] if len(blocks) > len(expressions) else None
+        then_blocks = blocks[:len(expressions)]
+        return self._render_if_chain(expressions, then_blocks, else_block, as_expression=as_expression)
+
     def visitIfStatement(self, ctx: ZincParser.IfStatementContext) -> str:
         """Visit if statement."""
-        lines = []
-        expressions = ctx.expression()
-        blocks = ctx.block()
-
-        for i, expr in enumerate(expressions):
-            cond = self.visit(expr)
-            body_stmts = self._generate_block(blocks[i])
-            keyword = "if" if i == 0 else "} else if"
-            lines.append(f"{keyword} {cond} {{")
-            for stmt in body_stmts:
-                # Handle multi-line statements (like nested if/while)
-                for line in stmt.split("\n"):
-                    lines.append(f"    {line}")
-
-        if len(blocks) > len(expressions):
-            lines.append("} else {")
-            body_stmts = self._generate_block(blocks[-1])
-            for stmt in body_stmts:
-                for line in stmt.split("\n"):
-                    lines.append(f"    {line}")
-
-        lines.append("}")
-        return "\n".join(lines)
+        return self._render_if_statement(ctx, as_expression=False)
 
     def _render_for_iterable(self, expr_ctx) -> str:
         """Render an iterable expression for a for loop without consuming named collections."""
@@ -3338,37 +3743,14 @@ class CodeGenVisitor(zincVisitor):
         """Visit return statement."""
         if ctx.expression():
             func = self.atlas.functions.get(self._current_function)
-            previous_dict_info = self._expected_dict_info
-            previous_set_info = self._expected_set_info
-            previous_tuple_info = self._expected_tuple_info
-            if func and func.return_dict_info:
-                self._expected_dict_info = func.return_dict_info
-            if func and func.return_set_info:
-                self._expected_set_info = func.return_set_info
-            if func and func.return_tuple_info:
-                self._expected_tuple_info = func.return_tuple_info
-            try:
-                value = self.visit(ctx.expression())
-            finally:
-                self._expected_dict_info = previous_dict_info
-                self._expected_set_info = previous_set_info
-                self._expected_tuple_info = previous_tuple_info
-            if func and func.return_type == BaseType.CALLABLE and func.return_callable_info:
-                expr_symbol = self._get_expr_symbol(ctx.expression())
-                if (
-                    expr_symbol
-                    and expr_symbol.callable_info
-                    and self._is_direct_callable_expr(ctx.expression(), expr_symbol)
-                ):
-                    value = self._render_callable_value_for_signature(
-                        expr_symbol.callable_info,
-                        func.return_callable_info,
-                    )
-            # Cast integer return values to f64 when function return type is float
-            if func and func.return_type == BaseType.FLOAT:
-                expr_type = self._get_expr_type(ctx.expression())
-                if expr_type == BaseType.INTEGER:
-                    value = f"({value} as f64)"
+            value = self._visit_expression_with_expectations(
+                ctx.expression(),
+                expected_type=func.return_type if func else None,
+                dict_info=func.return_dict_info if func else None,
+                set_info=func.return_set_info if func else None,
+                tuple_info=func.return_tuple_info if func else None,
+                callable_info=func.return_callable_info if func else None,
+            )
             return self._render_return(f"return {value};")
         return self._render_return("return;")
 

@@ -207,9 +207,9 @@ impl __ZincContext {
 
 fn main() {
     let mut values = HashSet::<i64>::new();
-    values.insert(1);
-    values.insert(2);
-    values.insert(3);
+    { values.insert(1); () };
+    { values.insert(2); () };
+    { values.insert(3); () };
     let mut total = 0;
     let mut seen = 0;
     for value in values.iter().cloned() {

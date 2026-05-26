@@ -1,0 +1,5 @@
+fn main() {
+    values = set()
+    result = values.insert(1)
+    print(values.len())
+}

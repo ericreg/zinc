@@ -1,0 +1,10 @@
+fn main() {
+    a = 3
+    b = 7
+    max = if a > b {
+        a
+    } else {
+        b
+    }
+    print(max)
+}

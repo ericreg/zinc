@@ -1,0 +1,12 @@
+fn main() {
+    values = set()
+    inserted = values.insert(1)
+
+    result = if true {
+        values.insert(2)
+    } else {
+        print("skip")
+    }
+
+    print(values.len())
+}

@@ -223,11 +223,11 @@ async fn main() {
         tokio::select! {
             __zinc_select_value_1_0 = async { left.recv_option().await } => {
                 let msg = match __zinc_select_value_1_0 { Some(value) => value, None => panic!("select receive on closed channel") };
-                merged.send(msg.to_string()).await;
+                merged.send(msg).await;
             },
             __zinc_select_value_1_1 = async { right.recv_option().await } => {
                 let msg = match __zinc_select_value_1_1 { Some(value) => value, None => panic!("select receive on closed channel") };
-                merged.send(msg.to_string()).await;
+                merged.send(msg).await;
             },
         }
     }

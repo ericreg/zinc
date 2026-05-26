@@ -1,0 +1,25 @@
+fn main() {
+    i = 0
+    total = 0
+    print("write, i: {i}, total: {total}")
+
+    loop {
+        action = if i == 0 {
+            i = i + 1
+            print("write, i: {i}")
+            continue
+        } else if i == 3 {
+            break
+        } else {
+            print("read, i: {i}")
+            i
+        }
+        print("write, action: {action}")
+        
+        total = total + action
+        i = i + 1
+        print("write, total: {total}, i: {i}")
+    }
+
+    print("read, total: {total}, i: {i}")
+}

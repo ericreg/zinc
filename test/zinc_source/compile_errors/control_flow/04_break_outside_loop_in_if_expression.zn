@@ -1,0 +1,9 @@
+// expected-error: break is only valid inside a loop
+
+fn main() {
+    value = if true {
+        break
+    } else {
+        1
+    }
+}

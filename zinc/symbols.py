@@ -107,6 +107,21 @@ class LexicalFunctionInfo:
             self.captures = []
 
 
+@dataclass
+class ResolvedValueInfo:
+    """Resolved type plus rich metadata for a value-producing expression."""
+
+    base_type: BaseType
+    array_info: ArrayTypeInfo | None = None
+    channel_info: ChannelTypeInfo | None = None
+    dict_info: DictTypeInfo | None = None
+    set_info: SetTypeInfo | None = None
+    tuple_info: TupleTypeInfo | None = None
+    callable_info: CallableTypeInfo | None = None
+    struct_qualified_name: str | None = None
+    anonymous_struct_info: AnonymousStructTypeInfo | None = None
+
+
 class SymbolTable:
     """Scoped symbol table with lookup by id or source interval."""
 
@@ -260,6 +275,7 @@ class SymbolTableVisitor(zincVisitor):
         self._lambda_counter = 0
         self._lexical_function_scopes: list[dict[str, LexicalFunctionInfo]] = []
         self.lexical_functions: dict[str, LexicalFunctionInfo] = {}
+        self._loop_depth = 0
 
     def _resolve_const_symbol(self, path: list[str]) -> ConstInstance | None:
         """Resolve a const path in the current module."""
@@ -1478,6 +1494,10 @@ class SymbolTableVisitor(zincVisitor):
 
     def _assignment_types_compatible(self, expected: BaseType, actual: BaseType) -> bool:
         """Return True when an assignment is compatible under Zinc's simple rules."""
+        if actual == BaseType.NEVER:
+            return True
+        if expected == BaseType.NEVER:
+            return actual == BaseType.NEVER
         if expected == BaseType.UNKNOWN or actual == BaseType.UNKNOWN:
             return True
         if expected == actual:
@@ -1601,6 +1621,383 @@ class SymbolTableVisitor(zincVisitor):
     ) -> AnonymousStructTypeInfo | None:
         """Copy anonymous struct metadata recursively."""
         return info.copy() if info is not None else None
+
+    def _value_info_from_symbol(
+        self,
+        base_type: BaseType,
+        symbol: Symbol | None,
+    ) -> ResolvedValueInfo:
+        """Build a rich value description from a resolved type and optional symbol."""
+        struct_qualified_name = None
+        anonymous_struct_info = None
+        if base_type == BaseType.STRUCT and symbol is not None:
+            struct_qualified_name, anonymous_struct_info = self._struct_metadata_for_symbol(symbol)
+
+        return ResolvedValueInfo(
+            base_type=base_type,
+            array_info=self._array_info_from_symbol(symbol) if base_type == BaseType.ARRAY else None,
+            channel_info=self._copy_channel_info(symbol.channel_info) if base_type == BaseType.CHANNEL and symbol else None,
+            dict_info=self._copy_dict_info(symbol.dict_info) if base_type == BaseType.DICT and symbol else None,
+            set_info=self._copy_set_info(symbol.set_info) if base_type == BaseType.SET and symbol else None,
+            tuple_info=self._copy_tuple_info(symbol.tuple_info) if base_type == BaseType.TUPLE and symbol else None,
+            callable_info=self._copy_callable_info(symbol.callable_info) if base_type == BaseType.CALLABLE and symbol else None,
+            struct_qualified_name=struct_qualified_name,
+            anonymous_struct_info=self._copy_anonymous_struct_info(anonymous_struct_info),
+        )
+
+    def _value_info_from_expression(self, expr_ctx) -> ResolvedValueInfo:
+        """Visit an expression and return its full value metadata."""
+        expr_type = self.visit(expr_ctx)
+        return self._value_info_from_symbol(expr_type, self._expr_symbol(expr_ctx))
+
+    def _record_value_info(self, interval: tuple[int, int], info: ResolvedValueInfo) -> Symbol:
+        """Materialize a temporary symbol from rich value metadata."""
+        temp = self.symbols.define_temp(
+            resolved_type=info.base_type,
+            interval=interval,
+        )
+        if info.base_type == BaseType.ARRAY and info.array_info is not None:
+            temp.element_type = info.array_info.element_type
+            temp.tuple_info = self._copy_tuple_info(info.array_info.element_tuple_info)
+            temp.callable_info = self._copy_callable_info(info.array_info.element_callable_info)
+            temp.element_struct_qualified_name = info.array_info.element_struct_qualified_name
+            temp.element_anonymous_struct_info = self._copy_anonymous_struct_info(
+                info.array_info.element_anonymous_struct_info
+            )
+        elif info.base_type == BaseType.CHANNEL and info.channel_info is not None:
+            temp.channel_info = self._copy_channel_info(info.channel_info)
+        elif info.base_type == BaseType.DICT and info.dict_info is not None:
+            temp.dict_info = self._copy_dict_info(info.dict_info)
+        elif info.base_type == BaseType.SET and info.set_info is not None:
+            temp.set_info = self._copy_set_info(info.set_info)
+        elif info.base_type == BaseType.TUPLE and info.tuple_info is not None:
+            temp.tuple_info = self._copy_tuple_info(info.tuple_info)
+        elif info.base_type == BaseType.CALLABLE and info.callable_info is not None:
+            temp.callable_info = self._copy_callable_info(info.callable_info)
+        elif info.base_type == BaseType.STRUCT:
+            temp.anonymous_struct_info = self._copy_anonymous_struct_info(info.anonymous_struct_info)
+            if info.struct_qualified_name is not None:
+                self._struct_symbol_bindings[temp.unique_name] = info.struct_qualified_name
+        return temp
+
+    def _require_boolean_condition(self, expr_ctx, label: str = "if condition") -> None:
+        """Require a condition expression to resolve to bool, refining unknown bindings when possible."""
+        expr_type = self.visit(expr_ctx)
+        if expr_type == BaseType.BOOLEAN:
+            return
+
+        expr_symbol = self._expr_symbol(expr_ctx)
+        binding_symbol = None
+        if isinstance(expr_ctx, ZincParser.PrimaryExprContext):
+            primary = expr_ctx.primaryExpression()
+            if primary and primary.IDENTIFIER():
+                binding_symbol = self.symbols.lookup_by_id(primary.IDENTIFIER().getText())
+
+        refined = False
+        for symbol in (binding_symbol, expr_symbol):
+            if symbol is not None and symbol.resolved_type == BaseType.UNKNOWN:
+                symbol.resolved_type = BaseType.BOOLEAN
+                refined = True
+
+        if refined:
+            return
+
+        raise ZincTypeError(f"{label} must be a bool")
+
+    def _merge_array_info(
+        self,
+        current: ArrayTypeInfo | None,
+        incoming: ArrayTypeInfo | None,
+        label: str,
+    ) -> ArrayTypeInfo | None:
+        """Merge array element metadata across multiple value paths."""
+        if incoming is None:
+            return current
+        if current is None:
+            return self._copy_array_info(incoming)
+
+        if current.element_type == BaseType.UNKNOWN:
+            current.element_type = incoming.element_type
+        elif incoming.element_type != BaseType.UNKNOWN and current.element_type != incoming.element_type:
+            merged = promote_numeric(current.element_type, incoming.element_type)
+            if merged == BaseType.UNKNOWN:
+                raise ZincTypeError(f"{label} have incompatible array element types")
+            current.element_type = merged
+
+        if current.element_type == BaseType.TUPLE:
+            current.element_tuple_info = self._merge_tuple_info(
+                current.element_tuple_info,
+                incoming.element_tuple_info,
+            )
+        if current.element_type == BaseType.CALLABLE:
+            current.element_callable_info = self._merge_callable_info(
+                current.element_callable_info,
+                incoming.element_callable_info,
+                "array element",
+            )
+        if current.element_type == BaseType.STRUCT:
+            if (
+                current.element_struct_qualified_name is not None
+                or current.element_anonymous_struct_info is not None
+            ) and not self._structs_compatible(
+                current.element_struct_qualified_name,
+                current.element_anonymous_struct_info,
+                incoming.element_struct_qualified_name,
+                incoming.element_anonymous_struct_info,
+            ):
+                raise ZincTypeError(f"{label} have incompatible array element types")
+            if current.element_struct_qualified_name is None:
+                current.element_struct_qualified_name = incoming.element_struct_qualified_name
+            if current.element_anonymous_struct_info is None and incoming.element_anonymous_struct_info is not None:
+                current.element_anonymous_struct_info = self._copy_anonymous_struct_info(
+                    incoming.element_anonymous_struct_info
+                )
+
+        return current
+
+    def _merge_channel_info(
+        self,
+        current: ChannelTypeInfo | None,
+        incoming: ChannelTypeInfo | None,
+        label: str,
+    ) -> ChannelTypeInfo | None:
+        """Merge channel payload metadata across multiple value paths."""
+        if incoming is None:
+            return current
+        if current is None:
+            return self._copy_channel_info(incoming)
+
+        if current.element_type == BaseType.UNKNOWN:
+            current.element_type = incoming.element_type
+        elif incoming.element_type != BaseType.UNKNOWN and current.element_type != incoming.element_type:
+            merged = promote_numeric(current.element_type, incoming.element_type)
+            if merged == BaseType.UNKNOWN:
+                raise ZincTypeError(f"{label} have incompatible channel payload types")
+            current.element_type = merged
+
+        if current.element_type == BaseType.TUPLE:
+            current.element_tuple_info = self._merge_tuple_info(
+                current.element_tuple_info,
+                incoming.element_tuple_info,
+            )
+        if current.element_type == BaseType.CALLABLE:
+            current.element_callable_info = self._merge_callable_info(
+                current.element_callable_info,
+                incoming.element_callable_info,
+                "channel payload",
+            )
+        if current.element_type == BaseType.STRUCT:
+            if (
+                current.element_struct_qualified_name is not None
+                or current.element_anonymous_struct_info is not None
+            ) and not self._structs_compatible(
+                current.element_struct_qualified_name,
+                current.element_anonymous_struct_info,
+                incoming.element_struct_qualified_name,
+                incoming.element_anonymous_struct_info,
+            ):
+                raise ZincTypeError(f"{label} have incompatible channel payload types")
+            if current.element_struct_qualified_name is None:
+                current.element_struct_qualified_name = incoming.element_struct_qualified_name
+            if current.element_anonymous_struct_info is None and incoming.element_anonymous_struct_info is not None:
+                current.element_anonymous_struct_info = self._copy_anonymous_struct_info(
+                    incoming.element_anonymous_struct_info
+                )
+
+        current.is_bounded = current.is_bounded or incoming.is_bounded
+        return current
+
+    def _merge_value_infos(
+        self,
+        current: ResolvedValueInfo,
+        incoming: ResolvedValueInfo,
+        label: str = "if-expression branches",
+    ) -> ResolvedValueInfo:
+        """Merge two value descriptions, treating NEVER as compatible with any normal branch."""
+        if current.base_type == BaseType.NEVER:
+            return incoming
+        if incoming.base_type == BaseType.NEVER:
+            return current
+        if current.base_type == BaseType.VOID or incoming.base_type == BaseType.VOID:
+            if current.base_type == incoming.base_type:
+                return ResolvedValueInfo(BaseType.VOID)
+            raise ZincTypeError(f"{label} have incompatible types")
+
+        merged_type = current.base_type
+        if merged_type == BaseType.UNKNOWN:
+            merged_type = incoming.base_type
+        elif incoming.base_type != BaseType.UNKNOWN and incoming.base_type != merged_type:
+            promoted = promote_numeric(merged_type, incoming.base_type)
+            if promoted == BaseType.UNKNOWN:
+                raise ZincTypeError(f"{label} have incompatible types")
+            merged_type = promoted
+
+        merged = ResolvedValueInfo(base_type=merged_type)
+        if merged_type == BaseType.ARRAY:
+            merged.array_info = self._merge_array_info(
+                self._copy_array_info(current.array_info),
+                incoming.array_info,
+                label,
+            )
+        elif merged_type == BaseType.CHANNEL:
+            merged.channel_info = self._merge_channel_info(
+                self._copy_channel_info(current.channel_info),
+                incoming.channel_info,
+                label,
+            )
+        elif merged_type == BaseType.DICT:
+            merged.dict_info = self._merge_dict_info(
+                self._copy_dict_info(current.dict_info),
+                incoming.dict_info,
+            )
+        elif merged_type == BaseType.SET:
+            merged.set_info = self._merge_set_info(
+                self._copy_set_info(current.set_info),
+                incoming.set_info,
+            )
+        elif merged_type == BaseType.TUPLE:
+            merged.tuple_info = self._merge_tuple_info(
+                self._copy_tuple_info(current.tuple_info),
+                incoming.tuple_info,
+            )
+        elif merged_type == BaseType.CALLABLE:
+            merged.callable_info = self._merge_callable_info(
+                self._copy_callable_info(current.callable_info),
+                incoming.callable_info,
+                "if-expression result",
+            )
+        elif merged_type == BaseType.STRUCT:
+            if not self._structs_compatible(
+                current.struct_qualified_name,
+                current.anonymous_struct_info,
+                incoming.struct_qualified_name,
+                incoming.anonymous_struct_info,
+            ):
+                raise ZincTypeError(f"{label} have incompatible types")
+            merged.struct_qualified_name = current.struct_qualified_name or incoming.struct_qualified_name
+            merged.anonymous_struct_info = self._copy_anonymous_struct_info(
+                current.anonymous_struct_info or incoming.anonymous_struct_info
+            )
+        return merged
+
+    def _predeclare_block_lexical_functions(self, block_ctx) -> None:
+        """Register nested function names before walking block contents."""
+        for stmt in block_ctx.statement():
+            if stmt.functionDeclaration():
+                fn_ctx = stmt.functionDeclaration()
+                self._register_lexical_function_stub(
+                    fn_ctx.IDENTIFIER().getText(),
+                    fn_ctx,
+                    is_async=False,
+                    display_name=fn_ctx.IDENTIFIER().getText(),
+                )
+            elif stmt.asyncFunctionDeclaration():
+                fn_ctx = stmt.asyncFunctionDeclaration()
+                self._register_lexical_function_stub(
+                    fn_ctx.IDENTIFIER().getText(),
+                    fn_ctx,
+                    is_async=True,
+                    display_name=fn_ctx.IDENTIFIER().getText(),
+                )
+
+    def _visit_tail_statement_as_value(self, stmt_ctx) -> ResolvedValueInfo:
+        """Evaluate the trailing statement of a value-producing block."""
+        if stmt_ctx.expressionStatement():
+            return self._value_info_from_expression(
+                stmt_ctx.expressionStatement().expression()
+            )
+        if stmt_ctx.block():
+            return self._visit_block_statements(stmt_ctx.block(), as_value=True)
+        if stmt_ctx.ifStatement():
+            return self._analyze_if_statement_as_value(stmt_ctx.ifStatement())
+        if stmt_ctx.returnStatement():
+            self.visit(stmt_ctx.returnStatement())
+            return ResolvedValueInfo(BaseType.NEVER)
+        if stmt_ctx.breakStatement():
+            self.visit(stmt_ctx.breakStatement())
+            return ResolvedValueInfo(BaseType.NEVER)
+        if stmt_ctx.continueStatement():
+            self.visit(stmt_ctx.continueStatement())
+            return ResolvedValueInfo(BaseType.NEVER)
+
+        self.visit(stmt_ctx)
+        return ResolvedValueInfo(BaseType.VOID)
+
+    def _visit_block_statements(
+        self,
+        block_ctx,
+        *,
+        as_value: bool,
+    ) -> ResolvedValueInfo | None:
+        """Visit a block either as statements or as a value-producing block."""
+        self._lexical_function_scopes.append({})
+        try:
+            self._predeclare_block_lexical_functions(block_ctx)
+            statements = list(block_ctx.statement())
+            if not as_value:
+                for stmt in statements:
+                    self.visit(stmt)
+                return None
+            if not statements:
+                return ResolvedValueInfo(BaseType.VOID)
+            for stmt in statements[:-1]:
+                self.visit(stmt)
+            return self._visit_tail_statement_as_value(statements[-1])
+        finally:
+            self._lexical_function_scopes.pop()
+
+    def _analyze_if_expression_ctx(self, ctx) -> ResolvedValueInfo:
+        """Resolve the value type of an expression-form if."""
+        self._require_boolean_condition(ctx.expression(), "if condition")
+        then_scope = self._next_block_name("if")
+        self.symbols.enter_scope(then_scope)
+        try:
+            then_value = self._visit_block_statements(ctx.block(0), as_value=True)
+        finally:
+            self.symbols.exit_scope()
+
+        else_value: ResolvedValueInfo | None = None
+        if ctx.ELSE():
+            if len(ctx.block()) > 1:
+                else_scope = self._next_block_name("if")
+                self.symbols.enter_scope(else_scope)
+                try:
+                    else_value = self._visit_block_statements(ctx.block(1), as_value=True)
+                finally:
+                    self.symbols.exit_scope()
+            else:
+                else_value = self._analyze_if_expression_ctx(ctx.ifExpression())
+        else:
+            if then_value.base_type not in {BaseType.VOID, BaseType.NEVER}:
+                raise ZincTypeError("if-expression without else must resolve to unit or diverge")
+            else_value = ResolvedValueInfo(BaseType.VOID)
+
+        return self._merge_value_infos(then_value, else_value)
+
+    def _analyze_if_statement_as_value(self, ctx: ZincParser.IfStatementContext) -> ResolvedValueInfo:
+        """Resolve the value type of a statement-form if used in tail position."""
+        if len(ctx.block()) > len(ctx.expression()):
+            else_scope = self._next_block_name("if")
+            self.symbols.enter_scope(else_scope)
+            try:
+                else_value = self._visit_block_statements(ctx.block(-1), as_value=True)
+            finally:
+                self.symbols.exit_scope()
+        else:
+            else_value = ResolvedValueInfo(BaseType.VOID)
+        for index in range(len(ctx.expression()) - 1, -1, -1):
+            self._require_boolean_condition(ctx.expression(index), "if condition")
+            branch_scope = self._next_block_name("if")
+            self.symbols.enter_scope(branch_scope)
+            try:
+                branch_value = self._visit_block_statements(ctx.block(index), as_value=True)
+            finally:
+                self.symbols.exit_scope()
+            if index == len(ctx.expression()) - 1 and len(ctx.block()) == len(ctx.expression()):
+                if branch_value.base_type not in {BaseType.VOID, BaseType.NEVER}:
+                    raise ZincTypeError("if-expression without else must resolve to unit or diverge")
+            else_value = self._merge_value_infos(branch_value, else_value)
+        return else_value
 
     def _array_info_from_symbol(self, symbol: Symbol | None) -> ArrayTypeInfo | None:
         """Build array metadata from a symbol carrying element metadata."""
@@ -3556,7 +3953,13 @@ class SymbolTableVisitor(zincVisitor):
 
     def visitFunctionCallExpr(self, ctx: ZincParser.FunctionCallExprContext) -> BaseType:
         """Visit function call expression and create specialization if needed."""
-        self.visit(ctx.expression())
+        callee_type = self.visit(ctx.expression())
+        if callee_type == BaseType.NEVER:
+            self.symbols.define_temp(
+                resolved_type=BaseType.NEVER,
+                interval=ctx.getSourceInterval(),
+            )
+            return BaseType.NEVER
 
         # Collect argument types and array info
         arg_types: list[BaseType] = []
@@ -3573,8 +3976,12 @@ class SymbolTableVisitor(zincVisitor):
             for i, arg_expr in enumerate(ctx.argumentList().expression()):
                 arg_exprs.append(arg_expr)
                 arg_type = self.visit(arg_expr)
-                if arg_type == BaseType.VOID:
-                    raise ZincTypeError("mutating collection methods cannot be used as values")
+                if arg_type == BaseType.NEVER:
+                    self.symbols.define_temp(
+                        resolved_type=BaseType.NEVER,
+                        interval=ctx.getSourceInterval(),
+                    )
+                    return BaseType.NEVER
                 arg_types.append(arg_type)
 
                 if arg_type == BaseType.CHANNEL:
@@ -3678,27 +4085,21 @@ class SymbolTableVisitor(zincVisitor):
                             func_instance.arg_channel_infos.setdefault(idx, [])
                             if all(existing is not chan_info for existing in func_instance.arg_channel_infos[idx]):
                                 func_instance.arg_channel_infos[idx].append(chan_info)
-                    if func_instance and func_instance.return_type != BaseType.VOID:
-                        temp = self.symbols.define_temp(
-                            resolved_type=func_instance.return_type,
-                            interval=ctx.getSourceInterval(),
-                        )
-                        temp.dict_info = self._copy_dict_info(func_instance.return_dict_info)
-                        temp.set_info = self._copy_set_info(func_instance.return_set_info)
-                        temp.tuple_info = self._copy_tuple_info(func_instance.return_tuple_info)
-                        temp.callable_info = self._copy_callable_info(func_instance.return_callable_info)
-                        temp.anonymous_struct_info = self._copy_anonymous_struct_info(
-                            func_instance.return_anonymous_struct_info
-                        )
-                        if func_instance.return_struct_qualified_name is not None:
-                            self._struct_symbol_bindings[temp.unique_name] = func_instance.return_struct_qualified_name
-                        return func_instance.return_type
                     if func_instance is not None:
-                        if func_instance.return_type != BaseType.VOID:
-                            self.symbols.define_temp(
-                                resolved_type=func_instance.return_type,
-                                interval=ctx.getSourceInterval(),
-                            )
+                        self._record_value_info(
+                            ctx.getSourceInterval(),
+                            ResolvedValueInfo(
+                                base_type=func_instance.return_type,
+                                dict_info=self._copy_dict_info(func_instance.return_dict_info),
+                                set_info=self._copy_set_info(func_instance.return_set_info),
+                                tuple_info=self._copy_tuple_info(func_instance.return_tuple_info),
+                                callable_info=self._copy_callable_info(func_instance.return_callable_info),
+                                struct_qualified_name=func_instance.return_struct_qualified_name,
+                                anonymous_struct_info=self._copy_anonymous_struct_info(
+                                    func_instance.return_anonymous_struct_info
+                                ),
+                            ),
+                        )
                         return func_instance.return_type
 
         if isinstance(callee_ctx, ZincParser.PrimaryExprContext):
@@ -4044,16 +4445,15 @@ class SymbolTableVisitor(zincVisitor):
                         )
                         func_instance = self.atlas.functions.get(mangled)
                         if func_instance:
-                            if func_instance.return_type != BaseType.VOID:
-                                candidate_type = func_instance.return_type
-                                candidate_dict_info = func_instance.return_dict_info
-                                candidate_set_info = func_instance.return_set_info
-                                candidate_tuple_info = func_instance.return_tuple_info
-                                candidate_callable_info = func_instance.return_callable_info
-                                candidate_struct_qualified_name = func_instance.return_struct_qualified_name
-                                candidate_anonymous_struct_info = self._copy_anonymous_struct_info(
-                                    func_instance.return_anonymous_struct_info
-                                )
+                            candidate_type = func_instance.return_type
+                            candidate_dict_info = func_instance.return_dict_info
+                            candidate_set_info = func_instance.return_set_info
+                            candidate_tuple_info = func_instance.return_tuple_info
+                            candidate_callable_info = func_instance.return_callable_info
+                            candidate_struct_qualified_name = func_instance.return_struct_qualified_name
+                            candidate_anonymous_struct_info = self._copy_anonymous_struct_info(
+                                func_instance.return_anonymous_struct_info
+                            )
                 else:
                     struct_qualified_name = (
                         target.receiver_struct_qualified_name
@@ -4191,20 +4591,21 @@ class SymbolTableVisitor(zincVisitor):
                             if all(existing is not chan_info for existing in func_instance.arg_channel_infos[idx]):
                                 func_instance.arg_channel_infos[idx].append(chan_info)
                         self._mark_mutated_call_arguments(func_instance, arg_exprs)
-                    if func_instance and func_instance.return_type != BaseType.VOID:
-                        temp = self.symbols.define_temp(
-                            resolved_type=func_instance.return_type,
-                            interval=ctx.getSourceInterval(),
+                    if func_instance:
+                        self._record_value_info(
+                            ctx.getSourceInterval(),
+                            ResolvedValueInfo(
+                                base_type=func_instance.return_type,
+                                dict_info=self._copy_dict_info(func_instance.return_dict_info),
+                                set_info=self._copy_set_info(func_instance.return_set_info),
+                                tuple_info=self._copy_tuple_info(func_instance.return_tuple_info),
+                                callable_info=self._copy_callable_info(func_instance.return_callable_info),
+                                struct_qualified_name=func_instance.return_struct_qualified_name,
+                                anonymous_struct_info=self._copy_anonymous_struct_info(
+                                    func_instance.return_anonymous_struct_info
+                                ),
+                            ),
                         )
-                        temp.dict_info = self._copy_dict_info(func_instance.return_dict_info)
-                        temp.set_info = self._copy_set_info(func_instance.return_set_info)
-                        temp.tuple_info = self._copy_tuple_info(func_instance.return_tuple_info)
-                        temp.callable_info = func_instance.return_callable_info
-                        temp.anonymous_struct_info = self._copy_anonymous_struct_info(
-                            func_instance.return_anonymous_struct_info
-                        )
-                        if func_instance.return_struct_qualified_name is not None:
-                            self._struct_symbol_bindings[temp.unique_name] = func_instance.return_struct_qualified_name
                         return func_instance.return_type
 
             if len(path) == 1:
@@ -4331,8 +4732,6 @@ class SymbolTableVisitor(zincVisitor):
     def visitVariableAssignment(self, ctx: ZincParser.VariableAssignmentContext) -> None:
         """Visit variable assignment with shadowing support."""
         expr_type = self.visit(ctx.expression())
-        if expr_type == BaseType.VOID:
-            raise ZincTypeError("mutating collection methods cannot be used as assignment values")
         target = ctx.assignmentTarget()
 
         if (
@@ -4878,10 +5277,20 @@ class SymbolTableVisitor(zincVisitor):
                 ):
                     pass
 
+    def visitIfExpr(self, ctx: ZincParser.IfExprContext) -> BaseType:
+        """Visit an if-expression wrapper."""
+        return self.visit(ctx.ifExpression())
+
+    def visitIfExpression(self, ctx: ZincParser.IfExpressionContext) -> BaseType:
+        """Visit an if-expression and resolve its merged result type."""
+        value_info = self._analyze_if_expression_ctx(ctx)
+        self._record_value_info(ctx.getSourceInterval(), value_info)
+        return value_info.base_type
+
     def visitIfStatement(self, ctx: ZincParser.IfStatementContext) -> None:
         """Visit if/else statement."""
         for expr in ctx.expression():
-            self.visit(expr)
+            self._require_boolean_condition(expr, "if condition")
 
         for i, block in enumerate(ctx.block()):
             block_name = self._next_block_name("if")
@@ -4896,6 +5305,7 @@ class SymbolTableVisitor(zincVisitor):
 
         block_name = self._next_block_name("for")
         self.symbols.enter_scope(block_name)
+        self._loop_depth += 1
 
         binding = ctx.forBinding()
         binding_ctx = binding.tupleAssignmentTarget() or binding
@@ -4988,7 +5398,8 @@ class SymbolTableVisitor(zincVisitor):
             self.visit(ctx.block())
         finally:
             self._iterating_dict_stack.pop()
-        self.symbols.exit_scope()
+            self._loop_depth -= 1
+            self.symbols.exit_scope()
 
     def visitWhileStatement(self, ctx: ZincParser.WhileStatementContext) -> None:
         """Visit while loop statement."""
@@ -4996,15 +5407,23 @@ class SymbolTableVisitor(zincVisitor):
 
         block_name = self._next_block_name("while")
         self.symbols.enter_scope(block_name)
-        self.visit(ctx.block())
-        self.symbols.exit_scope()
+        self._loop_depth += 1
+        try:
+            self.visit(ctx.block())
+        finally:
+            self._loop_depth -= 1
+            self.symbols.exit_scope()
 
     def visitLoopStatement(self, ctx: ZincParser.LoopStatementContext) -> None:
         """Visit loop statement."""
         block_name = self._next_block_name("loop")
         self.symbols.enter_scope(block_name)
-        self.visit(ctx.block())
-        self.symbols.exit_scope()
+        self._loop_depth += 1
+        try:
+            self.visit(ctx.block())
+        finally:
+            self._loop_depth -= 1
+            self.symbols.exit_scope()
 
     def visitFunctionDeclaration(self, ctx: ZincParser.FunctionDeclarationContext) -> None:
         """Finalize a nested sync function declaration without visiting its body here."""
@@ -5032,33 +5451,21 @@ class SymbolTableVisitor(zincVisitor):
 
     def visitBlock(self, ctx: ZincParser.BlockContext) -> None:
         """Visit a block of statements."""
-        self._lexical_function_scopes.append({})
-        try:
-            for stmt in ctx.statement():
-                if stmt.functionDeclaration():
-                    fn_ctx = stmt.functionDeclaration()
-                    self._register_lexical_function_stub(
-                        fn_ctx.IDENTIFIER().getText(),
-                        fn_ctx,
-                        is_async=False,
-                        display_name=fn_ctx.IDENTIFIER().getText(),
-                    )
-                elif stmt.asyncFunctionDeclaration():
-                    fn_ctx = stmt.asyncFunctionDeclaration()
-                    self._register_lexical_function_stub(
-                        fn_ctx.IDENTIFIER().getText(),
-                        fn_ctx,
-                        is_async=True,
-                        display_name=fn_ctx.IDENTIFIER().getText(),
-                    )
-            for stmt in ctx.statement():
-                self.visit(stmt)
-        finally:
-            self._lexical_function_scopes.pop()
+        self._visit_block_statements(ctx, as_value=False)
 
     def visitExpressionStatement(self, ctx: ZincParser.ExpressionStatementContext) -> None:
         """Visit expression statement."""
         self.visit(ctx.expression())
+
+    def visitBreakStatement(self, ctx: ZincParser.BreakStatementContext) -> None:
+        """Visit break and ensure it appears inside a loop."""
+        if self._loop_depth == 0:
+            raise ZincTypeError("break is only valid inside a loop")
+
+    def visitContinueStatement(self, ctx: ZincParser.ContinueStatementContext) -> None:
+        """Visit continue and ensure it appears inside a loop."""
+        if self._loop_depth == 0:
+            raise ZincTypeError("continue is only valid inside a loop")
 
     def visitSuperAssignment(self, ctx: ZincParser.SuperAssignmentContext) -> None:
         """Visit closure super-assignment to a captured outer binding."""
@@ -5067,8 +5474,6 @@ class SymbolTableVisitor(zincVisitor):
         if symbol is None or not symbol.is_captured_ref:
             raise ZincTypeError(f"'<<-' expects a captured outer variable '{name}'")
         expr_type = self.visit(ctx.expression())
-        if expr_type == BaseType.VOID:
-            raise ZincTypeError("mutating collection methods cannot be used as assignment values")
         expr_symbol = self._expr_symbol(ctx.expression())
         if not self._assignment_metadata_compatible(
             symbol.resolved_type,

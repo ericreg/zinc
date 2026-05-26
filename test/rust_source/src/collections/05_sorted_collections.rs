@@ -211,7 +211,7 @@ fn main() {
     let x = scores.get("x").unwrap().clone();
     println!("{}", x);
     let mut values = BTreeSet::<i64>::new();
-    values.insert(3);
+    { values.insert(3); () };
     let has_three = values.contains(&3);
     println!("{}", has_three);
 }

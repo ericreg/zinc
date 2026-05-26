@@ -1,0 +1,12 @@
+fn choose(flag) {
+    ignored = if flag {
+        return "left"
+    } else {
+        return "right"
+    }
+}
+
+fn main() {
+    print(choose(true))
+    print(choose(false))
+}

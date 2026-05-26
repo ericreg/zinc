@@ -24,6 +24,7 @@ class BaseType(Enum):
     CALLABLE = auto()  # First-class callable values
     STRUCT = auto()  # Struct type
     VOID = auto()  # For functions with no return value
+    NEVER = auto()  # Diverging control flow that never completes normally
     UNKNOWN = auto()  # For unresolved types
 
     def __repr__(self):
@@ -97,6 +98,7 @@ def type_to_rust(base_type: BaseType) -> str:
         BaseType.CALLABLE: "Callable",  # Placeholder, signature handled separately
         BaseType.STRUCT: "Struct",
         BaseType.VOID: "()",
+        BaseType.NEVER: "!",
         BaseType.UNKNOWN: "unknown",
     }
     return mapping.get(base_type, "unknown")
@@ -825,6 +827,8 @@ def value_type_key(
         return ("struct",)
     if base_type == BaseType.VOID:
         return ("unit",)
+    if base_type == BaseType.NEVER:
+        return ("never",)
     if base_type == BaseType.CONTEXT:
         return ("context",)
     return (base_type.name.lower(),)
@@ -858,6 +862,8 @@ def value_type_suffix(
         return _named_struct_suffix(struct_qualified_name)
     if base_type == BaseType.VOID:
         return "Unit"
+    if base_type == BaseType.NEVER:
+        return "Never"
     if base_type == BaseType.CONTEXT:
         return "Context"
     return type_to_rust(base_type)

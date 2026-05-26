@@ -1,0 +1,7 @@
+fn main() {
+    debug = true
+    result = if debug {
+        print("debug")
+    }
+    print("done")
+}

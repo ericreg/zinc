@@ -17,8 +17,8 @@ statement
     | superAssignment
     | variableAssignment
     | channelSendStatement
-    | expressionStatement
     | ifStatement
+    | expressionStatement
     | forStatement
     | whileStatement
     | loopStatement
@@ -221,6 +221,7 @@ block
 // --- Expressions ---
 expression
     : primaryExpression                                         # primaryExpr
+    | ifExpression                                              # ifExpr
     | expression '.' IDENTIFIER                                 # memberAccessExpr
     | expression '[' expression ']'                             # indexAccessExpr
     | expression '(' argumentList? ')'                          # functionCallExpr
@@ -236,6 +237,10 @@ expression
     | expression ('or' | '||') expression                       # logicalOrExpr
     | lambdaExpression                                          # lambdaExpr
     | '(' expression ')'                                        # parenExpr
+    ;
+
+ifExpression
+    : 'if' expression block ('else' (block | ifExpression))?
     ;
 
 primaryExpression

@@ -183,6 +183,10 @@ name = "collections_07_collection_returns"
 path = "src/collections/07_collection_returns.rs"
 
 [[bin]]
+name = "collections_08_mutator_return_value"
+path = "src/collections/08_mutator_return_value.rs"
+
+[[bin]]
 name = "concurrency_channels_01_local_round_trip"
 path = "src/concurrency/channels/01_local_round_trip.rs"
 
@@ -421,6 +425,34 @@ path = "src/functions.rs"
 [[bin]]
 name = "if_else"
 path = "src/if_else.rs"
+
+[[bin]]
+name = "if_expressions_01_basic_assignment"
+path = "src/if_expressions/01_basic_assignment.rs"
+
+[[bin]]
+name = "if_expressions_02_unit_no_else"
+path = "src/if_expressions/02_unit_no_else.rs"
+
+[[bin]]
+name = "if_expressions_03_return_value"
+path = "src/if_expressions/03_return_value.rs"
+
+[[bin]]
+name = "if_expressions_04_else_if_chain"
+path = "src/if_expressions/04_else_if_chain.rs"
+
+[[bin]]
+name = "if_expressions_05_break_continue"
+path = "src/if_expressions/05_break_continue.rs"
+
+[[bin]]
+name = "if_expressions_06_both_branches_diverge"
+path = "src/if_expressions/06_both_branches_diverge.rs"
+
+[[bin]]
+name = "if_expressions_07_mutator_unit_values"
+path = "src/if_expressions/07_mutator_unit_values.rs"
 
 [[bin]]
 name = "iterations_01_array_literal_values_reuse"

@@ -1,0 +1,9 @@
+write, i: 0, total: 0
+write, i: 1
+read, i: 1
+write, action: 1
+write, total: 1, i: 2
+read, i: 2
+write, action: 2
+write, total: 3, i: 3
+read, total: 3, i: 3

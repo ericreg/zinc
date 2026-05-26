@@ -31,6 +31,7 @@ COMPILE_ERROR_GROUPS = (
     "concurrency",
     "structs",
     "callables",
+    "control_flow",
 )
 
 

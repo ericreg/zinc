@@ -1,6 +1,0 @@
-// expected-error: mutating collection methods
-
-fn main() {
-    a = set()
-    b = a.insert(1)
-}

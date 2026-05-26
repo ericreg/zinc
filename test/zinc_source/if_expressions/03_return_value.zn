@@ -1,0 +1,12 @@
+fn label(count) {
+    return if count == 1 {
+        "item"
+    } else {
+        "items"
+    }
+}
+
+fn main() {
+    print(label(1))
+    print(label(2))
+}

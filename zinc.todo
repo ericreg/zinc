@@ -13,7 +13,7 @@ Implemented core pillars
 - [x] Arrays, dicts, sets, tuples
 - [x] Base types
 - [x] Multiline strings
-- [] closure support
+- [x] Closure support
 - [] metaprogramming model (seamless compile time)
 - [] decorators
 
@@ -52,6 +52,7 @@ Language ergonomics
       - `fields()`:
       - `type()`
       - `components()`
+      - line_num()
 
       ternary operators
 
@@ -77,6 +78,34 @@ Research / design notes
 
 
 
+
+Benchmarks:
+-----------
+- example programs benchmarks in the following languages
+
+C3
+Nim
+Zig
+C
+C++ (latest)
+Rust
+Python
+Java
+Typescript
+Julia
+go
+
+
+Measure
+- wallclock time
+- memory
+- allocations
+- binary size
+
+
 Example Applications:
 - raytracing in one weekend
 - cli/ps1 todo app
+- kalman filter
+- webserver
+-  math benchmarks

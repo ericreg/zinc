@@ -1,0 +1,8 @@
+// expected-error: if-expression without else must resolve to unit or diverge
+
+fn main() {
+    debug = true
+    value = if debug {
+        1
+    }
+}

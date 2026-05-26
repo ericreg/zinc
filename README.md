@@ -67,7 +67,7 @@ The compiler creates specialized versions of functions based on the argument typ
 
 Parentheses around conditions are optional:
 
-```rust
+```zinc
 fn main() {
     x = 10
 
@@ -87,6 +87,31 @@ fn main() {
         print("medium")
     } else {
         print("small")
+    }
+}
+```
+
+`if` also works as an expression, following Rust-style rules:
+
+```zinc
+fn label(count) {
+    return if count == 1 {
+        "item"
+    } else {
+        "items"
+    }
+}
+```
+
+In expression position, conditions must be `bool`, only one branch is evaluated,
+and a missing `else` is allowed only when the `if` resolves to unit or a
+missing branch diverges:
+
+```zinc
+fn main() {
+    debug = true
+    result = if debug {
+        print("debug")
     }
 }
 ```

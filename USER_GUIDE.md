@@ -322,6 +322,37 @@ fn main() {
 }
 ```
 
+`if` is also an expression, so you can use it anywhere Zinc expects a value:
+
+```zinc
+fn label(count) {
+    return if count == 1 {
+        "item"
+    } else {
+        "items"
+    }
+}
+```
+
+The expression form follows Rust-style rules:
+
+- Conditions must resolve to `bool`.
+- Only the selected branch is evaluated.
+- `else` may be omitted only when the whole `if` resolves to unit or the
+  missing branch would diverge with `return`, `break`, or `continue`.
+- The branch value is the final expression in the branch block.
+
+For example, this unit-valued `if` expression is valid:
+
+```zinc
+fn main() {
+    debug = true
+    result = if debug {
+        print("debug")
+    }
+}
+```
+
 ### Match
 
 `match` supports literal patterns, wildcard `_`, bindings, tuple patterns,
@@ -1050,15 +1081,15 @@ fn main() {
 }
 ```
 
-Collection mutator return values are intentionally not Zinc values in this
-version:
+Collection mutators are unit-valued expressions, so they can appear in value
+position even though they do not produce a useful payload:
 
 ```zinc
 fn main() {
     values = set()
 
-    // result = values.insert(1) // error
-    values.insert(1)
+    result = values.insert(1)
+    print(values.len())
 }
 ```
 

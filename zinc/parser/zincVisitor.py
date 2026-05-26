@@ -279,6 +279,11 @@ class zincVisitor(ParseTreeVisitor):
         return self.visitChildren(ctx)
 
 
+    # Visit a parse tree produced by zincParser#ifExpr.
+    def visitIfExpr(self, ctx:zincParser.IfExprContext):
+        return self.visitChildren(ctx)
+
+
     # Visit a parse tree produced by zincParser#channelReceiveExpr.
     def visitChannelReceiveExpr(self, ctx:zincParser.ChannelReceiveExprContext):
         return self.visitChildren(ctx)
@@ -301,6 +306,11 @@ class zincVisitor(ParseTreeVisitor):
 
     # Visit a parse tree produced by zincParser#equalityExpr.
     def visitEqualityExpr(self, ctx:zincParser.EqualityExprContext):
+        return self.visitChildren(ctx)
+
+
+    # Visit a parse tree produced by zincParser#ifExpression.
+    def visitIfExpression(self, ctx:zincParser.IfExpressionContext):
         return self.visitChildren(ctx)
 
 

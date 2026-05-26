@@ -207,7 +207,7 @@ impl __ZincContext {
 
 fn main() {
     let mut values = BTreeSet::<i64>::new();
-    values.insert(1);
+    { values.insert(1); () };
     for value in values.iter().cloned() {
         let value = 99;
         println!("{}", value);

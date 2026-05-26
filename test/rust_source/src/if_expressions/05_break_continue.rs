@@ -1,5 +1,3 @@
-use std::collections::{HashMap, HashSet};
-
 enum __ZincTryRecv<T> {
     Value(T),
     Empty,
@@ -205,26 +203,25 @@ impl __ZincContext {
     }
 }
 
-fn collections_06_collection_parameters__add_score_HashMap_String_f64(scores: &mut HashMap<String, f64>) {
-    { scores.insert(String::from("c"), (3 as f64)); () };
-}
-
-fn collections_06_collection_parameters__has_two_HashSet_i64(values: &HashSet<i64>) -> bool {
-    return values.contains(&2);
-}
-
-fn collections_06_collection_parameters__sum_scores_HashMap_String_f64(scores: &HashMap<String, f64>) -> f64 {
-    return (scores.get("a").unwrap().clone() + scores.get("b").unwrap().clone());
-}
-
 fn main() {
-    let mut scores = HashMap::from([(String::from("a"), (1 as f64)), (String::from("b"), 2.5)]);
-    let total = collections_06_collection_parameters__sum_scores_HashMap_String_f64(&scores);
-    println!("{}", total);
-    collections_06_collection_parameters__add_score_HashMap_String_f64(&mut scores);
-    let score_count = (scores.len() as i64);
-    println!("{}", score_count);
-    let values = HashSet::from([1, 2]);
-    let has_value = collections_06_collection_parameters__has_two_HashSet_i64(&values);
-    println!("{}", has_value);
+    let mut i = 0;
+    let mut total = 0;
+    println!("write, i: {}, total: {}", i, total);
+    loop {
+        let action = if (i == 0) {
+            i = (i + 1);
+            println!("write, i: {}", i);
+            continue;
+        } else if (i == 3) {
+            break;
+        } else {
+            println!("read, i: {}", i);
+            i
+        };
+        println!("write, action: {}", action);
+        total = (total + action);
+        i = (i + 1);
+        println!("write, total: {}, i: {}", total, i);
+    }
+    println!("read, total: {}, i: {}", total, i);
 }
