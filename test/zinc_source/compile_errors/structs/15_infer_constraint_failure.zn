@@ -1,0 +1,11 @@
+// expected-error: struct 'Pair' constraint failed: ain\[bool\]
+
+#[a in [bool]]
+struct Pair {
+    a: infer
+}
+
+fn main() {
+    bad = Pair { a: "nope" }
+    print(type(bad).name)
+}

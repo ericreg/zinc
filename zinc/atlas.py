@@ -92,6 +92,8 @@ class StructFieldInfo:
     struct_qualified_name: str | None = None
     anonymous_struct_info: AnonymousStructTypeInfo | None = None
     source_struct_qualified_name: str | None = None
+    is_infer: bool = False
+    line_num: int = 0
 
     def rust_type(self) -> str:
         """Get Rust type string for this field."""
@@ -175,6 +177,7 @@ class StructMethodInfo:
     source_struct_qualified_name: str | None = None
     source_module_id: str | None = None
     constructor_owner_qualified_name: str | None = None
+    line_num: int = 0
 
 
 @dataclass
@@ -190,6 +193,7 @@ class StructInstance:
     methods: list[StructMethodInfo] = field(default_factory=list)
     composition_mode: CompositionMode | None = None
     composition_sources: tuple[str, ...] = ()
+    infer_slot_names: tuple[str, ...] = ()
 
 
 @dataclass
@@ -199,6 +203,7 @@ class EnumVariantInfo:
     name: str
     index: int
     fields: list[StructFieldInfo] = field(default_factory=list)
+    line_num: int = 0
 
     @property
     def is_unit(self) -> bool:
@@ -448,7 +453,20 @@ class Atlas:
 class AtlasBuilder:
     """Build the Atlas from a module graph."""
 
-    BUILTIN_FUNCTIONS = {"print", "chan", "close", "dict", "sort_dict", "set", "sort_set"}
+    BUILTIN_FUNCTIONS = {
+        "print",
+        "chan",
+        "close",
+        "dict",
+        "sort_dict",
+        "set",
+        "sort_set",
+        "meta",
+        "type",
+        "line",
+        "has_component",
+        "implements",
+    }
 
     def __init__(self, module_graph: ModuleGraph):
         self.module_graph = module_graph

@@ -334,12 +334,13 @@ def struct_composition_from_ctx(
         return None
 
     if composition.orthogonalComposition():
+        sources = tuple(
+            tuple(qualified_name_path(qualified))
+            for qualified in composition.orthogonalComposition().qualifiedName()
+        )
         return StructCompositionSpec(
-            mode="orthogonal",
-            source_paths=tuple(
-                tuple(qualified_name_path(qualified))
-                for qualified in composition.orthogonalComposition().qualifiedName()
-            ),
+            mode="merge" if len(sources) == 1 else "orthogonal",
+            source_paths=sources,
         )
 
     if composition.mergeComposition():

@@ -1,4 +1,4 @@
-# Generated from zinc.g4 by ANTLR 4.13.2
+# Generated from zinc/parser/zinc.g4 by ANTLR 4.13.2
 from antlr4 import *
 if "." in __name__:
     from .zincParser import zincParser
@@ -51,6 +51,11 @@ class zincVisitor(ParseTreeVisitor):
 
     # Visit a parse tree produced by zincParser#enumDeclaration.
     def visitEnumDeclaration(self, ctx:zincParser.EnumDeclarationContext):
+        return self.visitChildren(ctx)
+
+
+    # Visit a parse tree produced by zincParser#attributeBlock.
+    def visitAttributeBlock(self, ctx:zincParser.AttributeBlockContext):
         return self.visitChildren(ctx)
 
 
@@ -261,6 +266,11 @@ class zincVisitor(ParseTreeVisitor):
 
     # Visit a parse tree produced by zincParser#block.
     def visitBlock(self, ctx:zincParser.BlockContext):
+        return self.visitChildren(ctx)
+
+
+    # Visit a parse tree produced by zincParser#membershipExpr.
+    def visitMembershipExpr(self, ctx:zincParser.MembershipExprContext):
         return self.visitChildren(ctx)
 
 

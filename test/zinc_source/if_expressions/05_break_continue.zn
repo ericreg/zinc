@@ -1,25 +1,11 @@
-fn main() {
-    i = 0
-    total = 0
-    print("write, i: {i}, total: {total}")
-
-    loop {
-        action = if i == 0 {
-            i = i + 1
-            print("write, i: {i}")
-            continue
-        } else if i == 3 {
-            break
-        } else {
-            print("read, i: {i}")
-            i
-        }
-        print("write, action: {action}")
-        
-        total = total + action
-        i = i + 1
-        print("write, total: {total}, i: {i}")
+fn approx_pi(starting_value,  iterations = 10) {
+    pi_quarter = 0
+    sign = 1
+    for i in 1..1000000 {
+        pi_quarter += sign * (1 / i)
+        sign *= -1
     }
 
-    print("read, total: {total}, i: {i}")
+    pi = pi_quarter * 4
+    print(pi)
 }

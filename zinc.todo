@@ -15,14 +15,17 @@ Implemented core pillars
 - [x] Multiline strings
 - [x] Closure support
 - [x] strict type annotations
-- [] return type annotations
+- [x] enums
 - [] metaprogramming model (seamless compile time)
+- [] component constraints ( basically generics-lite)
+- [] return type annotations
+
 - [] decorators
 - [] support for lambda expressions
-- [] component constraints ( basically generics-lite)
-- [] any types
-- [] enums
+
 - [] rust like numerical literals
+- [] type alternatives, i32 | f32, numeric is sugar for i32 | f32 | u8 | ...
+- [] default parameters
 
 out x = 
 
@@ -33,6 +36,8 @@ Currently (possibly forever) unsupported
 - macros (Do not use the dark arts)
 - traits (Not needed)
 - generics (Not needed)
+- https://benchmarksgame-team.pages.debian.net/benchmarksgame/
+
 
 Highest-priority language gaps
 ------------------------------

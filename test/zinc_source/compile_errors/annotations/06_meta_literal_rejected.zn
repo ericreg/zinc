@@ -1,0 +1,5 @@
+// expected-error: meta\(\) expects a symbol, field, method, type, or enum variant
+
+fn main() {
+    print(meta(123).name)
+}

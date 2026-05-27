@@ -31,6 +31,14 @@ from zinc.ast.types import (
     type_to_rust,
 )
 from zinc.modules import extract_identifier_path, struct_path_from_ctx
+from zinc.meta_runtime import (
+    COMPONENT_ORDER_QNAME,
+    MetaListValue,
+    MetaValue,
+    is_meta_struct_qname,
+    meta_struct_rust_name,
+    metadata_runtime_definitions,
+)
 from zinc.string_literals import is_interpolated_string_literal, is_string_literal, to_rust_string_literal
 
 
@@ -124,6 +132,7 @@ class CodeGenVisitor(zincVisitor):
         self._callable_signatures: dict[str, CallableTypeInfo] = {}
         self._anonymous_structs: dict[tuple, AnonymousStructTypeInfo] = {}
         self._captured_binding_names: set[str] = set()
+        self._needs_metadata_runtime = False
 
     def generate(self) -> RustProgram:
         """Main entry point - generate Rust code for all reachable code."""
@@ -137,7 +146,6 @@ class CodeGenVisitor(zincVisitor):
 
         imports = self._generate_imports()
         consts = [self._generate_const(c) for c in self.atlas.consts.values()]
-        runtime_helpers = self._generate_runtime_helpers()
         callable_enums = [
             self._generate_callable_enum(info)
             for _, info in sorted(self._callable_signatures.items())
@@ -154,14 +162,6 @@ class CodeGenVisitor(zincVisitor):
                 key=lambda item: item[1].rust_type_name(),
             )
         ]
-        structs = [
-            *runtime_helpers,
-            *closure_envs,
-            *callable_enums,
-            *anonymous_structs,
-            *[self._generate_enum(e) for e in self.atlas.enums.values()],
-            *[self._generate_struct(s) for s in self.atlas.structs.values()],
-        ]
         functions = []
         main_body = []
 
@@ -175,6 +175,16 @@ class CodeGenVisitor(zincVisitor):
                 main_body = self._generate_function_body(func)
             else:
                 functions.append(self._generate_function(func))
+
+        runtime_helpers = self._generate_runtime_helpers()
+        structs = [
+            *runtime_helpers,
+            *closure_envs,
+            *callable_enums,
+            *anonymous_structs,
+            *[self._generate_enum(e) for e in self.atlas.enums.values()],
+            *[self._generate_struct(s) for s in self.atlas.structs.values()],
+        ]
 
         return RustProgram(
             imports=imports,
@@ -945,7 +955,60 @@ class CodeGenVisitor(zincVisitor):
             "    }",
             "}",
         ])
-        return [channel_helper]
+        helpers = [channel_helper]
+        if self._needs_metadata_runtime:
+            helpers.extend(metadata_runtime_definitions())
+        return helpers
+
+    def _constant_value_for_expr(self, ctx):
+        """Return the compile-time constant value recorded for an expression, if any."""
+        symbol = self._get_expr_symbol(ctx)
+        if symbol is None:
+            return None
+        return symbol.constant_value
+
+    def _render_constant_value(self, value) -> str:
+        """Render a compile-time constant directly into Rust."""
+        if isinstance(value, MetaValue):
+            return self._render_meta_value(value)
+        if isinstance(value, MetaListValue):
+            return self._render_meta_list(value)
+        if isinstance(value, list):
+            return f"vec![{', '.join(self._render_constant_value(item) for item in value)}]"
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if isinstance(value, str):
+            escaped = (
+                value.replace("\\", "\\\\")
+                .replace("\"", "\\\"")
+                .replace("\n", "\\n")
+                .replace("\r", "\\r")
+                .replace("\t", "\\t")
+            )
+            return f'String::from("{escaped}")'
+        return repr(value)
+
+    def _render_meta_list(self, value: MetaListValue) -> str:
+        """Render a compile-time metadata list into a Rust Vec literal."""
+        self._needs_metadata_runtime = True
+        return f"vec![{', '.join(self._render_constant_value(item) for item in value.items)}]"
+
+    def _render_meta_value(self, value: MetaValue) -> str:
+        """Render a compile-time metadata object into a Rust struct literal."""
+        self._needs_metadata_runtime = True
+        if value.struct_qualified_name == COMPONENT_ORDER_QNAME:
+            name = str(value.fields.get("name", "depth_first"))
+            variant = {
+                "depth_first": "DepthFirst",
+                "breadth_first": "BreadthFirst",
+                "topological": "Topological",
+            }.get(name, "DepthFirst")
+            return f"__ZincComponentOrder::{variant}"
+        rust_name = meta_struct_rust_name(value.struct_qualified_name)
+        fields = []
+        for field_name, field_value in value.fields.items():
+            fields.append(f"{field_name}: {self._render_constant_value(field_value)}")
+        return f"{rust_name} {{ {', '.join(fields)} }}"
 
     def _register_callable_info(self, info: CallableTypeInfo | None) -> None:
         """Collect a concrete callable signature and all nested callable signatures."""
@@ -1244,6 +1307,9 @@ class CodeGenVisitor(zincVisitor):
         if base_type == BaseType.CALLABLE and callable_info:
             return callable_info.rust_type_name()
         if base_type == BaseType.STRUCT:
+            if is_meta_struct_qname(struct_qualified_name):
+                self._needs_metadata_runtime = True
+                return meta_struct_rust_name(struct_qualified_name)
             if anonymous_struct_info:
                 return anonymous_struct_info.rust_type_name()
             return self._named_struct_rust_name(struct_qualified_name)
@@ -1590,6 +1656,9 @@ class CodeGenVisitor(zincVisitor):
         """Return the flattened Rust name for a named struct qualified name."""
         if qualified_name is None:
             return "Struct"
+        if is_meta_struct_qname(qualified_name):
+            self._needs_metadata_runtime = True
+            return meta_struct_rust_name(qualified_name)
         struct = self.atlas.structs.get(qualified_name)
         if struct is not None:
             return self._struct_rust_name(struct)
@@ -1599,6 +1668,9 @@ class CodeGenVisitor(zincVisitor):
         """Return the flattened Rust name for a named enum qualified name."""
         if qualified_name is None:
             return "Enum"
+        if qualified_name == COMPONENT_ORDER_QNAME:
+            self._needs_metadata_runtime = True
+            return meta_struct_rust_name(qualified_name)
         enum = self.atlas.enums.get(qualified_name)
         if enum is not None:
             return self._enum_rust_name(enum)
@@ -1788,6 +1860,8 @@ class CodeGenVisitor(zincVisitor):
 
     def _generate_struct(self, struct: StructInstance) -> str:
         """Generate a struct definition and impl block."""
+        if any(field.is_infer for field in struct.fields):
+            return f"// infer-backed struct family {self._struct_rust_name(struct)} uses synthesized concrete shapes"
         lines = []
         rust_name = self._struct_rust_name(struct)
 
@@ -2615,6 +2689,17 @@ class CodeGenVisitor(zincVisitor):
 
         return f"({left} {op} {right})"
 
+    def visitMembershipExpr(self, ctx: ZincParser.MembershipExprContext) -> str:
+        """Visit membership comparison."""
+        left = self.visit(ctx.expression(0))
+        right = self.visit(ctx.expression(1))
+        right_type = self._get_expr_type(ctx.expression(1))
+        if right_type == BaseType.SET:
+            return f"({right}.contains(&{left}))"
+        if right_type == BaseType.DICT:
+            return f"({right}.contains_key(&{left}))"
+        return f"({right}.contains(&{left}))"
+
     def visitLogicalAndExpr(self, ctx: ZincParser.LogicalAndExprContext) -> str:
         """Visit logical AND."""
         left = self.visit(ctx.expression(0))
@@ -2674,6 +2759,9 @@ class CodeGenVisitor(zincVisitor):
 
     def visitIndexAccessExpr(self, ctx: ZincParser.IndexAccessExprContext) -> str:
         """Visit index access."""
+        constant_value = self._constant_value_for_expr(ctx)
+        if constant_value is not None:
+            return self._render_constant_value(constant_value)
         collection_type = self._get_expr_type(ctx.expression(0))
         receiver_symbol = self._get_expr_symbol(ctx.expression(0))
         captured_collection_name = None
@@ -2732,6 +2820,9 @@ class CodeGenVisitor(zincVisitor):
 
     def visitMemberAccessExpr(self, ctx: ZincParser.MemberAccessExprContext) -> str:
         """Visit member access - could be field access or static method reference."""
+        constant_value = self._constant_value_for_expr(ctx)
+        if constant_value is not None:
+            return self._render_constant_value(constant_value)
         expr_symbol = self._get_expr_symbol(ctx)
         is_direct_call = (
             isinstance(ctx.parentCtx, ZincParser.FunctionCallExprContext)
@@ -2829,6 +2920,9 @@ class CodeGenVisitor(zincVisitor):
 
     def visitFunctionCallExpr(self, ctx: ZincParser.FunctionCallExprContext) -> str:
         """Visit function call, handling static and instance method calls."""
+        constant_value = self._constant_value_for_expr(ctx)
+        if constant_value is not None:
+            return self._render_constant_value(constant_value)
         callee_ctx = ctx.expression()
         args = []
         arg_ctxs = []
@@ -2900,7 +2994,7 @@ class CodeGenVisitor(zincVisitor):
                     return f"{self.visit(receiver_ctx)}.cancel()"
 
         if callee == "print":
-            return self._render_print_call(args)
+            return self._render_print_call(args, arg_ctxs)
 
         if callee in {"dict", "sort_dict"}:
             info = self._expected_dict_info or self._get_dict_info(ctx) or DictTypeInfo(kind=callee)
@@ -3345,11 +3439,18 @@ class CodeGenVisitor(zincVisitor):
                 return lit_text and not is_string_literal(lit_text)
         return False
 
-    def _render_print_call(self, args: list[str]) -> str:
+    def _render_print_call(self, args: list[str], arg_ctxs: list | None = None) -> str:
         """Render a print() call as println!()."""
         if not args:
             return 'println!()'
         arg = args[0]
+        arg_ctx = arg_ctxs[0] if arg_ctxs else None
+        arg_symbol = self._get_expr_symbol(arg_ctx) if arg_ctx is not None else None
+        if (
+            arg_symbol
+            and isinstance(arg_symbol.constant_value, (MetaValue, MetaListValue))
+        ):
+            return f'println!("{{:?}}", {arg})'
         if arg.startswith('format!('):
             inner = arg[8:-1]
             return f"println!({inner})"
@@ -3372,8 +3473,10 @@ class CodeGenVisitor(zincVisitor):
 
     def visitStructInstantiation(self, ctx: ZincParser.StructInstantiationContext) -> str:
         """Visit struct instantiation."""
+        expr_symbol = self._get_expr_symbol(ctx)
+        concrete_anonymous_struct = expr_symbol.anonymous_struct_info if expr_symbol else None
         if self._current_module is None:
-            name = ctx.qualifiedName().getText()
+            name = concrete_anonymous_struct.rust_type_name() if concrete_anonymous_struct else ctx.qualifiedName().getText()
             struct = None
         else:
             struct_symbol = self.module_graph.resolve_struct_path(
@@ -3386,10 +3489,16 @@ class CodeGenVisitor(zincVisitor):
                 and struct_symbol.qualified_name == self._current_constructor_owner
             ):
                 struct = self.atlas.structs.get(self._current_struct)
-                name = self._struct_rust_name(struct) if struct else ctx.qualifiedName().getText()
+                if concrete_anonymous_struct is not None:
+                    name = concrete_anonymous_struct.rust_type_name()
+                else:
+                    name = self._struct_rust_name(struct) if struct else ctx.qualifiedName().getText()
             else:
                 struct = self.atlas.structs.get(struct_symbol.qualified_name) if struct_symbol else None
-                name = self._struct_rust_name(struct) if struct else ctx.qualifiedName().getText()
+                if concrete_anonymous_struct is not None:
+                    name = concrete_anonymous_struct.rust_type_name()
+                else:
+                    name = self._struct_rust_name(struct) if struct else ctx.qualifiedName().getText()
 
         # Get provided field values
         provided_fields: dict[str, str] = {}
@@ -3402,12 +3511,30 @@ class CodeGenVisitor(zincVisitor):
 
         # Look up struct definition to get all fields with defaults
         if struct:
+            concrete_field_map = concrete_anonymous_struct.field_map() if concrete_anonymous_struct else {}
             fields = []
             for f in struct.fields:
                 if f.name in provided_fields:
                     value = provided_fields[f.name]
+                    concrete_field = concrete_field_map.get(f.name)
+                    rust_type = (
+                        self._type_with_metadata_to_rust(
+                            concrete_field.resolved_type,
+                            exact_type=concrete_field.exact_type,
+                            array_info=concrete_field.array_info,
+                            dict_info=concrete_field.dict_info,
+                            set_info=concrete_field.set_info,
+                            tuple_info=concrete_field.tuple_info,
+                            callable_info=concrete_field.callable_info,
+                            struct_qualified_name=concrete_field.struct_qualified_name,
+                            anonymous_struct_info=concrete_field.anonymous_struct_info,
+                            as_reference=False,
+                        )
+                        if concrete_field is not None
+                        else f.rust_type()
+                    )
                     # Convert string literals to String::from() for String fields
-                    if f.rust_type() == "String" and (
+                    if rust_type == "String" and (
                         self._expr_is_string_literal(provided_field_exprs.get(f.name))
                         or self._looks_like_rust_string_literal(value)
                     ):

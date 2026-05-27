@@ -1,0 +1,23 @@
+// expected-error: call to 'print_shape' constraint failed: implements\(shape,Shape2D\)
+
+struct Named {
+    name: string
+}
+
+struct Shape2D [Named] {
+    fn area() {
+        return 0
+    }
+}
+
+struct Bad {
+}
+
+#[implements(shape, Shape2D)]
+fn print_shape(shape) {
+    print("never runs")
+}
+
+fn main() {
+    print_shape(Bad {})
+}

@@ -57,11 +57,15 @@ constDeclaration
 
 // --- Struct Declaration ---
 structDeclaration
-    : 'struct' IDENTIFIER structComposition? '{' structBody '}'
+    : attributeBlock* 'struct' IDENTIFIER structComposition? '{' structBody '}'
     ;
 
 enumDeclaration
     : 'enum' IDENTIFIER '{' enumBody '}'
+    ;
+
+attributeBlock
+    : '#[' (expression (',' expression)* ','?)? ']'
     ;
 
 structComposition
@@ -70,11 +74,11 @@ structComposition
     ;
 
 orthogonalComposition
-    : qualifiedName ('|' qualifiedName)+
+    : qualifiedName ('|' qualifiedName)*
     ;
 
 mergeComposition
-    : qualifiedName (',' qualifiedName)+ ','?
+    : qualifiedName (',' qualifiedName)* ','?
     ;
 
 structBody
@@ -105,11 +109,11 @@ enumVariantFieldType
 
 // --- Function Declaration ---
 functionDeclaration
-    : 'fn' IDENTIFIER '(' parameterList? ')' block
+    : attributeBlock* 'fn' IDENTIFIER '(' parameterList? ')' block
     ;
 
 asyncFunctionDeclaration
-    : 'async' IDENTIFIER '(' parameterList? ')' block
+    : attributeBlock* 'async' IDENTIFIER '(' parameterList? ')' block
     ;
 
 parameterList
@@ -270,6 +274,7 @@ expression
     | expression ('+' | '-') expression                         # additiveExpr
     | expression ('..' | '..=') expression                      # rangeExpr
     | expression ('<' | '<=' | '>' | '>=') expression           # relationalExpr
+    | expression 'in' expression                                # membershipExpr
     | expression ('==' | '!=') expression                       # equalityExpr
     | expression ('and' | '&&') expression                      # logicalAndExpr
     | expression ('or' | '||') expression                       # logicalOrExpr

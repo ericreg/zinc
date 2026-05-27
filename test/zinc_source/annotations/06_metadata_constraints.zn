@@ -1,0 +1,91 @@
+enum Color {
+    Red
+    Blue
+}
+
+struct Named {
+    name: string
+}
+
+struct Shape2D [Named] {
+    fn area() {
+        return 0
+    }
+}
+
+struct Circle [Shape2D] {
+    radius: f64
+
+    fn area() {
+        return self.radius * self.radius
+    }
+}
+
+struct Rectangle {
+    name: string
+    width: i64
+
+    fn area() {
+        return self.width
+    }
+}
+
+struct Audit {
+    created_at: i64
+}
+
+struct TaggedCircle [Audit | Circle] {
+    tag: string
+}
+
+#[
+    a in [bool],
+    type(b) in [string],
+]
+struct Pair {
+    a: infer
+    b: infer
+}
+
+#[implements(shape, Shape2D)]
+fn print_shape(shape) {
+    print(meta(shape).owner().name)
+    print(shape.name)
+    print(shape.area())
+}
+
+fn main() {
+    print(line())
+    pair = Pair { a: true, b: "ok" }
+    item = TaggedCircle {
+        created_at: 7
+        name: "circle"
+        radius: 3.0
+        tag: "featured"
+    }
+
+    print(meta(Color).kind)
+    print(meta(Color).line_num)
+    print(meta(Color.Blue).owner().name)
+    print(meta(print).kind)
+    print(type(pair).family_name)
+    print(type(pair).args[0].name)
+    print(type(pair).args[1].name)
+    print(type(pair).infer_slots[1])
+    print(type(Color).variants()[0].name)
+    print(type(item).fields()[0].name)
+    print(type(item).fields()[0].is_declared)
+    print(type(item).fields()[0].source_component_fqn)
+    print(type(item).fields()[3].name)
+    print(type(item).fields()[3].is_declared)
+    print(type(item).components()[1].name)
+    print(type(item).recursive_components()[2].name)
+    print(type(item).recursive_components(ComponentOrder.topological)[0].name)
+    print(meta(item.tag).owner().name)
+    print(meta(item.area).owner().name)
+    print(meta(item.area).is_declared)
+    print(has_component(Circle, Shape2D))
+    print(has_component(Rectangle, Shape2D))
+    print(implements(Rectangle, Shape2D))
+    print_shape(Rectangle { name: "box", width: 9 })
+}
