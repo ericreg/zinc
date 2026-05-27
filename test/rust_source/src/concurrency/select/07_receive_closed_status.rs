@@ -212,9 +212,9 @@ async fn main() {
     println!("{}", first);
     tokio::select! {
         __zinc_select_value_0_0 = async { values.recv_option().await } => {
-            let (value, ok) = match __zinc_select_value_0_0 { Some(value) => (value, true), None => (Default::default(), false) };
+            let (value, is_open) = match __zinc_select_value_0_0 { Some(value) => (value, true), None => (Default::default(), false) };
             println!("{}", value);
-            println!("{}", ok);
+            println!("{}", is_open);
         },
     }
 }

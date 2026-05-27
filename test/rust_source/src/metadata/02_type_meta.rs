@@ -488,4 +488,9 @@ async fn main() {
     println!("{:?}", Vec::<__ZincFieldMeta>::new());
     println!("{:?}", Vec::<__ZincMethodMeta>::new());
     println!("{:?}", Vec::<__ZincTypeMeta>::new());
+    println!("{}", String::from("Result"));
+    println!("{}", String::from("i64"));
+    println!("{}", String::from("String"));
+    println!("{}", String::from("Option"));
+    println!("{}", String::from("String"));
 }

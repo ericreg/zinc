@@ -18,7 +18,7 @@ fn main() {
             name: "three"
         },
         struct {
-            ok: true
+            ready: true
         },
     )
 
@@ -34,7 +34,7 @@ fn main() {
     print(items[0].id)
     print(items[1].name)
     print(first.name)
-    print(status.ok)
+    print(status.ready)
     print(received.id)
     print(received.name)
 }

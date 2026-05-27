@@ -459,6 +459,14 @@ name = "enums_05_imported_enum"
 path = "src/enums/05_imported_enum.rs"
 
 [[bin]]
+name = "error_handling_01_try_flow"
+path = "src/error_handling/01_try_flow.rs"
+
+[[bin]]
+name = "error_handling_02_main_result"
+path = "src/error_handling/02_main_result.rs"
+
+[[bin]]
 name = "for_loop"
 path = "src/for_loop.rs"
 

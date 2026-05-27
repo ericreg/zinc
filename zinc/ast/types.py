@@ -24,6 +24,8 @@ class BaseType(Enum):
     CALLABLE = auto()  # First-class callable values
     STRUCT = auto()  # Struct type
     ENUM = auto()  # Enum type
+    RESULT = auto()  # Builtin Result<T, E>
+    OPTION = auto()  # Builtin Option<T>
     VOID = auto()  # For functions with no return value
     NEVER = auto()  # Diverging control flow that never completes normally
     UNKNOWN = auto()  # For unresolved types
@@ -99,6 +101,8 @@ def type_to_rust(base_type: BaseType) -> str:
         BaseType.CALLABLE: "Callable",  # Placeholder, signature handled separately
         BaseType.STRUCT: "Struct",
         BaseType.ENUM: "Enum",
+        BaseType.RESULT: "Result",
+        BaseType.OPTION: "Option",
         BaseType.VOID: "()",
         BaseType.NEVER: "!",
         BaseType.UNKNOWN: "unknown",
@@ -298,6 +302,8 @@ class AnonymousStructFieldInfo:
     callable_info: CallableTypeInfo | None = None
     struct_qualified_name: str | None = None
     anonymous_struct_info: AnonymousStructTypeInfo | None = None
+    result_info: ResultTypeInfo | None = None
+    option_info: OptionTypeInfo | None = None
 
     def copy(self) -> AnonymousStructFieldInfo:
         """Deep-copy field metadata."""
@@ -312,6 +318,8 @@ class AnonymousStructFieldInfo:
             callable_info=self.callable_info.copy() if self.callable_info else None,
             struct_qualified_name=self.struct_qualified_name,
             anonymous_struct_info=self.anonymous_struct_info.copy() if self.anonymous_struct_info else None,
+            result_info=self.result_info.copy() if self.result_info else None,
+            option_info=self.option_info.copy() if self.option_info else None,
         )
 
     def structural_key(self) -> tuple[str, tuple]:
@@ -328,6 +336,8 @@ class AnonymousStructFieldInfo:
                 callable_info=self.callable_info,
                 struct_qualified_name=self.struct_qualified_name,
                 anonymous_struct_info=self.anonymous_struct_info,
+                result_info=self.result_info,
+                option_info=self.option_info,
             ),
         )
 
@@ -343,6 +353,8 @@ class AnonymousStructFieldInfo:
             callable_info=self.callable_info,
             struct_qualified_name=self.struct_qualified_name,
             anonymous_struct_info=self.anonymous_struct_info,
+            result_info=self.result_info,
+            option_info=self.option_info,
         )
 
 
@@ -397,6 +409,8 @@ class ChannelTypeInfo:
     element_callable_info: CallableTypeInfo | None = None
     element_struct_qualified_name: str | None = None
     element_anonymous_struct_info: AnonymousStructTypeInfo | None = None
+    element_result_info: ResultTypeInfo | None = None
+    element_option_info: OptionTypeInfo | None = None
     is_bounded: bool = False  # True if created with chan(n)
 
     def element_rust_type(self) -> str:
@@ -409,6 +423,10 @@ class ChannelTypeInfo:
             if self.element_anonymous_struct_info:
                 return self.element_anonymous_struct_info.rust_type_name()
             return _named_struct_rust_name(self.element_struct_qualified_name)
+        if self.element_type == BaseType.RESULT and self.element_result_info:
+            return self.element_result_info.to_rust_type()
+        if self.element_type == BaseType.OPTION and self.element_option_info:
+            return self.element_option_info.to_rust_type()
         return exact_type_to_rust(self.element_exact_type, self.element_type)
 
     def to_rust_type(self) -> str:
@@ -436,6 +454,16 @@ class ChannelTypeInfo:
             if self.is_bounded:
                 return f"BoundedChannel_{elem}"
             return f"Channel_{elem}"
+        if self.element_type == BaseType.RESULT and self.element_result_info:
+            elem = self.element_result_info.to_rust_type_suffix()
+            if self.is_bounded:
+                return f"BoundedChannel_{elem}"
+            return f"Channel_{elem}"
+        if self.element_type == BaseType.OPTION and self.element_option_info:
+            elem = self.element_option_info.to_rust_type_suffix()
+            if self.is_bounded:
+                return f"BoundedChannel_{elem}"
+            return f"Channel_{elem}"
         if self.is_bounded:
             return "BoundedChannel"
         return "Channel"
@@ -449,6 +477,8 @@ class ChannelTypeInfo:
             element_callable_info=self.element_callable_info.copy() if self.element_callable_info else None,
             element_struct_qualified_name=self.element_struct_qualified_name,
             element_anonymous_struct_info=self.element_anonymous_struct_info.copy() if self.element_anonymous_struct_info else None,
+            element_result_info=self.element_result_info.copy() if self.element_result_info else None,
+            element_option_info=self.element_option_info.copy() if self.element_option_info else None,
             is_bounded=self.is_bounded,
         )
 
@@ -463,6 +493,8 @@ class ArrayTypeInfo:
     element_callable_info: CallableTypeInfo | None = None
     element_struct_qualified_name: str | None = None
     element_anonymous_struct_info: AnonymousStructTypeInfo | None = None
+    element_result_info: ResultTypeInfo | None = None
+    element_option_info: OptionTypeInfo | None = None
     is_mutated: bool = False  # True if array is modified (push, pop, etc.)
 
     def element_rust_type(self) -> str:
@@ -475,6 +507,10 @@ class ArrayTypeInfo:
             if self.element_anonymous_struct_info:
                 return self.element_anonymous_struct_info.rust_type_name()
             return _named_struct_rust_name(self.element_struct_qualified_name)
+        if self.element_type == BaseType.RESULT and self.element_result_info:
+            return self.element_result_info.to_rust_type()
+        if self.element_type == BaseType.OPTION and self.element_option_info:
+            return self.element_option_info.to_rust_type()
         return exact_type_to_rust(self.element_exact_type, self.element_type)
 
     def to_rust_type(self, as_reference: bool = True) -> str:
@@ -500,6 +536,10 @@ class ArrayTypeInfo:
                 struct_qualified_name=self.element_struct_qualified_name,
                 anonymous_struct_info=self.element_anonymous_struct_info,
             )
+        elif self.element_type == BaseType.RESULT and self.element_result_info:
+            elem = self.element_result_info.to_rust_type_suffix()
+        elif self.element_type == BaseType.OPTION and self.element_option_info:
+            elem = self.element_option_info.to_rust_type_suffix()
         else:
             elem = exact_type_to_rust(self.element_exact_type, self.element_type)
         return f"Vec_{elem}"
@@ -513,6 +553,8 @@ class ArrayTypeInfo:
             element_callable_info=self.element_callable_info.copy() if self.element_callable_info else None,
             element_struct_qualified_name=self.element_struct_qualified_name,
             element_anonymous_struct_info=self.element_anonymous_struct_info.copy() if self.element_anonymous_struct_info else None,
+            element_result_info=self.element_result_info.copy() if self.element_result_info else None,
+            element_option_info=self.element_option_info.copy() if self.element_option_info else None,
             is_mutated=self.is_mutated,
         )
 
@@ -531,6 +573,10 @@ class DictTypeInfo:
     value_struct_qualified_name: str | None = None
     key_anonymous_struct_info: AnonymousStructTypeInfo | None = None
     value_anonymous_struct_info: AnonymousStructTypeInfo | None = None
+    key_result_info: ResultTypeInfo | None = None
+    value_result_info: ResultTypeInfo | None = None
+    key_option_info: OptionTypeInfo | None = None
+    value_option_info: OptionTypeInfo | None = None
     kind: str = "dict"  # "dict" or "sort_dict"
     is_mutated: bool = False
 
@@ -547,6 +593,10 @@ class DictTypeInfo:
                 key = self.key_anonymous_struct_info.rust_type_name()
             else:
                 key = _named_struct_rust_name(self.key_struct_qualified_name)
+        elif self.key_type == BaseType.RESULT and self.key_result_info:
+            key = self.key_result_info.to_rust_type()
+        elif self.key_type == BaseType.OPTION and self.key_option_info:
+            key = self.key_option_info.to_rust_type()
         else:
             key = exact_type_to_rust(self.key_exact_type, self.key_type)
         if self.value_type == BaseType.CALLABLE and self.value_callable_info:
@@ -556,6 +606,10 @@ class DictTypeInfo:
                 value = self.value_anonymous_struct_info.rust_type_name()
             else:
                 value = _named_struct_rust_name(self.value_struct_qualified_name)
+        elif self.value_type == BaseType.RESULT and self.value_result_info:
+            value = self.value_result_info.to_rust_type()
+        elif self.value_type == BaseType.OPTION and self.value_option_info:
+            value = self.value_option_info.to_rust_type()
         else:
             value = exact_type_to_rust(self.value_exact_type, self.value_type)
         collection_type = f"{self.rust_container()}<{key}, {value}>"
@@ -575,6 +629,10 @@ class DictTypeInfo:
                 struct_qualified_name=self.key_struct_qualified_name,
                 anonymous_struct_info=self.key_anonymous_struct_info,
             )
+        elif self.key_type == BaseType.RESULT and self.key_result_info:
+            key = self.key_result_info.to_rust_type_suffix()
+        elif self.key_type == BaseType.OPTION and self.key_option_info:
+            key = self.key_option_info.to_rust_type_suffix()
         else:
             key = exact_type_to_rust(self.key_exact_type, self.key_type)
         if self.value_type == BaseType.CALLABLE and self.value_callable_info:
@@ -585,6 +643,10 @@ class DictTypeInfo:
                 struct_qualified_name=self.value_struct_qualified_name,
                 anonymous_struct_info=self.value_anonymous_struct_info,
             )
+        elif self.value_type == BaseType.RESULT and self.value_result_info:
+            value = self.value_result_info.to_rust_type_suffix()
+        elif self.value_type == BaseType.OPTION and self.value_option_info:
+            value = self.value_option_info.to_rust_type_suffix()
         else:
             value = exact_type_to_rust(self.value_exact_type, self.value_type)
         return f"{self.rust_container()}_{key}_{value}"
@@ -602,6 +664,10 @@ class DictTypeInfo:
             value_struct_qualified_name=self.value_struct_qualified_name,
             key_anonymous_struct_info=self.key_anonymous_struct_info.copy() if self.key_anonymous_struct_info else None,
             value_anonymous_struct_info=self.value_anonymous_struct_info.copy() if self.value_anonymous_struct_info else None,
+            key_result_info=self.key_result_info.copy() if self.key_result_info else None,
+            value_result_info=self.value_result_info.copy() if self.value_result_info else None,
+            key_option_info=self.key_option_info.copy() if self.key_option_info else None,
+            value_option_info=self.value_option_info.copy() if self.value_option_info else None,
             kind=self.kind,
             is_mutated=self.is_mutated,
         )
@@ -615,6 +681,8 @@ class SetTypeInfo:
     element_exact_type: str | None = None
     element_struct_qualified_name: str | None = None
     element_anonymous_struct_info: AnonymousStructTypeInfo | None = None
+    element_result_info: ResultTypeInfo | None = None
+    element_option_info: OptionTypeInfo | None = None
     kind: str = "set"  # "set" or "sort_set"
     is_mutated: bool = False
 
@@ -629,6 +697,10 @@ class SetTypeInfo:
                 elem = self.element_anonymous_struct_info.rust_type_name()
             else:
                 elem = _named_struct_rust_name(self.element_struct_qualified_name)
+        elif self.element_type == BaseType.RESULT and self.element_result_info:
+            elem = self.element_result_info.to_rust_type()
+        elif self.element_type == BaseType.OPTION and self.element_option_info:
+            elem = self.element_option_info.to_rust_type()
         else:
             elem = exact_type_to_rust(self.element_exact_type, self.element_type)
         collection_type = f"{self.rust_container()}<{elem}>"
@@ -646,6 +718,10 @@ class SetTypeInfo:
                 struct_qualified_name=self.element_struct_qualified_name,
                 anonymous_struct_info=self.element_anonymous_struct_info,
             )
+        elif self.element_type == BaseType.RESULT and self.element_result_info:
+            elem = self.element_result_info.to_rust_type_suffix()
+        elif self.element_type == BaseType.OPTION and self.element_option_info:
+            elem = self.element_option_info.to_rust_type_suffix()
         else:
             elem = exact_type_to_rust(self.element_exact_type, self.element_type)
         return f"{self.rust_container()}_{elem}"
@@ -657,6 +733,8 @@ class SetTypeInfo:
             element_exact_type=self.element_exact_type,
             element_struct_qualified_name=self.element_struct_qualified_name,
             element_anonymous_struct_info=self.element_anonymous_struct_info.copy() if self.element_anonymous_struct_info else None,
+            element_result_info=self.element_result_info.copy() if self.element_result_info else None,
+            element_option_info=self.element_option_info.copy() if self.element_option_info else None,
             kind=self.kind,
             is_mutated=self.is_mutated,
         )
@@ -672,6 +750,8 @@ class TupleTypeInfo:
     element_callable_infos: dict[int, CallableTypeInfo] = field(default_factory=dict)
     element_struct_qualified_names: dict[int, str] = field(default_factory=dict)
     element_anonymous_struct_infos: dict[int, AnonymousStructTypeInfo] = field(default_factory=dict)
+    element_result_infos: dict[int, ResultTypeInfo] = field(default_factory=dict)
+    element_option_infos: dict[int, OptionTypeInfo] = field(default_factory=dict)
 
     def element_rust_type(self, index: int) -> str:
         """Generate the Rust type string for an element."""
@@ -684,6 +764,10 @@ class TupleTypeInfo:
             if index in self.element_anonymous_struct_infos:
                 return self.element_anonymous_struct_infos[index].rust_type_name()
             return _named_struct_rust_name(self.element_struct_qualified_names.get(index))
+        if element_type == BaseType.RESULT and index in self.element_result_infos:
+            return self.element_result_infos[index].to_rust_type()
+        if element_type == BaseType.OPTION and index in self.element_option_infos:
+            return self.element_option_infos[index].to_rust_type()
         exact_type = self.element_exact_types[index] if index < len(self.element_exact_types) else None
         return exact_type_to_rust(exact_type, element_type)
 
@@ -707,6 +791,10 @@ class TupleTypeInfo:
                 struct_qualified_name=self.element_struct_qualified_names.get(index),
                 anonymous_struct_info=self.element_anonymous_struct_infos.get(index),
             )
+        if element_type == BaseType.RESULT and index in self.element_result_infos:
+            return self.element_result_infos[index].to_rust_type_suffix()
+        if element_type == BaseType.OPTION and index in self.element_option_infos:
+            return self.element_option_infos[index].to_rust_type_suffix()
         exact_type = self.element_exact_types[index] if index < len(self.element_exact_types) else None
         return exact_type_to_rust(exact_type, element_type)
 
@@ -725,6 +813,8 @@ class TupleTypeInfo:
             element_callable_infos={index: info.copy() for index, info in self.element_callable_infos.items()},
             element_struct_qualified_names=dict(self.element_struct_qualified_names),
             element_anonymous_struct_infos={index: info.copy() for index, info in self.element_anonymous_struct_infos.items()},
+            element_result_infos={index: info.copy() for index, info in self.element_result_infos.items()},
+            element_option_infos={index: info.copy() for index, info in self.element_option_infos.items()},
         )
 
 
@@ -757,6 +847,8 @@ class CallableTypeInfo:
     param_callable_infos: dict[int, CallableTypeInfo] = field(default_factory=dict)
     param_struct_qualified_names: dict[int, str] = field(default_factory=dict)
     param_anonymous_struct_infos: dict[int, AnonymousStructTypeInfo] = field(default_factory=dict)
+    param_result_infos: dict[int, ResultTypeInfo] = field(default_factory=dict)
+    param_option_infos: dict[int, OptionTypeInfo] = field(default_factory=dict)
     return_type: BaseType = BaseType.UNKNOWN
     return_exact_type: str | None = None
     return_dict_info: DictTypeInfo | None = None
@@ -765,6 +857,8 @@ class CallableTypeInfo:
     return_callable_info: CallableTypeInfo | None = None
     return_struct_qualified_name: str | None = None
     return_anonymous_struct_info: AnonymousStructTypeInfo | None = None
+    return_result_info: ResultTypeInfo | None = None
+    return_option_info: OptionTypeInfo | None = None
     targets: tuple[CallableTarget, ...] = ()
 
     def copy(self) -> CallableTypeInfo:
@@ -779,6 +873,8 @@ class CallableTypeInfo:
             param_callable_infos={index: info.copy() for index, info in self.param_callable_infos.items() if info is not None},
             param_struct_qualified_names=dict(self.param_struct_qualified_names),
             param_anonymous_struct_infos={index: info.copy() for index, info in self.param_anonymous_struct_infos.items()},
+            param_result_infos={index: info.copy() for index, info in self.param_result_infos.items()},
+            param_option_infos={index: info.copy() for index, info in self.param_option_infos.items()},
             return_type=self.return_type,
             return_exact_type=self.return_exact_type,
             return_dict_info=self.return_dict_info.copy() if self.return_dict_info else None,
@@ -787,6 +883,8 @@ class CallableTypeInfo:
             return_callable_info=self.return_callable_info.copy() if self.return_callable_info else None,
             return_struct_qualified_name=self.return_struct_qualified_name,
             return_anonymous_struct_info=self.return_anonymous_struct_info.copy() if self.return_anonymous_struct_info else None,
+            return_result_info=self.return_result_info.copy() if self.return_result_info else None,
+            return_option_info=self.return_option_info.copy() if self.return_option_info else None,
             targets=tuple(self.targets),
         )
 
@@ -803,6 +901,8 @@ class CallableTypeInfo:
                 callable_info=self.return_callable_info,
                 struct_qualified_name=self.return_struct_qualified_name,
                 anonymous_struct_info=self.return_anonymous_struct_info,
+                result_info=self.return_result_info,
+                option_info=self.return_option_info,
             ),
         )
 
@@ -843,6 +943,10 @@ class CallableTypeInfo:
             set_info=self.return_set_info,
             tuple_info=self.return_tuple_info,
             callable_info=self.return_callable_info,
+            struct_qualified_name=self.return_struct_qualified_name,
+            anonymous_struct_info=self.return_anonymous_struct_info,
+            result_info=self.return_result_info,
+            option_info=self.return_option_info,
         )
         return f"{params_part}_to_{return_part}"
 
@@ -857,6 +961,8 @@ class CallableTypeInfo:
             callable_info=self.param_callable_infos.get(index),
             struct_qualified_name=self.param_struct_qualified_names.get(index),
             anonymous_struct_info=self.param_anonymous_struct_infos.get(index),
+            result_info=self.param_result_infos.get(index),
+            option_info=self.param_option_infos.get(index),
         )
 
     def _value_key(
@@ -871,6 +977,8 @@ class CallableTypeInfo:
         callable_info: CallableTypeInfo | None = None,
         struct_qualified_name: str | None = None,
         anonymous_struct_info: AnonymousStructTypeInfo | None = None,
+        result_info: ResultTypeInfo | None = None,
+        option_info: OptionTypeInfo | None = None,
     ) -> tuple:
         return value_type_key(
             base_type,
@@ -882,6 +990,8 @@ class CallableTypeInfo:
             callable_info=callable_info,
             struct_qualified_name=struct_qualified_name,
             anonymous_struct_info=anonymous_struct_info,
+            result_info=result_info,
+            option_info=option_info,
         )
 
     def _param_suffix(self, index: int, base_type: BaseType) -> str:
@@ -895,6 +1005,8 @@ class CallableTypeInfo:
             callable_info=self.param_callable_infos.get(index),
             struct_qualified_name=self.param_struct_qualified_names.get(index),
             anonymous_struct_info=self.param_anonymous_struct_infos.get(index),
+            result_info=self.param_result_infos.get(index),
+            option_info=self.param_option_infos.get(index),
         )
 
     def _value_suffix(
@@ -909,6 +1021,8 @@ class CallableTypeInfo:
         callable_info: CallableTypeInfo | None = None,
         struct_qualified_name: str | None = None,
         anonymous_struct_info: AnonymousStructTypeInfo | None = None,
+        result_info: ResultTypeInfo | None = None,
+        option_info: OptionTypeInfo | None = None,
     ) -> str:
         return value_type_suffix(
             base_type,
@@ -920,7 +1034,154 @@ class CallableTypeInfo:
             callable_info=callable_info,
             struct_qualified_name=struct_qualified_name,
             anonymous_struct_info=anonymous_struct_info,
+            result_info=result_info,
+            option_info=option_info,
         )
+
+
+@dataclass
+class ValueTypeSpec:
+    """A reusable rich description for any Zinc value type."""
+
+    base_type: BaseType = BaseType.UNKNOWN
+    exact_type: str | None = None
+    array_info: ArrayTypeInfo | None = None
+    channel_info: ChannelTypeInfo | None = None
+    dict_info: DictTypeInfo | None = None
+    set_info: SetTypeInfo | None = None
+    tuple_info: TupleTypeInfo | None = None
+    callable_info: CallableTypeInfo | None = None
+    struct_qualified_name: str | None = None
+    anonymous_struct_info: AnonymousStructTypeInfo | None = None
+    result_info: ResultTypeInfo | None = None
+    option_info: OptionTypeInfo | None = None
+
+    def copy(self) -> ValueTypeSpec:
+        """Deep-copy nested value metadata."""
+        return ValueTypeSpec(
+            base_type=self.base_type,
+            exact_type=self.exact_type,
+            array_info=self.array_info.copy() if self.array_info else None,
+            channel_info=self.channel_info.copy() if self.channel_info else None,
+            dict_info=self.dict_info.copy() if self.dict_info else None,
+            set_info=self.set_info.copy() if self.set_info else None,
+            tuple_info=self.tuple_info.copy() if self.tuple_info else None,
+            callable_info=self.callable_info.copy() if self.callable_info else None,
+            struct_qualified_name=self.struct_qualified_name,
+            anonymous_struct_info=self.anonymous_struct_info.copy() if self.anonymous_struct_info else None,
+            result_info=self.result_info.copy() if self.result_info else None,
+            option_info=self.option_info.copy() if self.option_info else None,
+        )
+
+    def to_rust_type(self) -> str:
+        """Render this value as a Rust type."""
+        if self.base_type == BaseType.ARRAY and self.array_info:
+            return self.array_info.to_rust_type(as_reference=False)
+        if self.base_type == BaseType.CHANNEL and self.channel_info:
+            return self.channel_info.to_rust_type()
+        if self.base_type == BaseType.DICT and self.dict_info:
+            return self.dict_info.to_rust_type(as_reference=False)
+        if self.base_type == BaseType.SET and self.set_info:
+            return self.set_info.to_rust_type(as_reference=False)
+        if self.base_type == BaseType.TUPLE and self.tuple_info:
+            return self.tuple_info.to_rust_type()
+        if self.base_type == BaseType.CALLABLE and self.callable_info:
+            return self.callable_info.rust_type_name()
+        if self.base_type == BaseType.STRUCT:
+            if self.anonymous_struct_info:
+                return self.anonymous_struct_info.rust_type_name()
+            return _named_struct_rust_name(self.struct_qualified_name)
+        if self.base_type == BaseType.ENUM:
+            return _named_enum_rust_name(self.exact_type)
+        if self.base_type == BaseType.RESULT and self.result_info:
+            return self.result_info.to_rust_type()
+        if self.base_type == BaseType.OPTION and self.option_info:
+            return self.option_info.to_rust_type()
+        return exact_type_to_rust(self.exact_type, self.base_type)
+
+    def structural_key(self) -> tuple:
+        """Return a stable structural key for this value."""
+        return value_type_key(
+            self.base_type,
+            exact_type=self.exact_type,
+            array_info=self.array_info,
+            channel_info=self.channel_info,
+            dict_info=self.dict_info,
+            set_info=self.set_info,
+            tuple_info=self.tuple_info,
+            callable_info=self.callable_info,
+            struct_qualified_name=self.struct_qualified_name,
+            anonymous_struct_info=self.anonymous_struct_info,
+            result_info=self.result_info,
+            option_info=self.option_info,
+        )
+
+    def to_rust_type_suffix(self) -> str:
+        """Return a stable Rust-safe suffix for this value."""
+        return value_type_suffix(
+            self.base_type,
+            exact_type=self.exact_type,
+            array_info=self.array_info,
+            channel_info=self.channel_info,
+            dict_info=self.dict_info,
+            set_info=self.set_info,
+            tuple_info=self.tuple_info,
+            callable_info=self.callable_info,
+            struct_qualified_name=self.struct_qualified_name,
+            anonymous_struct_info=self.anonymous_struct_info,
+            result_info=self.result_info,
+            option_info=self.option_info,
+        )
+
+
+@dataclass
+class ResultTypeInfo:
+    """Type information for builtin Result<T, E> values."""
+
+    ok_type: ValueTypeSpec = field(default_factory=ValueTypeSpec)
+    err_type: ValueTypeSpec = field(default_factory=ValueTypeSpec)
+
+    def copy(self) -> ResultTypeInfo:
+        """Deep-copy result metadata."""
+        return ResultTypeInfo(
+            ok_type=self.ok_type.copy(),
+            err_type=self.err_type.copy(),
+        )
+
+    def to_rust_type(self) -> str:
+        """Render this result as a Rust type."""
+        return f"Result<{self.ok_type.to_rust_type()}, {self.err_type.to_rust_type()}>"
+
+    def to_rust_type_suffix(self) -> str:
+        """Return a stable Rust-safe suffix for this result."""
+        return f"Result_{self.ok_type.to_rust_type_suffix()}_{self.err_type.to_rust_type_suffix()}"
+
+    def structural_key(self) -> tuple:
+        """Return a stable structural key for this result."""
+        return ("result", self.ok_type.structural_key(), self.err_type.structural_key())
+
+
+@dataclass
+class OptionTypeInfo:
+    """Type information for builtin Option<T> values."""
+
+    some_type: ValueTypeSpec = field(default_factory=ValueTypeSpec)
+
+    def copy(self) -> OptionTypeInfo:
+        """Deep-copy option metadata."""
+        return OptionTypeInfo(some_type=self.some_type.copy())
+
+    def to_rust_type(self) -> str:
+        """Render this option as a Rust type."""
+        return f"Option<{self.some_type.to_rust_type()}>"
+
+    def to_rust_type_suffix(self) -> str:
+        """Return a stable Rust-safe suffix for this option."""
+        return f"Option_{self.some_type.to_rust_type_suffix()}"
+
+    def structural_key(self) -> tuple:
+        """Return a stable structural key for this option."""
+        return ("option", self.some_type.structural_key())
 
 
 def value_type_key(
@@ -928,16 +1189,21 @@ def value_type_key(
     *,
     exact_type: str | None = None,
     array_info: ArrayTypeInfo | None = None,
+    channel_info: ChannelTypeInfo | None = None,
     dict_info: DictTypeInfo | None = None,
     set_info: SetTypeInfo | None = None,
     tuple_info: TupleTypeInfo | None = None,
     callable_info: CallableTypeInfo | None = None,
     struct_qualified_name: str | None = None,
     anonymous_struct_info: AnonymousStructTypeInfo | None = None,
+    result_info: ResultTypeInfo | None = None,
+    option_info: OptionTypeInfo | None = None,
 ) -> tuple:
     """Return a stable structural key for any Zinc value type."""
     if base_type == BaseType.ARRAY and array_info:
         return ("array", array_info.to_rust_type_suffix())
+    if base_type == BaseType.CHANNEL and channel_info:
+        return ("channel", channel_info.to_rust_type_suffix())
     if base_type == BaseType.DICT and dict_info:
         return ("dict", dict_info.to_rust_type_suffix())
     if base_type == BaseType.SET and set_info:
@@ -957,6 +1223,10 @@ def value_type_key(
         if normalized_exact is not None:
             return ("enum", normalized_exact)
         return ("enum",)
+    if base_type == BaseType.RESULT and result_info:
+        return result_info.structural_key()
+    if base_type == BaseType.OPTION and option_info:
+        return option_info.structural_key()
     if base_type == BaseType.VOID:
         return ("unit",)
     if base_type == BaseType.NEVER:
@@ -974,16 +1244,21 @@ def value_type_suffix(
     *,
     exact_type: str | None = None,
     array_info: ArrayTypeInfo | None = None,
+    channel_info: ChannelTypeInfo | None = None,
     dict_info: DictTypeInfo | None = None,
     set_info: SetTypeInfo | None = None,
     tuple_info: TupleTypeInfo | None = None,
     callable_info: CallableTypeInfo | None = None,
     struct_qualified_name: str | None = None,
     anonymous_struct_info: AnonymousStructTypeInfo | None = None,
+    result_info: ResultTypeInfo | None = None,
+    option_info: OptionTypeInfo | None = None,
 ) -> str:
     """Return a Rust-safe suffix for any Zinc value type."""
     if base_type == BaseType.ARRAY and array_info:
         return array_info.to_rust_type_suffix()
+    if base_type == BaseType.CHANNEL and channel_info:
+        return channel_info.to_rust_type_suffix()
     if base_type == BaseType.DICT and dict_info:
         return dict_info.to_rust_type_suffix()
     if base_type == BaseType.SET and set_info:
@@ -998,6 +1273,10 @@ def value_type_suffix(
         return _named_struct_suffix(struct_qualified_name)
     if base_type == BaseType.ENUM:
         return _named_enum_suffix(exact_type)
+    if base_type == BaseType.RESULT and result_info:
+        return result_info.to_rust_type_suffix()
+    if base_type == BaseType.OPTION and option_info:
+        return option_info.to_rust_type_suffix()
     if base_type == BaseType.VOID:
         return "Unit"
     if base_type == BaseType.NEVER:

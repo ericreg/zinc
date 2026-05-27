@@ -12,8 +12,11 @@ from zinc.ast.types import (
     CallableTypeInfo,
     ChannelTypeInfo,
     DictTypeInfo,
+    OptionTypeInfo,
+    ResultTypeInfo,
     SetTypeInfo,
     TupleTypeInfo,
+    ValueTypeSpec,
     exact_type_to_rust,
     type_to_rust,
 )
@@ -133,6 +136,18 @@ class CodeGenVisitor(zincVisitor):
         self._captured_binding_names: set[str] = set()
         self._needs_metadata_runtime = False
 
+    def visit(self, tree):
+        """Visit one parse node and post-process try-propagation sites."""
+        rendered = super().visit(tree)
+        if not isinstance(tree, ParserRuleContext) or not isinstance(rendered, str):
+            return rendered
+        if not isinstance(tree, ZincParser.ExpressionContext):
+            return rendered
+        family = self.symbols.auto_unwrap_family(tree.getSourceInterval(), self._current_function)
+        if family in {BaseType.RESULT, BaseType.OPTION}:
+            return f"({rendered})?"
+        return rendered
+
     def generate(self) -> RustProgram:
         """Main entry point - generate Rust code for all reachable code."""
         # Pre-scan to determine which struct vars need mut
@@ -160,11 +175,15 @@ class CodeGenVisitor(zincVisitor):
         for func_name in self.atlas.topological_order():
             func = self.atlas.functions[func_name]
             if func.name == "main":
-                self._current_function = func.mangled_name
-                self._current_module = func.module_id
-                self._declared_vars.clear()
-                self._current_channel_params = set()
-                main_body = self._generate_function_body(func)
+                if func.return_type == BaseType.RESULT and func.return_result_info is not None:
+                    functions.append(self._generate_function_with_name(func, "__zinc_main", force_async=self._uses_async))
+                    main_body = self._generate_result_main_wrapper_body()
+                else:
+                    self._current_function = func.mangled_name
+                    self._current_module = func.module_id
+                    self._declared_vars.clear()
+                    self._current_channel_params = set()
+                    main_body = self._generate_function_body(func)
             else:
                 functions.append(self._generate_function(func))
 
@@ -610,6 +629,8 @@ class CodeGenVisitor(zincVisitor):
             return [self._render_if_statement(stmt_ctx.ifStatement(), as_expression=True)]
         if stmt_ctx.returnStatement():
             return [self.visit(stmt_ctx.returnStatement())]
+        if stmt_ctx.failStatement():
+            return [self.visit(stmt_ctx.failStatement())]
         if stmt_ctx.breakStatement():
             return [self.visit(stmt_ctx.breakStatement())]
         if stmt_ctx.continueStatement():
@@ -1258,6 +1279,8 @@ class CodeGenVisitor(zincVisitor):
         callable_info: CallableTypeInfo | None = None,
         struct_qualified_name: str | None = None,
         anonymous_struct_info: AnonymousStructTypeInfo | None = None,
+        result_info: ResultTypeInfo | None = None,
+        option_info: OptionTypeInfo | None = None,
         as_reference: bool = False,
     ) -> str:
         """Render a full Zinc type including rich metadata."""
@@ -1278,6 +1301,10 @@ class CodeGenVisitor(zincVisitor):
             if anonymous_struct_info:
                 return anonymous_struct_info.rust_type_name()
             return self._named_struct_rust_name(struct_qualified_name)
+        if base_type == BaseType.RESULT and result_info:
+            return result_info.to_rust_type()
+        if base_type == BaseType.OPTION and option_info:
+            return option_info.to_rust_type()
         if base_type == BaseType.VOID:
             return "()"
         return exact_type_to_rust(exact_type, base_type)
@@ -1293,6 +1320,8 @@ class CodeGenVisitor(zincVisitor):
                 element_callable_info=symbol.callable_info if symbol.element_type == BaseType.CALLABLE else None,
                 element_struct_qualified_name=symbol.element_struct_qualified_name,
                 element_anonymous_struct_info=symbol.element_anonymous_struct_info,
+                element_result_info=symbol.result_info if symbol.element_type == BaseType.RESULT else None,
+                element_option_info=symbol.option_info if symbol.element_type == BaseType.OPTION else None,
             )
         return self._type_with_metadata_to_rust(
             symbol.resolved_type,
@@ -1303,6 +1332,8 @@ class CodeGenVisitor(zincVisitor):
             tuple_info=symbol.tuple_info if symbol.resolved_type == BaseType.TUPLE else None,
             callable_info=symbol.callable_info if symbol.resolved_type == BaseType.CALLABLE else None,
             anonymous_struct_info=symbol.anonymous_struct_info,
+            result_info=symbol.result_info if symbol.resolved_type == BaseType.RESULT else None,
+            option_info=symbol.option_info if symbol.resolved_type == BaseType.OPTION else None,
         )
 
     def _callable_param_rust_type(self, info: CallableTypeInfo, index: int) -> str:
@@ -1317,6 +1348,8 @@ class CodeGenVisitor(zincVisitor):
             callable_info=info.param_callable_infos.get(index),
             struct_qualified_name=info.param_struct_qualified_names.get(index),
             anonymous_struct_info=info.param_anonymous_struct_infos.get(index),
+            result_info=info.param_result_infos.get(index),
+            option_info=info.param_option_infos.get(index),
             as_reference=info.param_types[index] in {BaseType.ARRAY, BaseType.DICT, BaseType.SET},
         )
 
@@ -1331,6 +1364,8 @@ class CodeGenVisitor(zincVisitor):
             callable_info=info.return_callable_info,
             struct_qualified_name=info.return_struct_qualified_name,
             anonymous_struct_info=info.return_anonymous_struct_info,
+            result_info=info.return_result_info,
+            option_info=info.return_option_info,
             as_reference=False,
         )
 
@@ -1346,6 +1381,8 @@ class CodeGenVisitor(zincVisitor):
                 arg_set_infos=info.param_set_infos,
                 arg_tuple_infos=info.param_tuple_infos,
                 arg_callable_infos=info.param_callable_infos,
+                arg_result_infos=info.param_result_infos,
+                arg_option_infos=info.param_option_infos,
                 arg_struct_qualified_names=info.param_struct_qualified_names,
                 arg_anonymous_struct_infos=info.param_anonymous_struct_infos,
             )
@@ -2002,6 +2039,16 @@ class CodeGenVisitor(zincVisitor):
 
     def _generate_function(self, func: FunctionInstance) -> str:
         """Generate a function definition using mangled name."""
+        return self._generate_function_with_name(func, func.mangled_name)
+
+    def _generate_function_with_name(
+        self,
+        func: FunctionInstance,
+        rust_name: str,
+        *,
+        force_async: bool | None = None,
+    ) -> str:
+        """Generate a function definition using a specific Rust name."""
         self._current_function = func.mangled_name
         self._current_module = func.module_id
         self._declared_vars.clear()
@@ -2093,6 +2140,10 @@ class CodeGenVisitor(zincVisitor):
                     anonymous_struct_info=func.return_anonymous_struct_info,
                     as_reference=False,
                 )
+            elif func.return_type == BaseType.RESULT and func.return_result_info:
+                return_type_str = f" -> {func.return_result_info.to_rust_type()}"
+            elif func.return_type == BaseType.OPTION and func.return_option_info:
+                return_type_str = f" -> {func.return_option_info.to_rust_type()}"
             else:
                 return_type_str = " -> " + self._type_with_metadata_to_rust(
                     func.return_type,
@@ -2101,9 +2152,8 @@ class CodeGenVisitor(zincVisitor):
         else:
             return_type_str = ""
 
-        # Use mangled_name for the Rust function name
-        async_kw = "async " if func.is_async else ""
-        lines = [f"{async_kw}fn {func.mangled_name}({param_str}){return_type_str} {{"]
+        async_kw = "async " if (func.is_async if force_async is None else force_async) else ""
+        lines = [f"{async_kw}fn {rust_name}({param_str}){return_type_str} {{"]
         for stmt in body_stmts:
             # Handle multiline statements (like for loops, if/else) by indenting each line
             for line in stmt.split("\n"):
@@ -2111,6 +2161,16 @@ class CodeGenVisitor(zincVisitor):
         lines.append("}")
 
         return "\n".join(lines)
+
+    def _generate_result_main_wrapper_body(self) -> list[str]:
+        """Generate the outer Rust main wrapper for Zinc mains that return Result."""
+        call = "__zinc_main().await" if self._uses_async else "__zinc_main()"
+        return [
+            f"if let Err(err) = {call} {{",
+            '    eprintln!("{}", err);',
+            "    std::process::exit(1);",
+            "}",
+        ]
 
     def _generate_function_body(self, func: FunctionInstance) -> list[str]:
         """Generate statements for a function body."""
@@ -2279,12 +2339,37 @@ class CodeGenVisitor(zincVisitor):
 
     def visitPrimaryExpression(self, ctx: ZincParser.PrimaryExpressionContext) -> str:
         """Visit a primary expression."""
+        if hasattr(ctx, "builtinTypeQuery") and ctx.builtinTypeQuery():
+            constant_value = self._constant_value_for_expr(ctx)
+            if constant_value is not None:
+                return self._render_constant_value(constant_value)
         if ctx.literal():
             return self.visit(ctx.literal())
+        if hasattr(ctx, "unitLiteral") and ctx.unitLiteral():
+            return "()"
         if hasattr(ctx, "anonymousStructLiteral") and ctx.anonymousStructLiteral():
             return self.visit(ctx.anonymousStructLiteral())
-        if ctx.IDENTIFIER():
-            name = ctx.IDENTIFIER().getText()
+        if hasattr(ctx, "builtinResultOptionConstructor") and ctx.builtinResultOptionConstructor():
+            ctor = ctx.builtinResultOptionConstructor()
+            if ctor.NONE():
+                return "None"
+            inner_expr = ctor.expression()
+            inner = self.visit(inner_expr)
+            expr_symbol = self._get_expr_symbol(ctx)
+            if ctor.OK():
+                target_spec = expr_symbol.result_info.ok_type if expr_symbol and expr_symbol.result_info else None
+                inner = self._coerce_to_value_spec(inner, target_spec, inner_expr)
+                return f"Ok({inner})"
+            if ctor.ERR():
+                target_spec = expr_symbol.result_info.err_type if expr_symbol and expr_symbol.result_info else None
+                inner = self._coerce_to_value_spec(inner, target_spec, inner_expr)
+                return f"Err({inner})"
+            target_spec = expr_symbol.option_info.some_type if expr_symbol and expr_symbol.option_info else None
+            inner = self._coerce_to_value_spec(inner, target_spec, inner_expr)
+            return f"Some({inner})"
+        name_token = ctx.IDENTIFIER() or (ctx.TYPE_KW() if hasattr(ctx, "TYPE_KW") else None)
+        if name_token:
+            name = name_token.getText()
             expr_symbol = self._get_expr_symbol(ctx)
             is_direct_call = (
                 isinstance(ctx.parentCtx, ZincParser.PrimaryExprContext)
@@ -2540,6 +2625,26 @@ class CodeGenVisitor(zincVisitor):
                 return f"({value} as f64)"
         return value
 
+    def _coerce_to_value_spec(self, value: str, spec: ValueTypeSpec | None, value_ctx=None) -> str:
+        """Convert a rendered value to one resolved Zinc payload type when needed."""
+        if spec is None:
+            return value
+        return self._coerce_owned(value, spec.base_type, value_ctx)
+
+    def _nearest_result_error_spec(self, ctx) -> ValueTypeSpec | None:
+        """Resolve the active Result error payload for one fail statement."""
+        current = ctx.parentCtx
+        while current is not None:
+            if isinstance(current, ZincParser.TryExpressionContext):
+                try_symbol = self._get_expr_symbol(current)
+                if try_symbol and try_symbol.result_info:
+                    return try_symbol.result_info.err_type
+            current = current.parentCtx
+        func = self.atlas.functions.get(self._current_function) if self._current_function else None
+        if func and func.return_result_info:
+            return func.return_result_info.err_type
+        return None
+
     def _borrow_lookup_key(self, value: str, key_type: BaseType, value_ctx=None) -> str:
         """Render a borrowed lookup key for map/set lookup-style methods."""
         if key_type == BaseType.STRING:
@@ -2579,6 +2684,8 @@ class CodeGenVisitor(zincVisitor):
     def visitUnaryExpr(self, ctx: ZincParser.UnaryExprContext) -> str:
         """Visit unary expression."""
         op = ctx.getChild(0).getText()
+        if op == "not":
+            op = "!"
         operand = self.visit(ctx.expression())
         return f"({op}{operand})"
 
@@ -3519,7 +3626,12 @@ class CodeGenVisitor(zincVisitor):
         return f"{owner_rust}::{variant_name} {{ {', '.join(field_parts)} }}"
 
     def _match_pattern_local_names(self, pattern_ctx) -> set[str]:
-        """Return the names introduced by one enum match pattern."""
+        """Return the names introduced by one match pattern."""
+        result_option_pattern = pattern_ctx.resultOptionPattern()
+        if result_option_pattern is not None and result_option_pattern.pattern() is not None:
+            return self._match_pattern_local_names(result_option_pattern.pattern())
+        if pattern_ctx.IDENTIFIER():
+            return {pattern_ctx.IDENTIFIER().getText()}
         enum_pattern = pattern_ctx.enumVariantPattern()
         if enum_pattern is None:
             return set()
@@ -3534,6 +3646,18 @@ class CodeGenVisitor(zincVisitor):
         """Render one match arm pattern to Rust."""
         if pattern_ctx.getText() == "_":
             return "_"
+        result_option_pattern = pattern_ctx.resultOptionPattern()
+        if result_option_pattern is not None:
+            if result_option_pattern.NONE():
+                return "None"
+            inner = self._render_match_pattern(result_option_pattern.pattern())
+            if result_option_pattern.OK():
+                return f"Ok({inner})"
+            if result_option_pattern.ERR():
+                return f"Err({inner})"
+            return f"Some({inner})"
+        if pattern_ctx.IDENTIFIER():
+            return pattern_ctx.IDENTIFIER().getText()
         enum_pattern = pattern_ctx.enumVariantPattern()
         if enum_pattern is None or self._current_module is None:
             return pattern_ctx.getText()
@@ -3572,7 +3696,7 @@ class CodeGenVisitor(zincVisitor):
     # --- Statement Visitors (return Rust statement strings) ---
 
     def visitMatchStatement(self, ctx: ZincParser.MatchStatementContext) -> str:
-        """Visit a statement-form enum match."""
+        """Visit a statement-form match."""
         scrutinee = self.visit(ctx.expression())
         staged_name = self._staged_temp_name("match", ctx)
         lines = [
@@ -3600,6 +3724,75 @@ class CodeGenVisitor(zincVisitor):
     def visitAsyncFunctionDeclaration(self, ctx: ZincParser.AsyncFunctionDeclarationContext) -> str | None:
         """Nested async functions are generated separately as hidden top-level Rust functions."""
         return None
+
+    def visitBlockExpr(self, ctx: ZincParser.BlockExprContext) -> str:
+        """Visit a block-expression wrapper."""
+        return self.visit(ctx.blockExpression())
+
+    def visitBlockExpression(self, ctx: ZincParser.BlockExpressionContext) -> str:
+        """Render a plain block expression."""
+        return self._render_value_block_expr(ctx)
+
+    def _render_try_tail(self, stmt_ctx, family: BaseType) -> list[str]:
+        """Render the final statement of a try block, wrapping successful values."""
+        if stmt_ctx.expressionStatement():
+            value = self._render_expression_value(stmt_ctx.expressionStatement().expression())
+            wrapper = "Ok" if family == BaseType.RESULT else "Some"
+            return [f"{wrapper}({value})"]
+        if stmt_ctx.block():
+            value = self._render_value_block_expr(stmt_ctx.block())
+            wrapper = "Ok" if family == BaseType.RESULT else "Some"
+            return [f"{wrapper}({value})"]
+        if stmt_ctx.ifStatement():
+            value = self._render_if_statement(stmt_ctx.ifStatement(), as_expression=True)
+            wrapper = "Ok" if family == BaseType.RESULT else "Some"
+            return [f"{wrapper}({value})"]
+        if stmt_ctx.returnStatement():
+            return [self.visit(stmt_ctx.returnStatement())]
+        if stmt_ctx.failStatement():
+            return [self.visit(stmt_ctx.failStatement())]
+        if stmt_ctx.breakStatement():
+            return [self.visit(stmt_ctx.breakStatement())]
+        if stmt_ctx.continueStatement():
+            return [self.visit(stmt_ctx.continueStatement())]
+        rendered = self.visit(stmt_ctx)
+        if not rendered:
+            return ["Ok(())" if family == BaseType.RESULT else "Some(())"]
+        return [rendered, "Ok(())" if family == BaseType.RESULT else "Some(())"]
+
+    def _render_try_block(self, block_ctx, family: BaseType) -> list[str]:
+        """Render the body of a try closure."""
+        previous_declared = set(self._declared_vars)
+        try:
+            statements = list(block_ctx.statement())
+            if not statements:
+                return ["Ok(())" if family == BaseType.RESULT else "Some(())"]
+            stmts: list[str] = []
+            for stmt_ctx in statements[:-1]:
+                self._append_rendered_statement(stmts, self.visit(stmt_ctx))
+            stmts.extend(self._render_try_tail(statements[-1], family))
+            return stmts
+        finally:
+            self._declared_vars = previous_declared
+
+    def visitTryExpr(self, ctx: ZincParser.TryExprContext) -> str:
+        """Visit a try-expression wrapper."""
+        return self.visit(ctx.tryExpression())
+
+    def visitTryExpression(self, ctx: ZincParser.TryExpressionContext) -> str:
+        """Render a try block as an immediately-invoked closure."""
+        expr_symbol = self._get_expr_symbol(ctx)
+        family = expr_symbol.resolved_type if expr_symbol else self._get_expr_type(ctx)
+        if family == BaseType.RESULT and expr_symbol and expr_symbol.result_info:
+            return_type = expr_symbol.result_info.to_rust_type()
+        elif family == BaseType.OPTION and expr_symbol and expr_symbol.option_info:
+            return_type = expr_symbol.option_info.to_rust_type()
+        else:
+            return_type = exact_type_to_rust(expr_symbol.exact_type if expr_symbol else None, family)
+        lines = [f"(|| -> {return_type} {{"]
+        self._append_block_lines(lines, self._render_try_block(ctx.block(), family), 1)
+        lines.append("})()")
+        return "\n".join(lines)
 
     def visitSuperAssignment(self, ctx: ZincParser.SuperAssignmentContext) -> str:
         """Write through a captured outer binding cell."""
@@ -4178,6 +4371,13 @@ class CodeGenVisitor(zincVisitor):
     def visitContinueStatement(self, ctx: ZincParser.ContinueStatementContext) -> str:
         """Visit continue statement."""
         return "continue;"
+
+    def visitFailStatement(self, ctx: ZincParser.FailStatementContext) -> str:
+        """Visit fail statement."""
+        value_expr = ctx.expression()
+        value = self.visit(value_expr)
+        value = self._coerce_to_value_spec(value, self._nearest_result_error_spec(ctx), value_expr)
+        return f"return Err({value});"
 
     def visitSpawnStatement(self, ctx: ZincParser.SpawnStatementContext) -> str:
         """Visit spawn statement, using mangled name for spawned function."""

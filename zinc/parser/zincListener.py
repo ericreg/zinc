@@ -73,6 +73,22 @@ class zincListener(ParseTreeListener):
     def exitStructDeclaration(self, ctx: zincParser.StructDeclarationContext):
         pass
 
+    # Enter a parse tree produced by zincParser#enumDeclaration.
+    def enterEnumDeclaration(self, ctx: zincParser.EnumDeclarationContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#enumDeclaration.
+    def exitEnumDeclaration(self, ctx: zincParser.EnumDeclarationContext):
+        pass
+
+    # Enter a parse tree produced by zincParser#attributeBlock.
+    def enterAttributeBlock(self, ctx: zincParser.AttributeBlockContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#attributeBlock.
+    def exitAttributeBlock(self, ctx: zincParser.AttributeBlockContext):
+        pass
+
     # Enter a parse tree produced by zincParser#structComposition.
     def enterStructComposition(self, ctx: zincParser.StructCompositionContext):
         pass
@@ -119,6 +135,30 @@ class zincListener(ParseTreeListener):
 
     # Exit a parse tree produced by zincParser#structField.
     def exitStructField(self, ctx: zincParser.StructFieldContext):
+        pass
+
+    # Enter a parse tree produced by zincParser#enumBody.
+    def enterEnumBody(self, ctx: zincParser.EnumBodyContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#enumBody.
+    def exitEnumBody(self, ctx: zincParser.EnumBodyContext):
+        pass
+
+    # Enter a parse tree produced by zincParser#enumVariant.
+    def enterEnumVariant(self, ctx: zincParser.EnumVariantContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#enumVariant.
+    def exitEnumVariant(self, ctx: zincParser.EnumVariantContext):
+        pass
+
+    # Enter a parse tree produced by zincParser#enumVariantFieldType.
+    def enterEnumVariantFieldType(self, ctx: zincParser.EnumVariantFieldTypeContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#enumVariantFieldType.
+    def exitEnumVariantFieldType(self, ctx: zincParser.EnumVariantFieldTypeContext):
         pass
 
     # Enter a parse tree produced by zincParser#functionDeclaration.
@@ -289,12 +329,44 @@ class zincListener(ParseTreeListener):
     def exitPattern(self, ctx: zincParser.PatternContext):
         pass
 
+    # Enter a parse tree produced by zincParser#resultOptionPattern.
+    def enterResultOptionPattern(self, ctx: zincParser.ResultOptionPatternContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#resultOptionPattern.
+    def exitResultOptionPattern(self, ctx: zincParser.ResultOptionPatternContext):
+        pass
+
+    # Enter a parse tree produced by zincParser#enumVariantPattern.
+    def enterEnumVariantPattern(self, ctx: zincParser.EnumVariantPatternContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#enumVariantPattern.
+    def exitEnumVariantPattern(self, ctx: zincParser.EnumVariantPatternContext):
+        pass
+
     # Enter a parse tree produced by zincParser#rangePattern.
     def enterRangePattern(self, ctx: zincParser.RangePatternContext):
         pass
 
     # Exit a parse tree produced by zincParser#rangePattern.
     def exitRangePattern(self, ctx: zincParser.RangePatternContext):
+        pass
+
+    # Enter a parse tree produced by zincParser#enumVariantPath.
+    def enterEnumVariantPath(self, ctx: zincParser.EnumVariantPathContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#enumVariantPath.
+    def exitEnumVariantPath(self, ctx: zincParser.EnumVariantPathContext):
+        pass
+
+    # Enter a parse tree produced by zincParser#enumVariantFieldPattern.
+    def enterEnumVariantFieldPattern(self, ctx: zincParser.EnumVariantFieldPatternContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#enumVariantFieldPattern.
+    def exitEnumVariantFieldPattern(self, ctx: zincParser.EnumVariantFieldPatternContext):
         pass
 
     # Enter a parse tree produced by zincParser#fieldPattern.
@@ -311,6 +383,14 @@ class zincListener(ParseTreeListener):
 
     # Exit a parse tree produced by zincParser#returnStatement.
     def exitReturnStatement(self, ctx: zincParser.ReturnStatementContext):
+        pass
+
+    # Enter a parse tree produced by zincParser#failStatement.
+    def enterFailStatement(self, ctx: zincParser.FailStatementContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#failStatement.
+    def exitFailStatement(self, ctx: zincParser.FailStatementContext):
         pass
 
     # Enter a parse tree produced by zincParser#breakStatement.
@@ -359,6 +439,14 @@ class zincListener(ParseTreeListener):
 
     # Exit a parse tree produced by zincParser#block.
     def exitBlock(self, ctx: zincParser.BlockContext):
+        pass
+
+    # Enter a parse tree produced by zincParser#membershipExpr.
+    def enterMembershipExpr(self, ctx: zincParser.MembershipExprContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#membershipExpr.
+    def exitMembershipExpr(self, ctx: zincParser.MembershipExprContext):
         pass
 
     # Enter a parse tree produced by zincParser#logicalAndExpr.
@@ -425,6 +513,14 @@ class zincListener(ParseTreeListener):
     def exitPrimaryExpr(self, ctx: zincParser.PrimaryExprContext):
         pass
 
+    # Enter a parse tree produced by zincParser#tryExpr.
+    def enterTryExpr(self, ctx: zincParser.TryExprContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#tryExpr.
+    def exitTryExpr(self, ctx: zincParser.TryExprContext):
+        pass
+
     # Enter a parse tree produced by zincParser#lambdaExpr.
     def enterLambdaExpr(self, ctx: zincParser.LambdaExprContext):
         pass
@@ -473,6 +569,14 @@ class zincListener(ParseTreeListener):
     def exitMemberAccessExpr(self, ctx: zincParser.MemberAccessExprContext):
         pass
 
+    # Enter a parse tree produced by zincParser#blockExpr.
+    def enterBlockExpr(self, ctx: zincParser.BlockExprContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#blockExpr.
+    def exitBlockExpr(self, ctx: zincParser.BlockExprContext):
+        pass
+
     # Enter a parse tree produced by zincParser#multiplicativeExpr.
     def enterMultiplicativeExpr(self, ctx: zincParser.MultiplicativeExprContext):
         pass
@@ -505,12 +609,52 @@ class zincListener(ParseTreeListener):
     def exitIfExpression(self, ctx: zincParser.IfExpressionContext):
         pass
 
+    # Enter a parse tree produced by zincParser#tryExpression.
+    def enterTryExpression(self, ctx: zincParser.TryExpressionContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#tryExpression.
+    def exitTryExpression(self, ctx: zincParser.TryExpressionContext):
+        pass
+
+    # Enter a parse tree produced by zincParser#blockExpression.
+    def enterBlockExpression(self, ctx: zincParser.BlockExpressionContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#blockExpression.
+    def exitBlockExpression(self, ctx: zincParser.BlockExpressionContext):
+        pass
+
     # Enter a parse tree produced by zincParser#primaryExpression.
     def enterPrimaryExpression(self, ctx: zincParser.PrimaryExpressionContext):
         pass
 
     # Exit a parse tree produced by zincParser#primaryExpression.
     def exitPrimaryExpression(self, ctx: zincParser.PrimaryExpressionContext):
+        pass
+
+    # Enter a parse tree produced by zincParser#builtinTypeQuery.
+    def enterBuiltinTypeQuery(self, ctx: zincParser.BuiltinTypeQueryContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#builtinTypeQuery.
+    def exitBuiltinTypeQuery(self, ctx: zincParser.BuiltinTypeQueryContext):
+        pass
+
+    # Enter a parse tree produced by zincParser#typeQueryType.
+    def enterTypeQueryType(self, ctx: zincParser.TypeQueryTypeContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#typeQueryType.
+    def exitTypeQueryType(self, ctx: zincParser.TypeQueryTypeContext):
+        pass
+
+    # Enter a parse tree produced by zincParser#builtinResultOptionConstructor.
+    def enterBuiltinResultOptionConstructor(self, ctx: zincParser.BuiltinResultOptionConstructorContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#builtinResultOptionConstructor.
+    def exitBuiltinResultOptionConstructor(self, ctx: zincParser.BuiltinResultOptionConstructorContext):
         pass
 
     # Enter a parse tree produced by zincParser#memberAccess.
@@ -535,6 +679,14 @@ class zincListener(ParseTreeListener):
 
     # Exit a parse tree produced by zincParser#literal.
     def exitLiteral(self, ctx: zincParser.LiteralContext):
+        pass
+
+    # Enter a parse tree produced by zincParser#unitLiteral.
+    def enterUnitLiteral(self, ctx: zincParser.UnitLiteralContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#unitLiteral.
+    def exitUnitLiteral(self, ctx: zincParser.UnitLiteralContext):
         pass
 
     # Enter a parse tree produced by zincParser#booleanLiteral.
@@ -607,6 +759,14 @@ class zincListener(ParseTreeListener):
 
     # Exit a parse tree produced by zincParser#structInstantiation.
     def exitStructInstantiation(self, ctx: zincParser.StructInstantiationContext):
+        pass
+
+    # Enter a parse tree produced by zincParser#enumVariantConstruction.
+    def enterEnumVariantConstruction(self, ctx: zincParser.EnumVariantConstructionContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#enumVariantConstruction.
+    def exitEnumVariantConstruction(self, ctx: zincParser.EnumVariantConstructionContext):
         pass
 
     # Enter a parse tree produced by zincParser#fieldInit.

@@ -38,3 +38,8 @@ __ZincTypeMeta { kind: "enum", name: "Mode", fqn: "metadata/02_type_meta/Mode", 
 []
 []
 []
+Result
+i64
+String
+Option
+String

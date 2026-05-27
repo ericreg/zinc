@@ -12,6 +12,8 @@ from zinc.exceptions import ZincModuleError
 from zinc.parser.zincLexer import zincLexer as ZincLexer
 from zinc.parser.zincParser import zincParser as ZincParser
 
+RESERVED_ERROR_NAMES = frozenset({"ok", "err", "some", "none"})
+
 TopLevelKind = Literal["function", "struct", "enum", "const"]
 CompositionMode = Literal["orthogonal", "merge"]
 
@@ -287,6 +289,8 @@ def extract_identifier_path(expr_ctx) -> list[str] | None:
     if isinstance(expr_ctx, ZincParser.PrimaryExpressionContext):
         if expr_ctx.IDENTIFIER():
             return [expr_ctx.IDENTIFIER().getText()]
+        if hasattr(expr_ctx, "TYPE_KW") and expr_ctx.TYPE_KW():
+            return [expr_ctx.TYPE_KW().getText()]
         return None
 
     if isinstance(expr_ctx, ZincParser.MemberAccessExprContext):
@@ -481,6 +485,8 @@ def _collect_top_level_symbols(tree: ZincParser.ProgramContext, module_id: str) 
 
         if symbol is None:
             continue
+        if symbol.name in RESERVED_ERROR_NAMES:
+            raise ZincModuleError(f"'{symbol.name}' is a reserved builtin name")
         if symbol.name in symbols:
             raise ZincModuleError(f"duplicate top-level declaration '{symbol.name}' in module '{module_id}'")
         symbols[symbol.name] = symbol
@@ -499,6 +505,8 @@ def _resolve_module_import_scope(graph: ModuleGraph, module: LoadedModule) -> No
 
         if import_spec.alias:
             alias = import_spec.alias
+            if alias in RESERVED_ERROR_NAMES:
+                raise ZincModuleError(f"'{alias}' is a reserved builtin name")
             if alias in aliases:
                 raise ZincModuleError(f"duplicate import alias '{alias}' in module '{module.module_id}'")
             if alias in injected or alias in local_names:
@@ -508,6 +516,8 @@ def _resolve_module_import_scope(graph: ModuleGraph, module: LoadedModule) -> No
 
         import_names = import_spec.names or tuple(target.exports.keys())
         for name in import_names:
+            if name in RESERVED_ERROR_NAMES:
+                raise ZincModuleError(f"'{name}' is a reserved builtin name")
             export = target.exports.get(name)
             if export is None:
                 raise ZincModuleError(f"module '{target.module_id}' does not export '{name}'")

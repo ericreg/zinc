@@ -14,6 +14,8 @@ from zinc.ast.types import (
     CallableTypeInfo,
     ChannelTypeInfo,
     DictTypeInfo,
+    OptionTypeInfo,
+    ResultTypeInfo,
     SetTypeInfo,
     TupleTypeInfo,
     exact_type_to_base,
@@ -60,6 +62,9 @@ class FunctionInstance:
     arg_tuple_infos: dict[int, TupleTypeInfo] = field(default_factory=dict)
     # Rich type info for callable arguments (arg_index -> CallableTypeInfo)
     arg_callable_infos: dict[int, CallableTypeInfo] = field(default_factory=dict)
+    # Rich type info for Result/Option arguments
+    arg_result_infos: dict[int, ResultTypeInfo] = field(default_factory=dict)
+    arg_option_infos: dict[int, OptionTypeInfo] = field(default_factory=dict)
     # Struct identity metadata for arguments
     arg_struct_qualified_names: dict[int, str] = field(default_factory=dict)
     arg_anonymous_struct_infos: dict[int, AnonymousStructTypeInfo] = field(default_factory=dict)
@@ -70,6 +75,8 @@ class FunctionInstance:
     return_callable_info: CallableTypeInfo | None = None
     return_struct_qualified_name: str | None = None
     return_anonymous_struct_info: AnonymousStructTypeInfo | None = None
+    return_result_info: ResultTypeInfo | None = None
+    return_option_info: OptionTypeInfo | None = None
 
 
 @dataclass
@@ -90,6 +97,8 @@ class StructFieldInfo:
     callable_info: CallableTypeInfo | None = None
     struct_qualified_name: str | None = None
     anonymous_struct_info: AnonymousStructTypeInfo | None = None
+    result_info: ResultTypeInfo | None = None
+    option_info: OptionTypeInfo | None = None
     source_struct_qualified_name: str | None = None
     is_infer: bool = False
     line_num: int = 0
@@ -110,6 +119,10 @@ class StructFieldInfo:
             return self.anonymous_struct_info.rust_type_name()
         if self.struct_qualified_name is not None:
             return self.struct_qualified_name.rpartition("::")[2] or self.struct_qualified_name
+        if self.result_info is not None:
+            return self.result_info.to_rust_type()
+        if self.option_info is not None:
+            return self.option_info.to_rust_type()
         if self.exact_type:
             return self.exact_type
         if self.type_annotation:
@@ -265,6 +278,8 @@ class Atlas:
         arg_set_infos: dict[int, SetTypeInfo] | None = None,
         arg_tuple_infos: dict[int, TupleTypeInfo] | None = None,
         arg_callable_infos: dict[int, CallableTypeInfo] | None = None,
+        arg_result_infos: dict[int, ResultTypeInfo] | None = None,
+        arg_option_infos: dict[int, OptionTypeInfo] | None = None,
         arg_struct_qualified_names: dict[int, str] | None = None,
         arg_anonymous_struct_infos: dict[int, AnonymousStructTypeInfo] | None = None,
     ) -> str:
@@ -285,6 +300,8 @@ class Atlas:
             arg_set_infos,
             arg_tuple_infos,
             arg_callable_infos,
+            arg_result_infos,
+            arg_option_infos,
             arg_struct_qualified_names,
             arg_anonymous_struct_infos,
         )
@@ -305,6 +322,8 @@ class Atlas:
                 arg_set_infos=arg_set_infos or {},
                 arg_tuple_infos=arg_tuple_infos or {},
                 arg_callable_infos={index: info.copy() for index, info in (arg_callable_infos or {}).items()},
+                arg_result_infos={index: info.copy() for index, info in (arg_result_infos or {}).items()},
+                arg_option_infos={index: info.copy() for index, info in (arg_option_infos or {}).items()},
                 arg_struct_qualified_names=dict(arg_struct_qualified_names or {}),
                 arg_anonymous_struct_infos={index: info.copy() for index, info in (arg_anonymous_struct_infos or {}).items()},
             )
@@ -335,6 +354,12 @@ class Atlas:
         if arg_anonymous_struct_infos:
             for index, info in arg_anonymous_struct_infos.items():
                 instance.arg_anonymous_struct_infos[index] = info.copy()
+        if arg_result_infos:
+            for index, info in arg_result_infos.items():
+                instance.arg_result_infos[index] = info.copy()
+        if arg_option_infos:
+            for index, info in arg_option_infos.items():
+                instance.arg_option_infos[index] = info.copy()
 
         if caller_mangled and caller_mangled in self.calls:
             self.calls[caller_mangled].add(mangled)
@@ -386,6 +411,8 @@ class Atlas:
         arg_set_infos: dict[int, SetTypeInfo] | None = None,
         arg_tuple_infos: dict[int, TupleTypeInfo] | None = None,
         arg_callable_infos: dict[int, CallableTypeInfo] | None = None,
+        arg_result_infos: dict[int, ResultTypeInfo] | None = None,
+        arg_option_infos: dict[int, OptionTypeInfo] | None = None,
         arg_struct_qualified_names: dict[int, str] | None = None,
         arg_anonymous_struct_infos: dict[int, AnonymousStructTypeInfo] | None = None,
     ) -> str:
@@ -409,6 +436,10 @@ class Atlas:
                 type_parts.append(arg_tuple_infos[i].to_rust_type_suffix())
             elif base_type == BaseType.CALLABLE and arg_callable_infos and i in arg_callable_infos:
                 type_parts.append(arg_callable_infos[i].to_rust_type_suffix())
+            elif base_type == BaseType.RESULT and arg_result_infos and i in arg_result_infos:
+                type_parts.append(arg_result_infos[i].to_rust_type_suffix())
+            elif base_type == BaseType.OPTION and arg_option_infos and i in arg_option_infos:
+                type_parts.append(arg_option_infos[i].to_rust_type_suffix())
             elif base_type == BaseType.STRUCT and arg_anonymous_struct_infos and i in arg_anonymous_struct_infos:
                 type_parts.append(arg_anonymous_struct_infos[i].to_rust_type_suffix())
             elif base_type == BaseType.STRUCT and arg_struct_qualified_names and i in arg_struct_qualified_names:

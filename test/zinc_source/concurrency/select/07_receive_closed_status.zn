@@ -7,9 +7,9 @@ fn main() {
     print("{first}")
 
     select {
-        case value, ok = <-values {
+        case value, is_open = <-values {
             print("{value}")
-            print("{ok}")
+            print("{is_open}")
         }
     }
 }

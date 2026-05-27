@@ -26,6 +26,7 @@ statement
     | loopStatement
     | matchStatement
     | returnStatement
+    | failStatement
     | breakStatement
     | continueStatement
     | spawnStatement
@@ -109,11 +110,11 @@ enumVariantFieldType
 
 // --- Function Declaration ---
 functionDeclaration
-    : attributeBlock* 'fn' IDENTIFIER '(' parameterList? ')' block
+    : attributeBlock* 'fn' IDENTIFIER '(' parameterList? ')' ('->' type)? block
     ;
 
 asyncFunctionDeclaration
-    : attributeBlock* 'async' IDENTIFIER '(' parameterList? ')' block
+    : attributeBlock* 'async' IDENTIFIER '(' parameterList? ')' ('->' type)? block
     ;
 
 parameterList
@@ -128,6 +129,7 @@ type
     : anonymousStructType
     | qualifiedName ('<' typeList '>')?
     | '[' type ']'                  // array type
+    | '(' ')'                       // unit type
     | tupleType                     // tuple type
     | '(' typeList? ')' '->' type   // function type
     ;
@@ -202,11 +204,19 @@ matchArm
 pattern
     : '_'                                       // wildcard
     | literal                                   // literal pattern
+    | resultOptionPattern                       // result/option pattern
     | IDENTIFIER                                // binding pattern
     | enumVariantPattern                        // enum variant pattern
     | rangePattern                              // range pattern (e.g., 0..17)
     | '(' pattern (',' pattern)* ')'            // tuple pattern
     | IDENTIFIER '{' fieldPattern (',' fieldPattern)* ','? '}'  // struct pattern
+    ;
+
+resultOptionPattern
+    : 'ok' '(' pattern ')'
+    | 'err' '(' pattern ')'
+    | 'some' '(' pattern ')'
+    | 'none'
     ;
 
 enumVariantPattern
@@ -234,6 +244,10 @@ fieldPattern
 
 returnStatement
     : 'return' expression?
+    ;
+
+failStatement
+    : 'fail' expression
     ;
 
 breakStatement
@@ -264,6 +278,8 @@ block
 expression
     : primaryExpression                                         # primaryExpr
     | ifExpression                                              # ifExpr
+    | tryExpression                                             # tryExpr
+    | blockExpression                                           # blockExpr
     | expression '.' IDENTIFIER                                 # memberAccessExpr
     | expression '[' expression ']'                             # indexAccessExpr
     | expression '(' argumentList? ')'                          # functionCallExpr
@@ -286,16 +302,43 @@ ifExpression
     : 'if' expression block ('else' (block | ifExpression))?
     ;
 
+tryExpression
+    : 'try' block
+    ;
+
+blockExpression
+    : '{' statement statement+ '}'
+    ;
+
 primaryExpression
     : literal
+    | unitLiteral
     | anonymousStructLiteral
     | enumVariantConstruction
     | structInstantiation
+    | builtinTypeQuery
+    | builtinResultOptionConstructor
+    | TYPE_KW
     | IDENTIFIER
     | 'self'
     | arrayLiteral
     | collectionLiteral
     | tupleLiteral
+    ;
+
+builtinTypeQuery
+    : TYPE_KW '(' typeQueryType ')'
+    ;
+
+typeQueryType
+    : qualifiedName '<' typeList '>'
+    ;
+
+builtinResultOptionConstructor
+    : 'ok' '(' expression ')'
+    | 'err' '(' expression ')'
+    | 'some' '(' expression ')'
+    | 'none'
     ;
 
 memberAccess
@@ -312,6 +355,10 @@ literal
     | STRING
     | booleanLiteral
     | 'nil'
+    ;
+
+unitLiteral
+    : '(' ')'
     ;
 
 booleanLiteral
@@ -413,6 +460,13 @@ SELECT      : 'select';
 CASE        : 'case';
 DEFAULT     : 'default';
 SPAWN       : 'spawn';
+TYPE_KW     : 'type';
+TRY         : 'try';
+FAIL        : 'fail';
+OK          : 'ok';
+ERR         : 'err';
+SOME        : 'some';
+NONE        : 'none';
 
 // --- Literals ---
 INTEGER

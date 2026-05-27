@@ -1,4 +1,4 @@
-# Generated from zinc/parser/zinc.g4 by ANTLR 4.13.2
+# Generated from zinc.g4 by ANTLR 4.13.2
 from antlr4 import *
 
 if "." in __name__:
@@ -170,6 +170,10 @@ class zincVisitor(ParseTreeVisitor):
     def visitPattern(self, ctx: zincParser.PatternContext):
         return self.visitChildren(ctx)
 
+    # Visit a parse tree produced by zincParser#resultOptionPattern.
+    def visitResultOptionPattern(self, ctx: zincParser.ResultOptionPatternContext):
+        return self.visitChildren(ctx)
+
     # Visit a parse tree produced by zincParser#enumVariantPattern.
     def visitEnumVariantPattern(self, ctx: zincParser.EnumVariantPatternContext):
         return self.visitChildren(ctx)
@@ -192,6 +196,10 @@ class zincVisitor(ParseTreeVisitor):
 
     # Visit a parse tree produced by zincParser#returnStatement.
     def visitReturnStatement(self, ctx: zincParser.ReturnStatementContext):
+        return self.visitChildren(ctx)
+
+    # Visit a parse tree produced by zincParser#failStatement.
+    def visitFailStatement(self, ctx: zincParser.FailStatementContext):
         return self.visitChildren(ctx)
 
     # Visit a parse tree produced by zincParser#breakStatement.
@@ -254,6 +262,10 @@ class zincVisitor(ParseTreeVisitor):
     def visitPrimaryExpr(self, ctx: zincParser.PrimaryExprContext):
         return self.visitChildren(ctx)
 
+    # Visit a parse tree produced by zincParser#tryExpr.
+    def visitTryExpr(self, ctx: zincParser.TryExprContext):
+        return self.visitChildren(ctx)
+
     # Visit a parse tree produced by zincParser#lambdaExpr.
     def visitLambdaExpr(self, ctx: zincParser.LambdaExprContext):
         return self.visitChildren(ctx)
@@ -278,6 +290,10 @@ class zincVisitor(ParseTreeVisitor):
     def visitMemberAccessExpr(self, ctx: zincParser.MemberAccessExprContext):
         return self.visitChildren(ctx)
 
+    # Visit a parse tree produced by zincParser#blockExpr.
+    def visitBlockExpr(self, ctx: zincParser.BlockExprContext):
+        return self.visitChildren(ctx)
+
     # Visit a parse tree produced by zincParser#multiplicativeExpr.
     def visitMultiplicativeExpr(self, ctx: zincParser.MultiplicativeExprContext):
         return self.visitChildren(ctx)
@@ -294,8 +310,28 @@ class zincVisitor(ParseTreeVisitor):
     def visitIfExpression(self, ctx: zincParser.IfExpressionContext):
         return self.visitChildren(ctx)
 
+    # Visit a parse tree produced by zincParser#tryExpression.
+    def visitTryExpression(self, ctx: zincParser.TryExpressionContext):
+        return self.visitChildren(ctx)
+
+    # Visit a parse tree produced by zincParser#blockExpression.
+    def visitBlockExpression(self, ctx: zincParser.BlockExpressionContext):
+        return self.visitChildren(ctx)
+
     # Visit a parse tree produced by zincParser#primaryExpression.
     def visitPrimaryExpression(self, ctx: zincParser.PrimaryExpressionContext):
+        return self.visitChildren(ctx)
+
+    # Visit a parse tree produced by zincParser#builtinTypeQuery.
+    def visitBuiltinTypeQuery(self, ctx: zincParser.BuiltinTypeQueryContext):
+        return self.visitChildren(ctx)
+
+    # Visit a parse tree produced by zincParser#typeQueryType.
+    def visitTypeQueryType(self, ctx: zincParser.TypeQueryTypeContext):
+        return self.visitChildren(ctx)
+
+    # Visit a parse tree produced by zincParser#builtinResultOptionConstructor.
+    def visitBuiltinResultOptionConstructor(self, ctx: zincParser.BuiltinResultOptionConstructorContext):
         return self.visitChildren(ctx)
 
     # Visit a parse tree produced by zincParser#memberAccess.
@@ -308,6 +344,10 @@ class zincVisitor(ParseTreeVisitor):
 
     # Visit a parse tree produced by zincParser#literal.
     def visitLiteral(self, ctx: zincParser.LiteralContext):
+        return self.visitChildren(ctx)
+
+    # Visit a parse tree produced by zincParser#unitLiteral.
+    def visitUnitLiteral(self, ctx: zincParser.UnitLiteralContext):
         return self.visitChildren(ctx)
 
     # Visit a parse tree produced by zincParser#booleanLiteral.

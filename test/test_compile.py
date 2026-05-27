@@ -23,6 +23,7 @@ OUTPUT_DIR = TEST_DIR / "output"
 CARGO_TOML = RUST_SOURCE_DIR / "Cargo.toml"
 NON_DETERMINISTIC_FOLDER = "non_deterministic"
 COMPILE_ERROR_GROUPS = (
+    "error_handling",
     "annotations",
     "metadata",
     "collections",

@@ -6,7 +6,7 @@ enum Signal {
 fn main() {
     updates = chan()
     updates <- Signal.Start
-    value, ok = <-updates
-    print("{ok}")
+    value, is_open = <-updates
+    print("{is_open}")
     print("{value}")
 }

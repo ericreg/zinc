@@ -92,4 +92,9 @@ fn main() {
     print(type(1).fields())
     print(type(tup).methods())
     print(type(scores).components())
+    print(type(Result<i64, string>).family_name)
+    print(type(Result<i64, string>).args[0].name)
+    print(type(Result<i64, string>).args[1].name)
+    print(type(Option<string>).family_name)
+    print(type(Option<string>).args[0].name)
 }
