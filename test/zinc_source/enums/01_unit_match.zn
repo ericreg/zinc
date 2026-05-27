@@ -1,0 +1,27 @@
+enum Status {
+    Idle
+    Working
+    Done
+}
+
+fn describe(status: Status) {
+    match status {
+        Status.Idle => {
+            print("idle")
+        },
+        Status.Working => {
+            print("working")
+        },
+        Status.Done => {
+            print("done")
+        },
+    }
+}
+
+fn main() {
+    current = Status.Working
+    history = [Status.Idle, current, Status.Done]
+    describe(history[0])
+    describe(history[1])
+    describe(history[2])
+}

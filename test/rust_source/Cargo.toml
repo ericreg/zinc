@@ -435,6 +435,26 @@ name = "dynamic_typing_20_conditional_type_inference"
 path = "src/dynamic_typing/20_conditional_type_inference.rs"
 
 [[bin]]
+name = "enums_01_unit_match"
+path = "src/enums/01_unit_match.rs"
+
+[[bin]]
+name = "enums_02_payload_match"
+path = "src/enums/02_payload_match.rs"
+
+[[bin]]
+name = "enums_03_static_methods"
+path = "src/enums/03_static_methods.rs"
+
+[[bin]]
+name = "enums_04_channel_flow"
+path = "src/enums/04_channel_flow.rs"
+
+[[bin]]
+name = "enums_05_imported_enum"
+path = "src/enums/05_imported_enum.rs"
+
+[[bin]]
 name = "for_loop"
 path = "src/for_loop.rs"
 

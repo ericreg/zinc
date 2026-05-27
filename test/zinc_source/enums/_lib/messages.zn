@@ -1,0 +1,8 @@
+enum Remote {
+    Ready
+    Payload { text: string }
+}
+
+fn ready() {
+    return Remote.Ready
+}

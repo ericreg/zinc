@@ -17,11 +17,14 @@ from zinc.ast.types import (
     DictTypeInfo,
     SetTypeInfo,
     TupleTypeInfo,
+    exact_type_to_base,
+    exact_type_to_rust,
     normalize_exact_type,
     type_to_rust,
 )
 from zinc.modules import (
     ModuleGraph,
+    enum_variant_path_from_ctx,
     extract_identifier_path,
     struct_composition_from_ctx,
     struct_path_from_ctx,
@@ -190,6 +193,32 @@ class StructInstance:
 
 
 @dataclass
+class EnumVariantInfo:
+    """Analyzed enum variant information."""
+
+    name: str
+    index: int
+    fields: list[StructFieldInfo] = field(default_factory=list)
+
+    @property
+    def is_unit(self) -> bool:
+        return not self.fields
+
+
+@dataclass
+class EnumInstance:
+    """An enum that is used in the program."""
+
+    name: str
+    qualified_name: str
+    module_id: str
+    ctx: ParserRuleContext
+    methods_used: SortedSet[str] = field(default_factory=SortedSet)
+    variants: list[EnumVariantInfo] = field(default_factory=list)
+    methods: list[StructMethodInfo] = field(default_factory=list)
+
+
+@dataclass
 class ConstInstance:
     """A global constant declaration."""
 
@@ -207,15 +236,17 @@ class Atlas:
     main: FunctionInstance
     functions: SortedDict[str, FunctionInstance] = field(default_factory=SortedDict)
     structs: SortedDict[str, StructInstance] = field(default_factory=SortedDict)
+    enums: SortedDict[str, EnumInstance] = field(default_factory=SortedDict)
     consts: SortedDict[str, ConstInstance] = field(default_factory=SortedDict)
     calls: SortedDict[str, SortedSet[str]] = field(default_factory=SortedDict)
     struct_usages: SortedDict[str, SortedSet[str]] = field(default_factory=SortedDict)
+    enum_usages: SortedDict[str, SortedSet[str]] = field(default_factory=SortedDict)
     const_usages: SortedDict[str, SortedSet[str]] = field(default_factory=SortedDict)
     function_defs: SortedDict[str, ParserRuleContext] = field(default_factory=SortedDict)
 
     def is_reachable(self, name: str) -> bool:
-        """Check if a function, struct, or const is reachable."""
-        return name in self.functions or name in self.structs or name in self.consts
+        """Check if a function, struct, enum, or const is reachable."""
+        return name in self.functions or name in self.structs or name in self.enums or name in self.consts
 
     def add_specialization(
         self,
@@ -234,7 +265,12 @@ class Atlas:
         arg_anonymous_struct_infos: dict[int, AnonymousStructTypeInfo] | None = None,
     ) -> str:
         """Create a new function specialization and return its mangled name."""
-        effective_arg_exact_types = self._specialization_arg_exact_types(ctx, arg_exact_types)
+        source_module_id = qualified_name.split("::", 1)[0] if "::" in qualified_name else None
+        effective_arg_exact_types = self._specialization_arg_exact_types(
+            ctx,
+            arg_exact_types,
+            source_module_id,
+        )
         mangled = self._mangle_name(
             qualified_name,
             arg_types,
@@ -314,6 +350,7 @@ class Atlas:
         self,
         ctx: ParserRuleContext,
         arg_exact_types: list[str | None],
+        source_module_id: str | None,
     ) -> list[str | None]:
         """Use declared scalar annotations for specialization identity when present."""
         exact_types = list(arg_exact_types)
@@ -323,6 +360,19 @@ class Atlas:
             if param_ctx.type_() is None:
                 continue
             annotated_exact_type = normalize_exact_type(param_ctx.type_().getText())
+            if (
+                annotated_exact_type is not None
+                and exact_type_to_base(annotated_exact_type) == BaseType.UNKNOWN
+                and source_module_id is not None
+                and param_ctx.type_().qualifiedName() is not None
+                and param_ctx.type_().typeList() is None
+            ):
+                resolved_enum = self.module_graph.resolve_enum_path(
+                    source_module_id,
+                    param_ctx.type_().qualifiedName().getText().split("."),
+                )
+                if resolved_enum is not None:
+                    annotated_exact_type = resolved_enum.qualified_name
             if annotated_exact_type is None:
                 continue
             while len(exact_types) <= i:
@@ -368,6 +418,8 @@ class Atlas:
                 type_parts.append(arg_anonymous_struct_infos[i].to_rust_type_suffix())
             elif base_type == BaseType.STRUCT and arg_struct_qualified_names and i in arg_struct_qualified_names:
                 type_parts.append(f"Struct_{re.sub(r'[^0-9A-Za-z]+', '_', arg_struct_qualified_names[i])}")
+            elif base_type == BaseType.ENUM:
+                type_parts.append(f"Enum_{exact_type_to_rust(exact_type, base_type)}")
             else:
                 type_parts.append(exact_type or type_to_rust(base_type))
 
@@ -404,10 +456,18 @@ class AtlasBuilder:
             self.module_graph.top_level_functions()
         )
         self._struct_defs: SortedDict[str, StructInstance] = SortedDict()
+        self._enum_defs: SortedDict[str, EnumInstance] = SortedDict()
         self._const_defs: SortedDict[str, ConstInstance] = SortedDict()
         for symbol in self.module_graph.top_level_symbols.values():
             if symbol.kind == "struct":
                 self._struct_defs[symbol.qualified_name] = StructInstance(
+                    name=symbol.name,
+                    qualified_name=symbol.qualified_name,
+                    module_id=symbol.module_id,
+                    ctx=symbol.ctx,
+                )
+            elif symbol.kind == "enum":
+                self._enum_defs[symbol.qualified_name] = EnumInstance(
                     name=symbol.name,
                     qualified_name=symbol.qualified_name,
                     module_id=symbol.module_id,
@@ -423,9 +483,11 @@ class AtlasBuilder:
 
         self._reachable_functions: SortedDict[str, FunctionInstance] = SortedDict()
         self._reachable_structs: SortedDict[str, StructInstance] = SortedDict()
+        self._reachable_enums: SortedDict[str, EnumInstance] = SortedDict()
         self._reachable_consts: SortedDict[str, ConstInstance] = SortedDict()
         self._calls: SortedDict[str, SortedSet[str]] = SortedDict()
         self._struct_usages: SortedDict[str, SortedSet[str]] = SortedDict()
+        self._enum_usages: SortedDict[str, SortedSet[str]] = SortedDict()
         self._const_usages: SortedDict[str, SortedSet[str]] = SortedDict()
         self._current_function: str | None = None
         self._current_module: str | None = None
@@ -476,6 +538,7 @@ class AtlasBuilder:
             self._current_module = module_id
             self._calls[caller_key] = SortedSet()
             self._struct_usages[caller_key] = SortedSet()
+            self._enum_usages[caller_key] = SortedSet()
             self._const_usages[caller_key] = SortedSet()
             self._walk_for_references(func_ctx)
 
@@ -485,9 +548,11 @@ class AtlasBuilder:
 
         atlas.functions = self._reachable_functions
         atlas.structs = self._reachable_structs
+        atlas.enums = self._reachable_enums
         atlas.consts = self._reachable_consts
         atlas.calls = self._calls
         atlas.struct_usages = self._struct_usages
+        atlas.enum_usages = self._enum_usages
         atlas.const_usages = self._const_usages
         return atlas
 
@@ -518,12 +583,16 @@ class AtlasBuilder:
                 const_symbol = self.module_graph.resolve_const_path(self._current_module, path)
                 if const_symbol:
                     self._add_const_usage(const_symbol.qualified_name)
+                enum_variant = self.module_graph.resolve_enum_variant_path(self._current_module, path)
+                if enum_variant:
+                    enum_symbol, _variant_name = enum_variant
+                    self._add_enum_usage(enum_symbol.qualified_name, None)
                 static_target = self.module_graph.resolve_static_method_target(
                     self._current_module, path
                 )
                 if static_target:
-                    struct_symbol, method_name = static_target
-                    self._add_struct_usage(struct_symbol.qualified_name, method_name)
+                    type_symbol, method_name = static_target
+                    self._add_type_usage(type_symbol.qualified_name, method_name)
 
         if isinstance(ctx, ZincParser.FunctionCallExprContext):
             path = extract_identifier_path(ctx.expression())
@@ -536,8 +605,8 @@ class AtlasBuilder:
                         self._current_module, path
                     )
                     if static_target:
-                        struct_symbol, method_name = static_target
-                        self._add_struct_usage(struct_symbol.qualified_name, method_name)
+                        type_symbol, method_name = static_target
+                        self._add_type_usage(type_symbol.qualified_name, method_name)
 
         if isinstance(ctx, ZincParser.SpawnStatementContext):
             path = extract_identifier_path(ctx.expression())
@@ -552,6 +621,21 @@ class AtlasBuilder:
             )
             if struct_symbol:
                 self._add_struct_usage(struct_symbol.qualified_name, None)
+
+        if isinstance(ctx, ZincParser.EnumVariantConstructionContext):
+            variant_target = self.module_graph.resolve_enum_variant_path(
+                self._current_module, enum_variant_path_from_ctx(ctx)
+            )
+            if variant_target:
+                enum_symbol, _variant_name = variant_target
+                self._add_enum_usage(enum_symbol.qualified_name, None)
+            else:
+                struct_symbol = self.module_graph.resolve_struct_path(
+                    self._current_module,
+                    ctx.enumVariantPath().getText().split("."),
+                )
+                if struct_symbol:
+                    self._add_struct_usage(struct_symbol.qualified_name, None)
 
         for i in range(ctx.getChildCount()):
             child = ctx.getChild(i)
@@ -580,6 +664,35 @@ class AtlasBuilder:
             self._struct_usages[self._current_function].add(qualified_name)
 
         self._add_composition_source_usages(qualified_name, set())
+
+    def _add_enum_usage(self, qualified_name: str, method_name: str | None) -> None:
+        """Record that an enum is used, optionally with a specific method."""
+        enum = self._enum_defs.get(qualified_name)
+        if enum is None:
+            return
+
+        if qualified_name not in self._reachable_enums:
+            self._reachable_enums[qualified_name] = EnumInstance(
+                name=enum.name,
+                qualified_name=enum.qualified_name,
+                module_id=enum.module_id,
+                ctx=enum.ctx,
+                methods_used=SortedSet(),
+            )
+
+        if method_name:
+            self._reachable_enums[qualified_name].methods_used.add(method_name)
+
+        if self._current_function:
+            self._enum_usages[self._current_function].add(qualified_name)
+
+    def _add_type_usage(self, qualified_name: str, method_name: str | None) -> None:
+        """Record usage for a named nominal type."""
+        symbol = self.module_graph.get_symbol(qualified_name)
+        if symbol.kind == "struct":
+            self._add_struct_usage(qualified_name, method_name)
+        elif symbol.kind == "enum":
+            self._add_enum_usage(qualified_name, method_name)
 
     def _add_composition_source_usages(self, qualified_name: str, seen: set[str]) -> None:
         """Mark structs referenced by a composition clause as reachable too."""

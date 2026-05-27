@@ -23,6 +23,7 @@ class BaseType(Enum):
     TUPLE = auto()  # Rust tuple type
     CALLABLE = auto()  # First-class callable values
     STRUCT = auto()  # Struct type
+    ENUM = auto()  # Enum type
     VOID = auto()  # For functions with no return value
     NEVER = auto()  # Diverging control flow that never completes normally
     UNKNOWN = auto()  # For unresolved types
@@ -97,6 +98,7 @@ def type_to_rust(base_type: BaseType) -> str:
         BaseType.TUPLE: "Tuple",  # Generic, element types handled separately
         BaseType.CALLABLE: "Callable",  # Placeholder, signature handled separately
         BaseType.STRUCT: "Struct",
+        BaseType.ENUM: "Enum",
         BaseType.VOID: "()",
         BaseType.NEVER: "!",
         BaseType.UNKNOWN: "unknown",
@@ -173,6 +175,8 @@ def default_exact_type(base_type: BaseType) -> str | None:
 
 def exact_type_to_rust(exact_type: str | None, base_type: BaseType) -> str:
     """Render an exact scalar type, falling back to the base-type default."""
+    if base_type == BaseType.ENUM:
+        return _named_enum_rust_name(exact_type)
     normalized = normalize_exact_type(exact_type)
     if normalized is not None:
         return normalized
@@ -240,11 +244,31 @@ def _named_struct_suffix(qualified_name: str | None) -> str:
     return f"Struct_{_sanitize_type_fragment(qualified_name)}"
 
 
+def _named_enum_suffix(qualified_name: str | None) -> str:
+    """Return a stable suffix fragment for a named enum identity."""
+    if not qualified_name:
+        return "Enum_unknown"
+    return f"Enum_{_sanitize_type_fragment(qualified_name)}"
+
+
 def _named_struct_rust_name(qualified_name: str | None) -> str:
     """Return a best-effort Rust type name for a named struct."""
     if not qualified_name:
         return "unknown"
-    return qualified_name.rpartition("::")[2] or qualified_name
+    module_id, sep, name = qualified_name.rpartition("::")
+    if not sep:
+        return qualified_name
+    return f"{module_id.replace('/', '_')}__{name}"
+
+
+def _named_enum_rust_name(qualified_name: str | None) -> str:
+    """Return a best-effort Rust type name for a named enum."""
+    if not qualified_name:
+        return "unknown"
+    module_id, sep, name = qualified_name.rpartition("::")
+    if not sep:
+        return qualified_name
+    return f"{module_id.replace('/', '_')}__{name}"
 
 
 def promote_numeric(left: BaseType, right: BaseType) -> BaseType:
@@ -973,6 +997,11 @@ def value_type_key(
         if struct_qualified_name:
             return ("named_struct", struct_qualified_name)
         return ("struct",)
+    if base_type == BaseType.ENUM:
+        normalized_exact = normalize_exact_type(exact_type)
+        if normalized_exact is not None:
+            return ("enum", normalized_exact)
+        return ("enum",)
     if base_type == BaseType.VOID:
         return ("unit",)
     if base_type == BaseType.NEVER:
@@ -1012,6 +1041,8 @@ def value_type_suffix(
         if anonymous_struct_info:
             return anonymous_struct_info.to_rust_type_suffix()
         return _named_struct_suffix(struct_qualified_name)
+    if base_type == BaseType.ENUM:
+        return _named_enum_suffix(exact_type)
     if base_type == BaseType.VOID:
         return "Unit"
     if base_type == BaseType.NEVER:

@@ -32,8 +32,22 @@ from zinc.ast.types import (
 from zinc.exceptions import ZincTypeError
 from zinc.parser.zincVisitor import zincVisitor
 from zinc.parser.zincParser import zincParser as ZincParser
-from zinc.atlas import Atlas, FunctionInstance, ConstInstance, StructFieldInfo, StructInstance, StructMethodInfo
-from zinc.modules import extract_identifier_path, struct_composition_from_ctx, struct_path_from_ctx
+from zinc.atlas import (
+    Atlas,
+    ConstInstance,
+    EnumInstance,
+    EnumVariantInfo,
+    FunctionInstance,
+    StructFieldInfo,
+    StructInstance,
+    StructMethodInfo,
+)
+from zinc.modules import (
+    enum_variant_path_from_ctx,
+    extract_identifier_path,
+    struct_composition_from_ctx,
+    struct_path_from_ctx,
+)
 
 
 class SymbolKind(Enum):
@@ -46,6 +60,7 @@ class SymbolKind(Enum):
     FUNCTION = auto()  # User-defined function
     BUILTIN = auto()  # Built-in function (print, chan, etc.)
     STRUCT = auto()  # Struct type
+    ENUM = auto()  # Enum type
     LITERAL = auto()  # Literal value
 
 
@@ -300,6 +315,8 @@ class SymbolTableVisitor(zincVisitor):
         self._struct_analysis_cache: dict[str, StructInstance] = {}
         self._struct_analysis_stack: list[str] = []
         self._struct_symbol_bindings: dict[str, str] = {}
+        self._enum_analysis_cache: dict[str, EnumInstance] = {}
+        self._enum_analysis_stack: list[str] = []
         self._lambda_counter = 0
         self._lexical_function_scopes: list[dict[str, LexicalFunctionInfo]] = []
         self.lexical_functions: dict[str, LexicalFunctionInfo] = {}
@@ -331,6 +348,12 @@ class SymbolTableVisitor(zincVisitor):
             return None
         return self.module_graph.resolve_struct_path(self._current_module, path)
 
+    def _resolve_enum_symbol(self, path: list[str]):
+        """Resolve an enum path in the current module."""
+        if self._current_module is None:
+            return None
+        return self.module_graph.resolve_enum_path(self._current_module, path)
+
     def _method_return_base_type(self, return_type: str | None) -> BaseType:
         """Map an analyzed method return type string to a base type."""
         if return_type is None:
@@ -358,6 +381,66 @@ class SymbolTableVisitor(zincVisitor):
         }
         return mapping.get(return_type, BaseType.UNKNOWN)
 
+    def _merge_exact_type_for_base(
+        self,
+        current_exact: str | None,
+        incoming_exact: str | None,
+        base_type: BaseType,
+        label: str,
+    ) -> str | None:
+        """Merge exact-type spellings, requiring equality for nominal types."""
+        current = normalize_exact_type(current_exact)
+        incoming = normalize_exact_type(incoming_exact)
+        if current is None:
+            return incoming
+        if incoming is None:
+            return current
+        if current == incoming:
+            return current
+        if base_type in {BaseType.INTEGER, BaseType.FLOAT}:
+            return promote_exact_numeric(current, incoming, base_type)
+        raise ZincTypeError(f"{label} use incompatible exact types")
+
+    def _resolved_named_type_info(
+        self,
+        type_name: str | None,
+        *,
+        source_module_id: str | None,
+        owner_qualified_name: str | None = None,
+        owner_kind: str | None = None,
+    ) -> ResolvedValueInfo:
+        """Resolve a method-style return spelling into a rich value description."""
+        if type_name is None:
+            return ResolvedValueInfo(BaseType.VOID)
+        if type_name == "Self":
+            if owner_kind == "enum":
+                return ResolvedValueInfo(BaseType.ENUM, exact_type=owner_qualified_name)
+            return ResolvedValueInfo(
+                BaseType.STRUCT,
+                struct_qualified_name=owner_qualified_name,
+            )
+
+        exact_type = self._exact_type_name_from_text(type_name)
+        base_type = exact_type_to_base(type_name)
+        if base_type != BaseType.UNKNOWN:
+            return ResolvedValueInfo(base_type, exact_type=exact_type)
+
+        path = type_name.split(".")
+        if source_module_id is not None:
+            resolved_struct = self.module_graph.resolve_struct_path(source_module_id, path)
+            if resolved_struct is not None:
+                return ResolvedValueInfo(
+                    BaseType.STRUCT,
+                    struct_qualified_name=resolved_struct.qualified_name,
+                )
+            resolved_enum = self.module_graph.resolve_enum_path(source_module_id, path)
+            if resolved_enum is not None:
+                return ResolvedValueInfo(
+                    BaseType.ENUM,
+                    exact_type=resolved_enum.qualified_name,
+                )
+        return ResolvedValueInfo(BaseType.UNKNOWN)
+
     def resolve(self) -> SymbolTable:
         """Main entry point - resolve types for all reachable code.
 
@@ -373,6 +456,8 @@ class SymbolTableVisitor(zincVisitor):
         # Analyze structs before processing functions
         for struct in self.atlas.structs.values():
             self._analyze_struct(struct)
+        for enum in self.atlas.enums.values():
+            self._analyze_enum(enum)
 
         # Two-phase processing to handle function return types correctly:
         # Phase 1: Discover all specializations (process callers first to find call sites)
@@ -449,6 +534,12 @@ class SymbolTableVisitor(zincVisitor):
         struct.methods = [self._copy_struct_method(method) for method in analyzed.methods]
         struct.composition_mode = analyzed.composition_mode
         struct.composition_sources = analyzed.composition_sources
+
+    def _analyze_enum(self, enum) -> None:
+        """Analyze an enum declaration and populate variants/methods."""
+        analyzed = self._analyze_enum_by_qualified_name(enum.qualified_name)
+        enum.variants = [self._copy_enum_variant(variant) for variant in analyzed.variants]
+        enum.methods = [self._copy_struct_method(method) for method in analyzed.methods]
 
     def _analyze_struct_by_qualified_name(self, qualified_name: str) -> StructInstance:
         """Analyze a struct definition, including flattening any composition."""
@@ -560,6 +651,67 @@ class SymbolTableVisitor(zincVisitor):
         finally:
             self._struct_analysis_stack.pop()
 
+    def _analyze_enum_by_qualified_name(self, qualified_name: str) -> EnumInstance:
+        """Analyze an enum definition."""
+        cached = self._enum_analysis_cache.get(qualified_name)
+        if cached is not None:
+            return cached
+
+        if qualified_name in self._enum_analysis_stack:
+            cycle = " -> ".join([*self._enum_analysis_stack, qualified_name])
+            raise ZincTypeError(f"cyclic enum reference is not supported: {cycle}")
+
+        symbol = self.module_graph.get_symbol(qualified_name)
+        ctx: ZincParser.EnumDeclarationContext = symbol.ctx  # type: ignore[assignment]
+        enum = EnumInstance(
+            name=symbol.name,
+            qualified_name=symbol.qualified_name,
+            module_id=symbol.module_id,
+            ctx=symbol.ctx,
+        )
+
+        self._enum_analysis_stack.append(qualified_name)
+        try:
+            variants: list[EnumVariantInfo] = []
+            variant_names: set[str] = set()
+            methods: list[StructMethodInfo] = []
+
+            body = ctx.enumBody()
+            if body is not None:
+                for index, variant_ctx in enumerate(body.enumVariant()):
+                    name = variant_ctx.IDENTIFIER().getText()
+                    if name in variant_names:
+                        raise ZincTypeError(f"enum '{symbol.name}' has duplicate variant '{name}'")
+                    variant_names.add(name)
+                    variants.append(
+                        EnumVariantInfo(
+                            name=name,
+                            index=index,
+                            fields=self._parse_enum_variant_fields(variant_ctx, qualified_name),
+                        )
+                    )
+                for method_ctx in body.functionDeclaration():
+                    method = self._analyze_struct_method(
+                        method_ctx,
+                        {},
+                        source_module_id=symbol.module_id,
+                        constructor_owner_qualified_name=qualified_name,
+                    )
+                    if not method.is_static or self._method_body_uses_self(method.body_ctx):
+                        raise ZincTypeError(f"enum method '{symbol.name}.{method.name}' cannot use self")
+                    if method.name in variant_names:
+                        raise ZincTypeError(
+                            f"enum '{symbol.name}' has both a variant and method named '{method.name}'"
+                        )
+                    methods.append(method)
+
+            enum.variants = variants
+            enum.methods = methods
+            self._enum_analysis_cache[qualified_name] = enum
+            return enum
+        finally:
+            self._enum_analysis_stack.pop()
+
     def _copy_struct_field(self, field: StructFieldInfo) -> StructFieldInfo:
         """Clone field metadata when flattening composition."""
         return replace(
@@ -570,6 +722,14 @@ class SymbolTableVisitor(zincVisitor):
             tuple_info=self._copy_tuple_info(field.tuple_info),
             callable_info=self._copy_callable_info(field.callable_info),
             anonymous_struct_info=self._copy_anonymous_struct_info(field.anonymous_struct_info),
+        )
+
+    def _copy_enum_variant(self, variant: EnumVariantInfo) -> EnumVariantInfo:
+        """Clone enum variant metadata."""
+        return EnumVariantInfo(
+            name=variant.name,
+            index=variant.index,
+            fields=[self._copy_struct_field(field) for field in variant.fields],
         )
 
     def _copy_struct_method(self, method: StructMethodInfo) -> StructMethodInfo:
@@ -696,6 +856,7 @@ class SymbolTableVisitor(zincVisitor):
                     is_private=name.startswith("_"),
                     is_const=is_const,
                     resolved_type=resolved_type,
+                    exact_type=self._exact_type_name_from_type_ctx(field_ctx.type_()) if field_ctx.type_() else None,
                     array_info=self._copy_array_info(array_info) if field_ctx.type_() else None,
                     dict_info=self._copy_dict_info(dict_info) if field_ctx.type_() else None,
                     set_info=self._copy_set_info(set_info) if field_ctx.type_() else None,
@@ -707,6 +868,49 @@ class SymbolTableVisitor(zincVisitor):
                 )
             )
 
+        return fields
+
+    def _parse_enum_variant_fields(
+        self,
+        ctx: ZincParser.EnumVariantContext,
+        source_enum_qualified_name: str,
+    ) -> list[StructFieldInfo]:
+        """Parse named payload fields for one enum variant."""
+        fields: list[StructFieldInfo] = []
+        seen: set[str] = set()
+        for field_ctx in ctx.enumVariantFieldType():
+            name = field_ctx.IDENTIFIER().getText()
+            if name in seen:
+                raise ZincTypeError(
+                    f"enum variant '{ctx.IDENTIFIER().getText()}' has duplicate field '{name}'"
+                )
+            seen.add(name)
+            (
+                resolved_type,
+                array_info,
+                dict_info,
+                set_info,
+                tuple_info,
+                callable_info,
+                struct_qualified_name,
+                anonymous_struct_info,
+            ) = self._type_metadata_from_type_ctx(field_ctx.type_())
+            fields.append(
+                StructFieldInfo(
+                    name=name,
+                    type_annotation=field_ctx.type_().getText(),
+                    resolved_type=resolved_type,
+                    exact_type=self._exact_type_name_from_type_ctx(field_ctx.type_()),
+                    array_info=self._copy_array_info(array_info),
+                    dict_info=self._copy_dict_info(dict_info),
+                    set_info=self._copy_set_info(set_info),
+                    tuple_info=self._copy_tuple_info(tuple_info),
+                    callable_info=self._copy_callable_info(callable_info),
+                    struct_qualified_name=struct_qualified_name,
+                    anonymous_struct_info=self._copy_anonymous_struct_info(anonymous_struct_info),
+                    source_struct_qualified_name=source_enum_qualified_name,
+                )
+            )
         return fields
 
     def _analyze_struct_method(
@@ -938,6 +1142,17 @@ class SymbolTableVisitor(zincVisitor):
             # Struct instantiation
             if isinstance(expr_ctx, ZincParser.PrimaryExprContext):
                 primary = expr_ctx.primaryExpression()
+                if primary and hasattr(primary, "enumVariantConstruction") and primary.enumVariantConstruction():
+                    inst = primary.enumVariantConstruction()
+                    variant_target = self.module_graph.resolve_enum_variant_path(
+                        source_module_id,
+                        enum_variant_path_from_ctx(inst),
+                    )
+                    if variant_target is not None:
+                        enum_symbol, _variant_name = variant_target
+                        if enum_symbol.qualified_name == constructor_owner_qualified_name:
+                            return "Self"
+                        return enum_symbol.name
                 if primary and primary.structInstantiation():
                     inst = primary.structInstantiation()
                     struct_symbol = self.module_graph.resolve_struct_path(
@@ -958,6 +1173,14 @@ class SymbolTableVisitor(zincVisitor):
 
             # self.field access
             if isinstance(expr_ctx, ZincParser.MemberAccessExprContext):
+                path = extract_identifier_path(expr_ctx)
+                if path:
+                    variant_target = self.module_graph.resolve_enum_variant_path(source_module_id, path)
+                    if variant_target is not None:
+                        enum_symbol, _variant_name = variant_target
+                        if enum_symbol.qualified_name == constructor_owner_qualified_name:
+                            return "Self"
+                        return enum_symbol.name
                 target_expr = expr_ctx.expression()
                 if isinstance(target_expr, ZincParser.PrimaryExprContext):
                     primary = target_expr.primaryExpression()
@@ -1103,6 +1326,19 @@ class SymbolTableVisitor(zincVisitor):
                         param_types,
                     )
 
+    def _method_body_uses_self(self, node) -> bool:
+        """Return True when a method body references the special self binding."""
+        if node is None:
+            return False
+        if isinstance(node, ZincParser.PrimaryExpressionContext) and node.getText() == "self":
+            return True
+        if hasattr(node, "getChildCount"):
+            for i in range(node.getChildCount()):
+                child = node.getChild(i)
+                if isinstance(child, ParserRuleContext) and self._method_body_uses_self(child):
+                    return True
+        return False
+
     def _composed_expr_type(
         self,
         expr_ctx,
@@ -1232,7 +1468,14 @@ class SymbolTableVisitor(zincVisitor):
         """Return the exact scalar type encoded by a type annotation, if any."""
         if type_ctx is None:
             return None
-        return self._exact_type_name_from_text(type_ctx.getText())
+        exact_type = self._exact_type_name_from_text(type_ctx.getText())
+        if exact_type is not None:
+            return exact_type
+        if hasattr(type_ctx, "qualifiedName") and type_ctx.qualifiedName() and not type_ctx.typeList():
+            resolved_enum = self._resolve_enum_symbol(type_ctx.qualifiedName().getText().split("."))
+            if resolved_enum is not None:
+                return resolved_enum.qualified_name
+        return None
 
     def _resolved_exact_type(self, base_type: BaseType, exact_type: str | None) -> str | None:
         """Return the concrete scalar type spelling to use for a primitive value."""
@@ -1559,8 +1802,11 @@ class SymbolTableVisitor(zincVisitor):
                     )
             if base_type == BaseType.UNKNOWN:
                 resolved_struct = self._resolve_struct_symbol(type_name.split("."))
-                qualified_name = resolved_struct.qualified_name if resolved_struct is not None else type_name
-                return BaseType.STRUCT, None, None, None, None, None, qualified_name, None
+                if resolved_struct is not None:
+                    return BaseType.STRUCT, None, None, None, None, None, resolved_struct.qualified_name, None
+                resolved_enum = self._resolve_enum_symbol(type_name.split("."))
+                if resolved_enum is not None:
+                    return BaseType.ENUM, None, None, None, None, None, None, None
             return base_type, None, None, None, None, None, None, None
 
         return BaseType.UNKNOWN, None, None, None, None, None, None, None
@@ -1879,13 +2125,19 @@ class SymbolTableVisitor(zincVisitor):
             if merged == BaseType.UNKNOWN:
                 raise ZincTypeError(f"{label} have incompatible array element types")
             current.element_type = merged
-            current.element_exact_type = promote_exact_numeric(
+            current.element_exact_type = self._merge_exact_type_for_base(
                 current.element_exact_type,
                 incoming.element_exact_type,
                 merged,
+                f"{label} have incompatible array element types",
             )
-        elif current.element_exact_type is None:
-            current.element_exact_type = incoming.element_exact_type
+        else:
+            current.element_exact_type = self._merge_exact_type_for_base(
+                current.element_exact_type,
+                incoming.element_exact_type,
+                current.element_type,
+                f"{label} have incompatible array element types",
+            )
 
         if current.element_type == BaseType.TUPLE:
             current.element_tuple_info = self._merge_tuple_info(
@@ -1938,13 +2190,19 @@ class SymbolTableVisitor(zincVisitor):
             if merged == BaseType.UNKNOWN:
                 raise ZincTypeError(f"{label} have incompatible channel payload types")
             current.element_type = merged
-            current.element_exact_type = promote_exact_numeric(
+            current.element_exact_type = self._merge_exact_type_for_base(
                 current.element_exact_type,
                 incoming.element_exact_type,
                 merged,
+                f"{label} have incompatible channel payload types",
             )
-        elif current.element_exact_type is None:
-            current.element_exact_type = incoming.element_exact_type
+        else:
+            current.element_exact_type = self._merge_exact_type_for_base(
+                current.element_exact_type,
+                incoming.element_exact_type,
+                current.element_type,
+                f"{label} have incompatible channel payload types",
+            )
 
         if current.element_type == BaseType.TUPLE:
             current.element_tuple_info = self._merge_tuple_info(
@@ -2005,7 +2263,12 @@ class SymbolTableVisitor(zincVisitor):
 
         merged = ResolvedValueInfo(
             base_type=merged_type,
-            exact_type=promote_exact_numeric(current.exact_type, incoming.exact_type, merged_type),
+            exact_type=self._merge_exact_type_for_base(
+                current.exact_type,
+                incoming.exact_type,
+                merged_type,
+                label,
+            ),
         )
         if merged_type == BaseType.ARRAY:
             merged.array_info = self._merge_array_info(
@@ -2332,6 +2595,7 @@ class SymbolTableVisitor(zincVisitor):
         self,
         channel_name: str,
         value_type: BaseType,
+        value_exact_type: str | None = None,
         value_callable_info: CallableTypeInfo | None = None,
         value_struct_qualified_name: str | None = None,
         value_anonymous_struct_info: AnonymousStructTypeInfo | None = None,
@@ -2344,6 +2608,7 @@ class SymbolTableVisitor(zincVisitor):
         for chan_info in targets:
             if chan_info.element_type == BaseType.UNKNOWN:
                 chan_info.element_type = value_type
+                chan_info.element_exact_type = value_exact_type
             elif value_type != BaseType.UNKNOWN and value_type != chan_info.element_type:
                 if chan_info.element_type == BaseType.CALLABLE and value_type == BaseType.CALLABLE:
                     pass
@@ -2352,6 +2617,19 @@ class SymbolTableVisitor(zincVisitor):
                     if merged == BaseType.UNKNOWN:
                         raise ZincTypeError("mixed channel value types are not supported")
                     chan_info.element_type = merged
+                    chan_info.element_exact_type = self._merge_exact_type_for_base(
+                        chan_info.element_exact_type,
+                        value_exact_type,
+                        merged,
+                        "channel payloads",
+                    )
+            else:
+                chan_info.element_exact_type = self._merge_exact_type_for_base(
+                    chan_info.element_exact_type,
+                    value_exact_type,
+                    chan_info.element_type,
+                    "channel payloads",
+                )
 
             if chan_info.element_type == BaseType.CALLABLE:
                 chan_info.element_callable_info = self._merge_callable_info(
@@ -2413,6 +2691,8 @@ class SymbolTableVisitor(zincVisitor):
             raise ZincTypeError(f"{label} cannot be a float in v1")
         if incoming == BaseType.CALLABLE:
             raise ZincTypeError(f"{label} cannot be a callable in v1")
+        if incoming == BaseType.ENUM:
+            raise ZincTypeError(f"{label} cannot be an enum in v1")
         if current == BaseType.UNKNOWN:
             return incoming
         if incoming == BaseType.UNKNOWN or incoming == current:
@@ -2442,8 +2722,18 @@ class SymbolTableVisitor(zincVisitor):
             raise ZincTypeError("function return paths use different dict kinds")
         current.key_type = self._merge_key_type(current.key_type, incoming.key_type, "dict key")
         current.value_type = self._merge_value_type(current.value_type, incoming.value_type, "dict value")
-        current.key_exact_type = promote_exact_numeric(current.key_exact_type, incoming.key_exact_type, current.key_type)
-        current.value_exact_type = promote_exact_numeric(current.value_exact_type, incoming.value_exact_type, current.value_type)
+        current.key_exact_type = self._merge_exact_type_for_base(
+            current.key_exact_type,
+            incoming.key_exact_type,
+            current.key_type,
+            "dict key return paths",
+        )
+        current.value_exact_type = self._merge_exact_type_for_base(
+            current.value_exact_type,
+            incoming.value_exact_type,
+            current.value_type,
+            "dict value return paths",
+        )
         if current.key_type == BaseType.STRUCT and not self._structs_compatible(
             current.key_struct_qualified_name,
             current.key_anonymous_struct_info,
@@ -2474,10 +2764,11 @@ class SymbolTableVisitor(zincVisitor):
         if current.kind != incoming.kind:
             raise ZincTypeError("function return paths use different set kinds")
         current.element_type = self._merge_key_type(current.element_type, incoming.element_type, "set element")
-        current.element_exact_type = promote_exact_numeric(
+        current.element_exact_type = self._merge_exact_type_for_base(
             current.element_exact_type,
             incoming.element_exact_type,
             current.element_type,
+            "set element return paths",
         )
         if current.element_type == BaseType.STRUCT and not self._structs_compatible(
             current.element_struct_qualified_name,
@@ -2546,10 +2837,11 @@ class SymbolTableVisitor(zincVisitor):
             if merged == BaseType.UNKNOWN and current_type != BaseType.UNKNOWN and incoming_type != BaseType.UNKNOWN:
                 raise ZincTypeError("tuple return paths use incompatible element types")
             current.element_types[i] = merged
-            current.element_exact_types[i] = promote_exact_numeric(
+            current.element_exact_types[i] = self._merge_exact_type_for_base(
                 current.element_exact_types[i],
                 incoming_exact,
                 merged,
+                "tuple return paths",
             )
         return current
 
@@ -3351,6 +3643,9 @@ class SymbolTableVisitor(zincVisitor):
         self,
         method: StructMethodInfo,
         target: CallableTarget,
+        *,
+        owner_qualified_name: str | None = None,
+        owner_kind: str = "struct",
     ) -> CallableTypeInfo:
         """Build callable metadata from analyzed struct-method metadata."""
         param_types: list[BaseType] = []
@@ -3358,11 +3653,19 @@ class SymbolTableVisitor(zincVisitor):
         for _name, type_ann, resolved in method.parameters:
             param_types.append(self._type_name_to_base(resolved or type_ann))
             param_exact_types.append(self._exact_type_name_from_text(resolved or type_ann))
+        return_info = self._resolved_named_type_info(
+            method.return_type,
+            source_module_id=method.source_module_id,
+            owner_qualified_name=owner_qualified_name,
+            owner_kind=owner_kind,
+        )
         return CallableTypeInfo(
             param_types=param_types,
             param_exact_types=param_exact_types,
-            return_type=self._method_return_base_type(method.return_type),
-            return_exact_type=self._exact_type_name_from_text(method.return_type),
+            return_type=return_info.base_type,
+            return_exact_type=return_info.exact_type,
+            return_struct_qualified_name=return_info.struct_qualified_name,
+            return_anonymous_struct_info=self._copy_anonymous_struct_info(return_info.anonymous_struct_info),
             targets=(target,),
         )
 
@@ -3412,22 +3715,33 @@ class SymbolTableVisitor(zincVisitor):
 
         static_target = self.module_graph.resolve_static_method_target(self._current_module, path)
         if static_target is not None:
-            struct_symbol, method_name = static_target
-            struct = self.atlas.structs.get(struct_symbol.qualified_name)
-            if struct is None:
+            owner_symbol, method_name = static_target
+            owner_kind = owner_symbol.kind
+            if owner_kind == "struct":
+                owner = self.atlas.structs.get(owner_symbol.qualified_name)
+            elif owner_kind == "enum":
+                owner = self._analyze_enum_by_qualified_name(owner_symbol.qualified_name)
+            else:
+                owner = None
+            if owner is None:
                 return None
-            method = next((candidate for candidate in struct.methods if candidate.name == method_name), None)
+            method = next((candidate for candidate in owner.methods if candidate.name == method_name), None)
             if method is None:
                 return None
             if not method.is_static:
                 raise ZincTypeError("instance methods must be bound to a receiver before use as callable values")
             target = CallableTarget(
                 kind="static_method",
-                qualified_name=f"{struct_symbol.qualified_name}::{method_name}",
+                qualified_name=f"{owner_symbol.qualified_name}::{method_name}",
                 display_name=".".join(path),
-                receiver_struct_qualified_name=struct_symbol.qualified_name,
+                receiver_struct_qualified_name=owner_symbol.qualified_name,
             )
-            return self._callable_info_from_method(method, target)
+            return self._callable_info_from_method(
+                method,
+                target,
+                owner_qualified_name=owner_symbol.qualified_name,
+                owner_kind=owner_kind,
+            )
 
         return None
 
@@ -3575,7 +3889,8 @@ class SymbolTableVisitor(zincVisitor):
                     actual_exact_type=incoming_exact,
                 )
             ):
-                raise ZincTypeError("indirect call uses incompatible callable arguments")
+                if current not in {BaseType.INTEGER, BaseType.FLOAT} or arg_type not in {BaseType.INTEGER, BaseType.FLOAT}:
+                    raise ZincTypeError("indirect call uses incompatible callable arguments")
             elif current_exact is None and i < len(callable_info.param_exact_types):
                 callable_info.param_exact_types[i] = incoming_exact
             if arg_type == BaseType.ARRAY and i in arg_array_infos and i not in callable_info.param_array_infos:
@@ -3852,6 +4167,9 @@ class SymbolTableVisitor(zincVisitor):
         if ctx.tupleLiteral():
             return self.visit(ctx.tupleLiteral())
 
+        if hasattr(ctx, "enumVariantConstruction") and ctx.enumVariantConstruction():
+            return self.visit(ctx.enumVariantConstruction())
+
         if ctx.structInstantiation():
             return self.visit(ctx.structInstantiation())
 
@@ -3870,6 +4188,144 @@ class SymbolTableVisitor(zincVisitor):
             interval=ctx.getSourceInterval(),
         )
         return BaseType.UNKNOWN
+
+    def visitEnumVariantConstruction(self, ctx: ZincParser.EnumVariantConstructionContext) -> BaseType:
+        """Visit enum payload construction."""
+        if self._current_module is None:
+            raise ZincTypeError("enum construction requires a module context")
+
+        variant_target = self.module_graph.resolve_enum_variant_path(
+            self._current_module,
+            enum_variant_path_from_ctx(ctx),
+        )
+        if variant_target is None:
+            resolved_struct = self.module_graph.resolve_struct_path(
+                self._current_module,
+                ctx.enumVariantPath().getText().split("."),
+            )
+            if resolved_struct is None:
+                raise ZincTypeError(f"unknown enum variant '{ctx.enumVariantPath().getText()}'")
+            struct_info = self.atlas.structs.get(resolved_struct.qualified_name)
+            provided_exprs: dict[str, tuple[BaseType, Symbol | None, ParserRuleContext]] = {}
+            for field_ctx in ctx.fieldInit():
+                field_name = field_ctx.IDENTIFIER().getText()
+                if field_name in provided_exprs:
+                    raise ZincTypeError(f"struct literal has duplicate field '{field_name}'")
+                field_type = self.visit(field_ctx.expression())
+                provided_exprs[field_name] = (
+                    field_type,
+                    self._expr_symbol(field_ctx.expression()),
+                    field_ctx.expression(),
+                )
+            if struct_info is not None:
+                field_map = {field.name: field for field in struct_info.fields}
+                for field_name, (actual_type, actual_symbol, actual_expr_ctx) in provided_exprs.items():
+                    expected_field = field_map.get(field_name)
+                    if expected_field is None:
+                        raise ZincTypeError(f"struct '{struct_info.name}' has no field '{field_name}'")
+                    actual_struct_qualified_name, actual_anonymous_struct_info = self._struct_metadata_for_symbol(actual_symbol)
+                    actual_array_info = self._array_info_from_symbol(actual_symbol)
+                    if not self._assignment_metadata_compatible(
+                        expected_field.resolved_type,
+                        actual_type,
+                        expected_exact_type=expected_field.exact_type
+                        or self._exact_type_name_from_text(expected_field.type_annotation),
+                        actual_exact_type=actual_symbol.exact_type if actual_symbol else None,
+                        actual_constant_value=self._literal_constant_value_for_expr(actual_expr_ctx, actual_symbol),
+                        expected_array=expected_field.array_info,
+                        actual_array=actual_array_info,
+                        expected_dict=expected_field.dict_info,
+                        actual_dict=self._copy_dict_info(actual_symbol.dict_info) if actual_symbol else None,
+                        expected_set=expected_field.set_info,
+                        actual_set=self._copy_set_info(actual_symbol.set_info) if actual_symbol else None,
+                        expected_tuple=expected_field.tuple_info,
+                        actual_tuple=self._copy_tuple_info(actual_symbol.tuple_info) if actual_symbol else None,
+                        expected_callable=expected_field.callable_info,
+                        actual_callable=self._copy_callable_info(actual_symbol.callable_info) if actual_symbol else None,
+                        expected_struct_qualified_name=expected_field.struct_qualified_name,
+                        actual_struct_qualified_name=actual_struct_qualified_name,
+                        expected_anonymous_struct_info=expected_field.anonymous_struct_info,
+                        actual_anonymous_struct_info=actual_anonymous_struct_info,
+                    ):
+                        raise ZincTypeError(
+                            f"struct field '{struct_info.name}.{field_name}' expects a compatible "
+                            f"'{expected_field.rust_type()}' value"
+                        )
+            temp = self.symbols.define_temp(
+                resolved_type=BaseType.STRUCT,
+                interval=ctx.getSourceInterval(),
+            )
+            self._struct_symbol_bindings[temp.unique_name] = resolved_struct.qualified_name
+            return BaseType.STRUCT
+
+        enum_symbol, variant_name = variant_target
+        enum_info = self._analyze_enum_by_qualified_name(enum_symbol.qualified_name)
+        variant = next((candidate for candidate in enum_info.variants if candidate.name == variant_name), None)
+        if variant is None:
+            raise ZincTypeError(f"enum '{enum_info.name}' has no variant '{variant_name}'")
+        if variant.is_unit:
+            raise ZincTypeError(f"unit variant '{enum_info.name}.{variant_name}' cannot be constructed with fields")
+
+        provided_exprs: dict[str, tuple[BaseType, Symbol | None, ParserRuleContext]] = {}
+        for field_ctx in ctx.fieldInit():
+            field_name = field_ctx.IDENTIFIER().getText()
+            if field_name in provided_exprs:
+                raise ZincTypeError(
+                    f"enum variant '{enum_info.name}.{variant_name}' has duplicate field '{field_name}'"
+                )
+            field_type = self.visit(field_ctx.expression())
+            provided_exprs[field_name] = (
+                field_type,
+                self._expr_symbol(field_ctx.expression()),
+                field_ctx.expression(),
+            )
+
+        field_map = {field.name: field for field in variant.fields}
+        missing_fields = [field.name for field in variant.fields if field.name not in provided_exprs]
+        if missing_fields:
+            raise ZincTypeError(
+                f"enum variant '{enum_info.name}.{variant_name}' is missing field '{missing_fields[0]}'"
+            )
+
+        for field_name, (actual_type, actual_symbol, actual_expr_ctx) in provided_exprs.items():
+            expected_field = field_map.get(field_name)
+            if expected_field is None:
+                raise ZincTypeError(f"enum variant '{enum_info.name}.{variant_name}' has no field '{field_name}'")
+            actual_struct_qualified_name, actual_anonymous_struct_info = self._struct_metadata_for_symbol(actual_symbol)
+            actual_array_info = self._array_info_from_symbol(actual_symbol)
+            if not self._assignment_metadata_compatible(
+                expected_field.resolved_type,
+                actual_type,
+                expected_exact_type=expected_field.exact_type
+                or self._exact_type_name_from_text(expected_field.type_annotation),
+                actual_exact_type=actual_symbol.exact_type if actual_symbol else None,
+                actual_constant_value=self._literal_constant_value_for_expr(actual_expr_ctx, actual_symbol),
+                expected_array=expected_field.array_info,
+                actual_array=actual_array_info,
+                expected_dict=expected_field.dict_info,
+                actual_dict=self._copy_dict_info(actual_symbol.dict_info) if actual_symbol else None,
+                expected_set=expected_field.set_info,
+                actual_set=self._copy_set_info(actual_symbol.set_info) if actual_symbol else None,
+                expected_tuple=expected_field.tuple_info,
+                actual_tuple=self._copy_tuple_info(actual_symbol.tuple_info) if actual_symbol else None,
+                expected_callable=expected_field.callable_info,
+                actual_callable=self._copy_callable_info(actual_symbol.callable_info) if actual_symbol else None,
+                expected_struct_qualified_name=expected_field.struct_qualified_name,
+                actual_struct_qualified_name=actual_struct_qualified_name,
+                expected_anonymous_struct_info=expected_field.anonymous_struct_info,
+                actual_anonymous_struct_info=actual_anonymous_struct_info,
+            ):
+                raise ZincTypeError(
+                    f"enum variant field '{enum_info.name}.{variant_name}.{field_name}' expects a compatible "
+                    f"'{expected_field.rust_type()}' value"
+                )
+
+        self.symbols.define_temp(
+            resolved_type=BaseType.ENUM,
+            interval=ctx.getSourceInterval(),
+            exact_type=enum_symbol.qualified_name,
+        )
+        return BaseType.ENUM
 
     def visitLambdaExpr(self, ctx: ZincParser.LambdaExprContext) -> BaseType:
         """Visit an inline lambda expression."""
@@ -4101,15 +4557,17 @@ class SymbolTableVisitor(zincVisitor):
     def visitArrayLiteral(self, ctx: ZincParser.ArrayLiteralContext) -> BaseType:
         """Visit array literal and infer element type from first element."""
         element_type = None
+        element_exact_type = None
         element_tuple_info = None
         element_callable_info = None
         element_struct_qualified_name = None
         element_anonymous_struct_info = None
         for expr_ctx in ctx.expression():
             expr_type = self.visit(expr_ctx)
+            expr_symbol = self._expr_symbol(expr_ctx)
             if element_type is None:
                 element_type = expr_type
-                expr_symbol = self._expr_symbol(expr_ctx)
+                element_exact_type = expr_symbol.exact_type if expr_symbol else None
                 if expr_type == BaseType.TUPLE and expr_symbol and expr_symbol.tuple_info:
                     element_tuple_info = self._copy_tuple_info(expr_symbol.tuple_info)
                 if expr_type == BaseType.CALLABLE and expr_symbol and expr_symbol.callable_info:
@@ -4119,6 +4577,14 @@ class SymbolTableVisitor(zincVisitor):
                     element_anonymous_struct_info = self._copy_anonymous_struct_info(
                         expr_symbol.anonymous_struct_info
                     )
+            else:
+                element_type = self._merge_value_type(element_type, expr_type, "array element")
+                element_exact_type = self._merge_exact_type_for_base(
+                    element_exact_type,
+                    expr_symbol.exact_type if expr_symbol else None,
+                    element_type,
+                    "array element",
+                )
         symbol = self.symbols.define_temp(
             resolved_type=BaseType.ARRAY,
             interval=ctx.getSourceInterval(),
@@ -4126,6 +4592,7 @@ class SymbolTableVisitor(zincVisitor):
         # Track element type from the first element
         if element_type is not None:
             symbol.element_type = element_type
+            symbol.element_exact_type = element_exact_type
             symbol.tuple_info = element_tuple_info
             symbol.callable_info = element_callable_info
             symbol.element_struct_qualified_name = element_struct_qualified_name
@@ -4140,6 +4607,8 @@ class SymbolTableVisitor(zincVisitor):
         if ctx.dictEntry():
             key_type = BaseType.UNKNOWN
             value_type = BaseType.UNKNOWN
+            key_exact_type = None
+            value_exact_type = None
             value_callable_info = None
             key_struct_qualified_name = None
             value_struct_qualified_name = None
@@ -4152,6 +4621,18 @@ class SymbolTableVisitor(zincVisitor):
                 value_type = self._merge_value_type(value_type, entry_value_type, "dict value")
                 key_symbol = self._expr_symbol(entry_ctx.expression(0))
                 value_symbol = self._expr_symbol(entry_ctx.expression(1))
+                key_exact_type = self._merge_exact_type_for_base(
+                    key_exact_type,
+                    key_symbol.exact_type if key_symbol else None,
+                    key_type,
+                    "dict key",
+                )
+                value_exact_type = self._merge_exact_type_for_base(
+                    value_exact_type,
+                    value_symbol.exact_type if value_symbol else None,
+                    value_type,
+                    "dict value",
+                )
                 if entry_key_type == BaseType.CALLABLE:
                     raise ZincTypeError("callables cannot be used as dict keys")
                 if entry_value_type == BaseType.CALLABLE:
@@ -4178,6 +4659,8 @@ class SymbolTableVisitor(zincVisitor):
             symbol.dict_info = DictTypeInfo(
                 key_type=key_type,
                 value_type=value_type,
+                key_exact_type=key_exact_type,
+                value_exact_type=value_exact_type,
                 value_callable_info=value_callable_info,
                 key_struct_qualified_name=key_struct_qualified_name,
                 value_struct_qualified_name=value_struct_qualified_name,
@@ -4188,15 +4671,22 @@ class SymbolTableVisitor(zincVisitor):
             return BaseType.DICT
 
         element_type = BaseType.UNKNOWN
+        element_exact_type = None
         element_struct_qualified_name = None
         element_anonymous_struct_info = None
         for expr_ctx in ctx.expression():
             expr_type = self.visit(expr_ctx)
             element_type = self._merge_key_type(element_type, expr_type, "set element")
+            expr_symbol = self._expr_symbol(expr_ctx)
+            element_exact_type = self._merge_exact_type_for_base(
+                element_exact_type,
+                expr_symbol.exact_type if expr_symbol else None,
+                element_type,
+                "set element",
+            )
             if expr_type == BaseType.CALLABLE:
                 raise ZincTypeError("callables cannot be used as set elements")
             if expr_type == BaseType.STRUCT:
-                expr_symbol = self._expr_symbol(expr_ctx)
                 if expr_symbol:
                     element_struct_qualified_name = self._struct_qualified_name_for_symbol(expr_symbol)
                     element_anonymous_struct_info = self._copy_anonymous_struct_info(
@@ -4209,6 +4699,7 @@ class SymbolTableVisitor(zincVisitor):
         )
         symbol.set_info = SetTypeInfo(
             element_type=element_type,
+            element_exact_type=element_exact_type,
             element_struct_qualified_name=element_struct_qualified_name,
             element_anonymous_struct_info=element_anonymous_struct_info,
             kind="set",
@@ -4222,6 +4713,7 @@ class SymbolTableVisitor(zincVisitor):
 
         # Try to get element type from the array
         element_type = BaseType.UNKNOWN
+        element_exact_type = None
         tuple_info = None
         callable_info = None
         struct_qualified_name = None
@@ -4236,6 +4728,7 @@ class SymbolTableVisitor(zincVisitor):
                     arr_symbol = self.symbols.lookup_by_id(arr_name)
                     if arr_symbol and arr_symbol.element_type:
                         element_type = arr_symbol.element_type
+                        element_exact_type = arr_symbol.element_exact_type
                         if element_type == BaseType.TUPLE:
                             tuple_info = self._copy_tuple_info(arr_symbol.tuple_info)
                         if element_type == BaseType.CALLABLE:
@@ -4256,6 +4749,7 @@ class SymbolTableVisitor(zincVisitor):
                     dict_symbol = self.symbols.lookup_by_id(dict_name)
                     if dict_symbol and dict_symbol.dict_info:
                         element_type = dict_symbol.dict_info.value_type
+                        element_exact_type = dict_symbol.dict_info.value_exact_type
                         callable_info = dict_symbol.dict_info.value_callable_info
                         struct_qualified_name = dict_symbol.dict_info.value_struct_qualified_name
                         anonymous_struct_info = self._copy_anonymous_struct_info(
@@ -4267,6 +4761,7 @@ class SymbolTableVisitor(zincVisitor):
                 )
                 if dict_symbol and dict_symbol.dict_info:
                     element_type = dict_symbol.dict_info.value_type
+                    element_exact_type = dict_symbol.dict_info.value_exact_type
                     callable_info = dict_symbol.dict_info.value_callable_info
                     struct_qualified_name = dict_symbol.dict_info.value_struct_qualified_name
                     anonymous_struct_info = self._copy_anonymous_struct_info(
@@ -4286,6 +4781,9 @@ class SymbolTableVisitor(zincVisitor):
             symbol = self.symbols.define_temp(
                 resolved_type=element_type,
                 interval=ctx.getSourceInterval(),
+                exact_type=tuple_info.element_exact_types[index]
+                if tuple_info and index < len(tuple_info.element_exact_types)
+                else None,
             )
             symbol.tuple_info = self._copy_tuple_info(tuple_info.element_tuple_infos.get(index))
             symbol.callable_info = tuple_info.element_callable_infos.get(index)
@@ -4301,6 +4799,7 @@ class SymbolTableVisitor(zincVisitor):
         temp = self.symbols.define_temp(
             resolved_type=element_type,
             interval=ctx.getSourceInterval(),
+            exact_type=element_exact_type,
         )
         temp.tuple_info = tuple_info if element_type == BaseType.TUPLE else None
         temp.callable_info = callable_info if element_type == BaseType.CALLABLE else None
@@ -4338,6 +4837,55 @@ class SymbolTableVisitor(zincVisitor):
                             interval=ctx.getSourceInterval(),
                         )
                         return resolved.resolved_type
+                static_target = self.module_graph.resolve_static_method_target(self._current_module, path)
+                if static_target:
+                    owner_symbol, method_name = static_target
+                    if owner_symbol.kind == "struct":
+                        owner = self.atlas.structs.get(owner_symbol.qualified_name)
+                    elif owner_symbol.kind == "enum":
+                        owner = self._analyze_enum_by_qualified_name(owner_symbol.qualified_name)
+                    else:
+                        owner = None
+                    if owner is not None:
+                        method = next((candidate for candidate in owner.methods if candidate.name == method_name), None)
+                        if method is not None:
+                            if not method.is_static:
+                                raise ZincTypeError(
+                                    "instance methods must be bound to a receiver before use as callable values"
+                                )
+                            temp = self.symbols.define_temp(
+                                resolved_type=BaseType.CALLABLE,
+                                interval=ctx.getSourceInterval(),
+                            )
+                            temp.callable_info = self._callable_info_from_method(
+                                method,
+                                CallableTarget(
+                                    kind="static_method",
+                                    qualified_name=f"{owner_symbol.qualified_name}::{method_name}",
+                                    display_name=".".join(path),
+                                    receiver_struct_qualified_name=owner_symbol.qualified_name,
+                                ),
+                                owner_qualified_name=owner_symbol.qualified_name,
+                                owner_kind=owner_symbol.kind,
+                            )
+                            return BaseType.CALLABLE
+                enum_variant = self.module_graph.resolve_enum_variant_path(self._current_module, path)
+                if enum_variant:
+                    enum_symbol, variant_name = enum_variant
+                    enum_info = self._analyze_enum_by_qualified_name(enum_symbol.qualified_name)
+                    variant = next((candidate for candidate in enum_info.variants if candidate.name == variant_name), None)
+                    if variant is None:
+                        raise ZincTypeError(f"enum '{enum_info.name}' has no variant '{variant_name}'")
+                    if not variant.is_unit:
+                        raise ZincTypeError(
+                            f"payload variant '{enum_info.name}.{variant_name}' requires field construction"
+                        )
+                    self.symbols.define_temp(
+                        resolved_type=BaseType.ENUM,
+                        interval=ctx.getSourceInterval(),
+                        exact_type=enum_symbol.qualified_name,
+                    )
+                    return BaseType.ENUM
                 callable_info = self._callable_info_from_symbol_path(path)
                 if callable_info is not None:
                     temp = self.symbols.define_temp(
@@ -4393,7 +4941,12 @@ class SymbolTableVisitor(zincVisitor):
                             resolved_type=BaseType.CALLABLE,
                             interval=ctx.getSourceInterval(),
                         )
-                        temp.callable_info = self._callable_info_from_method(method, target)
+                        temp.callable_info = self._callable_info_from_method(
+                            method,
+                            target,
+                            owner_qualified_name=struct_qualified_name,
+                            owner_kind="struct",
+                        )
                         return BaseType.CALLABLE
             anonymous_struct_info = self._anonymous_struct_info_for_symbol(receiver_symbol)
             if anonymous_struct_info is not None:
@@ -4422,6 +4975,12 @@ class SymbolTableVisitor(zincVisitor):
                 raise ZincTypeError(f"anonymous struct has no field '{member_name}'")
             if struct_qualified_name and struct is not None:
                 raise ZincTypeError(f"struct '{struct.name}' has no member '{member_name}'")
+
+        if receiver_type == BaseType.ENUM:
+            enum_name = receiver_symbol.exact_type if receiver_symbol else None
+            if enum_name:
+                enum = self._analyze_enum_by_qualified_name(enum_name)
+                raise ZincTypeError(f"enum '{enum.name}' has no member '{member_name}'")
 
         self.symbols.define_temp(
             resolved_type=BaseType.UNKNOWN,
@@ -4730,23 +5289,26 @@ class SymbolTableVisitor(zincVisitor):
                             and var_symbol.resolved_type == BaseType.ARRAY
                             and arg_types
                         ):
+                            arg_symbol = self._expr_symbol(arg_exprs[0])
                             if var_symbol.element_type is None:
                                 var_symbol.element_type = arg_types[0]
-                            if arg_types[0] == BaseType.STRUCT:
-                                arg_symbol = self._expr_symbol(arg_exprs[0])
-                                if arg_symbol:
-                                    var_symbol.element_struct_qualified_name = self._struct_qualified_name_for_symbol(
-                                        arg_symbol
-                                    )
-                                    var_symbol.element_anonymous_struct_info = self._copy_anonymous_struct_info(
-                                        arg_symbol.anonymous_struct_info
-                                    )
+                            var_symbol.element_exact_type = self._merge_exact_type_for_base(
+                                var_symbol.element_exact_type,
+                                arg_symbol.exact_type if arg_symbol else None,
+                                var_symbol.element_type,
+                                "array element",
+                            )
+                            if arg_types[0] == BaseType.STRUCT and arg_symbol:
+                                var_symbol.element_struct_qualified_name = self._struct_qualified_name_for_symbol(
+                                    arg_symbol
+                                )
+                                var_symbol.element_anonymous_struct_info = self._copy_anonymous_struct_info(
+                                    arg_symbol.anonymous_struct_info
+                                )
                             if arg_types[0] == BaseType.TUPLE:
-                                arg_symbol = self._expr_symbol(arg_exprs[0])
                                 if arg_symbol and arg_symbol.tuple_info:
                                     var_symbol.tuple_info = self._copy_tuple_info(arg_symbol.tuple_info)
                             if arg_types[0] == BaseType.CALLABLE:
-                                arg_symbol = self._expr_symbol(arg_exprs[0])
                                 var_symbol.callable_info = self._merge_callable_info(
                                     var_symbol.callable_info,
                                     arg_symbol.callable_info if arg_symbol else None,
@@ -4760,30 +5322,39 @@ class SymbolTableVisitor(zincVisitor):
                                     raise ZincTypeError("dict.insert() expects key and value arguments")
                                 if arg_types[0] == BaseType.CALLABLE:
                                     raise ZincTypeError("callables cannot be used as dict keys")
+                                key_symbol = self._expr_symbol(arg_exprs[0])
+                                value_symbol = self._expr_symbol(arg_exprs[1])
                                 dict_info.key_type = self._merge_key_type(dict_info.key_type, arg_types[0], "dict key")
                                 dict_info.value_type = self._merge_value_type(
                                     dict_info.value_type, arg_types[1], "dict value"
                                 )
-                                if arg_types[0] == BaseType.STRUCT:
-                                    key_symbol = self._expr_symbol(arg_exprs[0])
-                                    if key_symbol:
-                                        dict_info.key_struct_qualified_name = self._struct_qualified_name_for_symbol(
-                                            key_symbol
-                                        )
-                                        dict_info.key_anonymous_struct_info = self._copy_anonymous_struct_info(
-                                            key_symbol.anonymous_struct_info
-                                        )
-                                if arg_types[1] == BaseType.STRUCT:
-                                    value_symbol = self._expr_symbol(arg_exprs[1])
-                                    if value_symbol:
-                                        dict_info.value_struct_qualified_name = self._struct_qualified_name_for_symbol(
-                                            value_symbol
-                                        )
-                                        dict_info.value_anonymous_struct_info = self._copy_anonymous_struct_info(
-                                            value_symbol.anonymous_struct_info
-                                        )
+                                dict_info.key_exact_type = self._merge_exact_type_for_base(
+                                    dict_info.key_exact_type,
+                                    key_symbol.exact_type if key_symbol else None,
+                                    dict_info.key_type,
+                                    "dict key",
+                                )
+                                dict_info.value_exact_type = self._merge_exact_type_for_base(
+                                    dict_info.value_exact_type,
+                                    value_symbol.exact_type if value_symbol else None,
+                                    dict_info.value_type,
+                                    "dict value",
+                                )
+                                if arg_types[0] == BaseType.STRUCT and key_symbol:
+                                    dict_info.key_struct_qualified_name = self._struct_qualified_name_for_symbol(
+                                        key_symbol
+                                    )
+                                    dict_info.key_anonymous_struct_info = self._copy_anonymous_struct_info(
+                                        key_symbol.anonymous_struct_info
+                                    )
+                                if arg_types[1] == BaseType.STRUCT and value_symbol:
+                                    dict_info.value_struct_qualified_name = self._struct_qualified_name_for_symbol(
+                                        value_symbol
+                                    )
+                                    dict_info.value_anonymous_struct_info = self._copy_anonymous_struct_info(
+                                        value_symbol.anonymous_struct_info
+                                    )
                                 if arg_types[1] == BaseType.CALLABLE:
-                                    value_symbol = self._expr_symbol(arg_exprs[1])
                                     dict_info.value_callable_info = self._merge_callable_info(
                                         dict_info.value_callable_info,
                                         value_symbol.callable_info if value_symbol else None,
@@ -4804,6 +5375,7 @@ class SymbolTableVisitor(zincVisitor):
                                     interval=ctx.getSourceInterval(),
                                 )
                                 symbol.element_type = dict_info.key_type
+                                symbol.element_exact_type = dict_info.key_exact_type
                                 symbol.element_struct_qualified_name = dict_info.key_struct_qualified_name
                                 symbol.element_anonymous_struct_info = self._copy_anonymous_struct_info(
                                     dict_info.key_anonymous_struct_info
@@ -4817,6 +5389,7 @@ class SymbolTableVisitor(zincVisitor):
                                     interval=ctx.getSourceInterval(),
                                 )
                                 symbol.element_type = dict_info.value_type
+                                symbol.element_exact_type = dict_info.value_exact_type
                                 symbol.callable_info = self._copy_callable_info(dict_info.value_callable_info)
                                 symbol.element_struct_qualified_name = dict_info.value_struct_qualified_name
                                 symbol.element_anonymous_struct_info = self._copy_anonymous_struct_info(
@@ -4838,6 +5411,7 @@ class SymbolTableVisitor(zincVisitor):
                                 temp = self.symbols.define_temp(
                                     resolved_type=dict_info.value_type,
                                     interval=ctx.getSourceInterval(),
+                                    exact_type=dict_info.value_exact_type,
                                 )
                                 temp.callable_info = self._copy_callable_info(dict_info.value_callable_info)
                                 return dict_info.value_type
@@ -4855,18 +5429,23 @@ class SymbolTableVisitor(zincVisitor):
                                     raise ZincTypeError(f"set.{method_name}() expects one element argument")
                                 if arg_types[0] == BaseType.CALLABLE:
                                     raise ZincTypeError("callables cannot be used as set elements")
+                                elem_symbol = self._expr_symbol(arg_exprs[0])
                                 set_info.element_type = self._merge_key_type(
                                     set_info.element_type, arg_types[0], "set element"
                                 )
-                                if arg_types[0] == BaseType.STRUCT:
-                                    elem_symbol = self._expr_symbol(arg_exprs[0])
-                                    if elem_symbol:
-                                        set_info.element_struct_qualified_name = self._struct_qualified_name_for_symbol(
-                                            elem_symbol
-                                        )
-                                        set_info.element_anonymous_struct_info = self._copy_anonymous_struct_info(
-                                            elem_symbol.anonymous_struct_info
-                                        )
+                                set_info.element_exact_type = self._merge_exact_type_for_base(
+                                    set_info.element_exact_type,
+                                    elem_symbol.exact_type if elem_symbol else None,
+                                    set_info.element_type,
+                                    "set element",
+                                )
+                                if arg_types[0] == BaseType.STRUCT and elem_symbol:
+                                    set_info.element_struct_qualified_name = self._struct_qualified_name_for_symbol(
+                                        elem_symbol
+                                    )
+                                    set_info.element_anonymous_struct_info = self._copy_anonymous_struct_info(
+                                        elem_symbol.anonymous_struct_info
+                                    )
                             elif method_name == "clear":
                                 if arg_types:
                                     raise ZincTypeError("set.clear() does not accept arguments")
@@ -4971,18 +5550,35 @@ class SymbolTableVisitor(zincVisitor):
                                 func_instance.return_anonymous_struct_info
                             )
                 else:
-                    struct_qualified_name = (
+                    owner_qualified_name = (
                         target.receiver_struct_qualified_name
                         or target.qualified_name.partition("::")[0]
                     )
                     method_name = target.qualified_name.rpartition("::")[2]
-                    struct = self.atlas.structs.get(struct_qualified_name)
-                    if struct is None:
+                    owner_symbol = self.module_graph.get_symbol(owner_qualified_name)
+                    if owner_symbol.kind == "struct":
+                        owner = self.atlas.structs.get(owner_qualified_name)
+                    elif owner_symbol.kind == "enum":
+                        owner = self._analyze_enum_by_qualified_name(owner_qualified_name)
+                    else:
+                        owner = None
+                    if owner is None:
                         raise ZincTypeError(f"unknown callable target '{target.display_name}'")
-                    method = next((candidate for candidate in struct.methods if candidate.name == method_name), None)
+                    method = next((candidate for candidate in owner.methods if candidate.name == method_name), None)
                     if method is None:
                         raise ZincTypeError(f"unknown callable target '{target.display_name}'")
-                    candidate_type = self._method_return_base_type(method.return_type)
+                    return_info = self._resolved_named_type_info(
+                        method.return_type,
+                        source_module_id=method.source_module_id or owner_symbol.module_id,
+                        owner_qualified_name=owner_qualified_name,
+                        owner_kind=owner_symbol.kind,
+                    )
+                    candidate_type = return_info.base_type
+                    candidate_exact_type = return_info.exact_type
+                    candidate_struct_qualified_name = return_info.struct_qualified_name
+                    candidate_anonymous_struct_info = self._copy_anonymous_struct_info(
+                        return_info.anonymous_struct_info
+                    )
 
                 if candidate_type == BaseType.UNKNOWN:
                     continue
@@ -5068,21 +5664,26 @@ class SymbolTableVisitor(zincVisitor):
         if path and self._current_module is not None:
             static_target = self.module_graph.resolve_static_method_target(self._current_module, path)
             if static_target:
-                struct_symbol, method_name = static_target
-                struct = self.atlas.structs.get(struct_symbol.qualified_name)
-                if struct:
-                    method = next((candidate for candidate in struct.methods if candidate.name == method_name), None)
+                owner_symbol, method_name = static_target
+                if owner_symbol.kind == "struct":
+                    owner = self.atlas.structs.get(owner_symbol.qualified_name)
+                elif owner_symbol.kind == "enum":
+                    owner = self._analyze_enum_by_qualified_name(owner_symbol.qualified_name)
+                else:
+                    owner = None
+                if owner:
+                    method = next((candidate for candidate in owner.methods if candidate.name == method_name), None)
                     if method:
                         if not method.is_static:
                             raise ZincTypeError("instance methods must be bound to a receiver before use as callable values")
-                        return_type = self._method_return_base_type(method.return_type)
-                        temp = self.symbols.define_temp(
-                            resolved_type=return_type,
-                            interval=ctx.getSourceInterval(),
+                        return_info = self._resolved_named_type_info(
+                            method.return_type,
+                            source_module_id=method.source_module_id or owner_symbol.module_id,
+                            owner_qualified_name=owner_symbol.qualified_name,
+                            owner_kind=owner_symbol.kind,
                         )
-                        if return_type == BaseType.STRUCT:
-                            temp.tuple_info = None
-                        return return_type
+                        self._record_value_info(ctx.getSourceInterval(), return_info)
+                        return return_info.base_type
 
             resolved_function = self.module_graph.resolve_function_path(self._current_module, path)
             if resolved_function and resolved_function.name not in ("print", "chan", "dict", "sort_dict", "set", "sort_set"):
@@ -5392,7 +5993,10 @@ class SymbolTableVisitor(zincVisitor):
             chan_info = self._channel_info_ref_for_expr(ctx.expression().expression())
             if chan_info is None:
                 raise ZincTypeError("channel receive expects a channel expression")
+            if chan_info.element_type == BaseType.ENUM:
+                raise ZincTypeError("close-aware receive is not supported for enum channels in v1")
             binding_types = [chan_info.element_type, BaseType.BOOLEAN]
+            binding_exact_types = [chan_info.element_exact_type, default_exact_type(BaseType.BOOLEAN)]
             binding_tuple_infos = [self._copy_tuple_info(chan_info.element_tuple_info), None]
             binding_callable_infos = [chan_info.element_callable_info, None]
             binding_struct_names = [chan_info.element_struct_qualified_name, None]
@@ -5414,6 +6018,7 @@ class SymbolTableVisitor(zincVisitor):
                         kind=SymbolKind.VARIABLE,
                         resolved_type=element_type,
                         interval=token.getSourceInterval(),
+                        exact_type=binding_exact_types[i],
                         is_shadow=existing is not None,
                     )
                     new_sym.tuple_info = tuple_info
@@ -5431,6 +6036,7 @@ class SymbolTableVisitor(zincVisitor):
                     temp = self.symbols.define_temp(
                         resolved_type=element_type,
                         interval=token.getSourceInterval(),
+                        exact_type=binding_exact_types[i],
                     )
                     temp.tuple_info = tuple_info
                     temp.callable_info = callable_info
@@ -5571,6 +6177,12 @@ class SymbolTableVisitor(zincVisitor):
                         and expr_channel_info.element_type != BaseType.UNKNOWN
                     ):
                         existing_channel_info.element_type = expr_channel_info.element_type
+                    existing_channel_info.element_exact_type = self._merge_exact_type_for_base(
+                        existing_channel_info.element_exact_type,
+                        expr_channel_info.element_exact_type,
+                        existing_channel_info.element_type,
+                        f"channel '{var_name}'",
+                    )
                     if (
                         existing_channel_info.element_tuple_info is None
                         and expr_channel_info.element_tuple_info is not None
@@ -5583,6 +6195,17 @@ class SymbolTableVisitor(zincVisitor):
                         expr_channel_info.element_callable_info,
                         f"channel '{var_name}'",
                     )
+                    if existing_channel_info.element_struct_qualified_name is None:
+                        existing_channel_info.element_struct_qualified_name = (
+                            expr_channel_info.element_struct_qualified_name
+                        )
+                    if (
+                        existing_channel_info.element_anonymous_struct_info is None
+                        and expr_channel_info.element_anonymous_struct_info is not None
+                    ):
+                        existing_channel_info.element_anonymous_struct_info = self._copy_anonymous_struct_info(
+                            expr_channel_info.element_anonymous_struct_info
+                        )
                     existing_channel_info.is_bounded = expr_channel_info.is_bounded or existing_channel_info.is_bounded
                 expr_channel_info = self._copy_channel_info(self._channel_infos[var_name])
 
@@ -5641,6 +6264,12 @@ class SymbolTableVisitor(zincVisitor):
                         expr_struct_qualified_name,
                         expr_anonymous_struct_info,
                     )
+                )
+                or (
+                    expr_type == BaseType.ENUM
+                    and existing.exact_type is not None
+                    and expr_exact_type is not None
+                    and existing.exact_type != expr_exact_type
                 )
             ):
                 # Type change - create shadow symbol
@@ -5991,26 +6620,172 @@ class SymbolTableVisitor(zincVisitor):
                 # Promote int+float -> float when return paths disagree
                 if {self._current_return_type, return_type} == {BaseType.INTEGER, BaseType.FLOAT}:
                     self._current_return_type = BaseType.FLOAT
-                    self._current_return_exact_type = promote_exact_numeric(
+                    self._current_return_exact_type = self._merge_exact_type_for_base(
                         self._current_return_exact_type,
                         return_exact_type,
                         self._current_return_type,
+                        "function return paths",
                     )
                 elif (
                     self._current_return_type == BaseType.CALLABLE
                     and return_type == BaseType.CALLABLE
                 ):
                     pass
+                else:
+                    raise ZincTypeError("function return paths use incompatible types")
             elif self._current_return_exact_type is None:
                 self._current_return_exact_type = return_exact_type
-            elif return_exact_type is None:
-                pass
-            elif self._current_return_type in {BaseType.INTEGER, BaseType.FLOAT}:
-                self._current_return_exact_type = promote_exact_numeric(
+            else:
+                self._current_return_exact_type = self._merge_exact_type_for_base(
                     self._current_return_exact_type,
                     return_exact_type,
                     self._current_return_type,
+                    "function return paths",
                 )
+
+    def _define_match_field_binding(self, token, field: StructFieldInfo) -> None:
+        """Define one binding introduced by an enum payload match pattern."""
+        exact_type = field.exact_type or self._exact_type_name_from_text(field.type_annotation)
+        symbol = self.symbols.define(
+            id=token.getText(),
+            kind=SymbolKind.VARIABLE,
+            resolved_type=field.resolved_type,
+            interval=token.getSourceInterval(),
+            exact_type=exact_type,
+            is_shadow=self.symbols.lookup_by_id(token.getText()) is not None,
+        )
+        if field.array_info is not None:
+            symbol.element_type = field.array_info.element_type
+            symbol.element_exact_type = field.array_info.element_exact_type
+            symbol.tuple_info = self._copy_tuple_info(field.array_info.element_tuple_info)
+            symbol.callable_info = self._copy_callable_info(field.array_info.element_callable_info)
+            symbol.element_struct_qualified_name = field.array_info.element_struct_qualified_name
+            symbol.element_anonymous_struct_info = self._copy_anonymous_struct_info(
+                field.array_info.element_anonymous_struct_info
+            )
+        elif field.dict_info is not None:
+            symbol.dict_info = self._copy_dict_info(field.dict_info)
+        elif field.set_info is not None:
+            symbol.set_info = self._copy_set_info(field.set_info)
+        elif field.tuple_info is not None:
+            symbol.tuple_info = self._copy_tuple_info(field.tuple_info)
+        elif field.callable_info is not None:
+            symbol.callable_info = self._copy_callable_info(field.callable_info)
+        elif field.resolved_type == BaseType.STRUCT:
+            symbol.anonymous_struct_info = self._copy_anonymous_struct_info(field.anonymous_struct_info)
+            if field.struct_qualified_name is not None:
+                self._struct_symbol_bindings[symbol.unique_name] = field.struct_qualified_name
+
+    def visitMatchStatement(self, ctx: ZincParser.MatchStatementContext) -> None:
+        """Visit a statement-form enum match."""
+        scrutinee = self._value_info_from_expression(ctx.expression())
+        if scrutinee.base_type != BaseType.ENUM or scrutinee.exact_type is None:
+            raise ZincTypeError("match currently supports enum values only")
+        if self._current_module is None:
+            raise ZincTypeError("match requires a module context")
+
+        enum_info = self._analyze_enum_by_qualified_name(scrutinee.exact_type)
+        variant_map = {variant.name: variant for variant in enum_info.variants}
+        covered_variants: set[str] = set()
+        saw_wildcard = False
+        arms = list(ctx.matchArm())
+
+        for arm_index, arm_ctx in enumerate(arms):
+            pattern_ctx = arm_ctx.pattern()
+            is_wildcard = pattern_ctx.getText() == "_"
+            variant: EnumVariantInfo | None = None
+            variant_name: str | None = None
+            field_patterns = []
+
+            if is_wildcard:
+                if saw_wildcard:
+                    raise ZincTypeError("match supports at most one wildcard arm")
+                if arm_index != len(arms) - 1:
+                    raise ZincTypeError("wildcard match arm must be last")
+                saw_wildcard = True
+            else:
+                enum_pattern = pattern_ctx.enumVariantPattern()
+                if enum_pattern is None:
+                    raise ZincTypeError("enum match arms must use enum variants or '_'")
+                variant_target = self.module_graph.resolve_enum_variant_path(
+                    self._current_module,
+                    enum_pattern.enumVariantPath().getText().split("."),
+                )
+                if variant_target is None:
+                    raise ZincTypeError(f"unknown enum variant '{enum_pattern.enumVariantPath().getText()}'")
+                enum_symbol, variant_name = variant_target
+                if enum_symbol.qualified_name != enum_info.qualified_name:
+                    raise ZincTypeError(
+                        f"match arm '{enum_pattern.enumVariantPath().getText()}' does not belong to enum '{enum_info.name}'"
+                    )
+                if variant_name in covered_variants:
+                    raise ZincTypeError(f"duplicate match arm for variant '{enum_info.name}.{variant_name}'")
+                covered_variants.add(variant_name)
+                variant = variant_map.get(variant_name)
+                if variant is None:
+                    raise ZincTypeError(f"enum '{enum_info.name}' has no variant '{variant_name}'")
+                field_patterns = list(enum_pattern.enumVariantFieldPattern())
+
+            block_name = self._next_block_name("match")
+            self.symbols.enter_scope(block_name)
+            try:
+                if variant is not None:
+                    if variant.is_unit:
+                        if field_patterns:
+                            raise ZincTypeError(
+                                f"unit variant '{enum_info.name}.{variant.name}' does not take fields in match patterns"
+                            )
+                    else:
+                        if not field_patterns:
+                            raise ZincTypeError(
+                                f"payload variant '{enum_info.name}.{variant.name}' requires a field pattern"
+                            )
+                        seen_fields: set[str] = set()
+                        seen_bindings: set[str] = set()
+                        field_map = {field.name: field for field in variant.fields}
+                        for field_pattern in field_patterns:
+                            identifiers = list(field_pattern.IDENTIFIER())
+                            field_name = identifiers[0].getText()
+                            binding_token = identifiers[-1]
+                            binding_name = binding_token.getText()
+                            if field_name in seen_fields:
+                                raise ZincTypeError(
+                                    f"match pattern for variant '{enum_info.name}.{variant.name}' has duplicate field '{field_name}'"
+                                )
+                            if binding_name in seen_bindings:
+                                raise ZincTypeError(
+                                    f"match pattern for variant '{enum_info.name}.{variant.name}' reuses binding '{binding_name}'"
+                                )
+                            seen_fields.add(field_name)
+                            seen_bindings.add(binding_name)
+                            field = field_map.get(field_name)
+                            if field is None:
+                                raise ZincTypeError(
+                                    f"variant '{enum_info.name}.{variant.name}' has no field '{field_name}'"
+                                )
+                            self._define_match_field_binding(binding_token, field)
+                        missing_fields = [
+                            field.name for field in variant.fields if field.name not in seen_fields
+                        ]
+                        if missing_fields:
+                            raise ZincTypeError(
+                                f"match pattern for variant '{enum_info.name}.{variant.name}' is missing field '{missing_fields[0]}'"
+                            )
+
+                if arm_ctx.block() is not None:
+                    self.visit(arm_ctx.block())
+                else:
+                    self.visit(arm_ctx.expression())
+            finally:
+                self.symbols.exit_scope()
+
+        if not saw_wildcard and len(covered_variants) != len(variant_map):
+            missing_variant = next(
+                variant.name for variant in enum_info.variants if variant.name not in covered_variants
+            )
+            raise ZincTypeError(
+                f"non-exhaustive match for enum '{enum_info.name}'; missing variant '{missing_variant}'"
+            )
 
     def visitIfExpr(self, ctx: ZincParser.IfExprContext) -> BaseType:
         """Visit an if-expression wrapper."""
@@ -6049,6 +6824,7 @@ class SymbolTableVisitor(zincVisitor):
         def define_binding(
             index: int,
             resolved_type: BaseType,
+            exact_type: str | None = None,
             tuple_info: TupleTypeInfo | None = None,
             callable_info: CallableTypeInfo | None = None,
             struct_qualified_name: str | None = None,
@@ -6060,6 +6836,7 @@ class SymbolTableVisitor(zincVisitor):
                 kind=SymbolKind.VARIABLE,
                 resolved_type=resolved_type,
                 interval=token.getSourceInterval(),
+                exact_type=exact_type,
             )
             symbol.tuple_info = self._copy_tuple_info(tuple_info)
             symbol.callable_info = self._copy_callable_info(callable_info)
@@ -6069,6 +6846,7 @@ class SymbolTableVisitor(zincVisitor):
 
         item_tuple_info: TupleTypeInfo | None = None
         item_callable_info: CallableTypeInfo | None = None
+        item_exact_type: str | None = None
         item_struct_qualified_name: str | None = None
         item_anonymous_struct_info: AnonymousStructTypeInfo | None = None
         if iterable_type == BaseType.INTEGER:
@@ -6077,6 +6855,7 @@ class SymbolTableVisitor(zincVisitor):
             var_type = BaseType.UNKNOWN
             if expr_symbol and expr_symbol.element_type:
                 var_type = expr_symbol.element_type
+                item_exact_type = expr_symbol.element_exact_type
                 if var_type == BaseType.TUPLE:
                     item_tuple_info = expr_symbol.tuple_info
                 if var_type == BaseType.CALLABLE:
@@ -6088,6 +6867,7 @@ class SymbolTableVisitor(zincVisitor):
             var_type = BaseType.UNKNOWN
             if expr_symbol and expr_symbol.set_info:
                 var_type = expr_symbol.set_info.element_type
+                item_exact_type = expr_symbol.set_info.element_exact_type
                 if var_type == BaseType.STRUCT:
                     item_struct_qualified_name = expr_symbol.set_info.element_struct_qualified_name
                     item_anonymous_struct_info = expr_symbol.set_info.element_anonymous_struct_info
@@ -6100,6 +6880,7 @@ class SymbolTableVisitor(zincVisitor):
             var_type = BaseType.UNKNOWN
             if chan_info is not None:
                 var_type = chan_info.element_type
+                item_exact_type = chan_info.element_exact_type
                 if var_type == BaseType.TUPLE:
                     item_tuple_info = chan_info.element_tuple_info
                 if var_type == BaseType.CALLABLE:
@@ -6111,7 +6892,15 @@ class SymbolTableVisitor(zincVisitor):
             var_type = BaseType.UNKNOWN
 
         if len(tokens) == 1:
-            define_binding(0, var_type, item_tuple_info, item_callable_info, item_struct_qualified_name, item_anonymous_struct_info)
+            define_binding(
+                0,
+                var_type,
+                item_exact_type,
+                item_tuple_info,
+                item_callable_info,
+                item_struct_qualified_name,
+                item_anonymous_struct_info,
+            )
         else:
             if var_type != BaseType.TUPLE or item_tuple_info is None:
                 raise ZincTypeError("for-loop destructuring requires tuple items")
@@ -6121,6 +6910,7 @@ class SymbolTableVisitor(zincVisitor):
                 define_binding(
                     i,
                     element_type,
+                    item_tuple_info.element_exact_types[i] if i < len(item_tuple_info.element_exact_types) else None,
                     item_tuple_info.element_tuple_infos.get(i),
                     item_tuple_info.element_callable_infos.get(i),
                     item_tuple_info.element_struct_qualified_names.get(i),
@@ -6255,6 +7045,10 @@ class SymbolTableVisitor(zincVisitor):
         channel_info = self._channel_info_ref_for_expr(channel_expr)
         if channel_info is None:
             channel_info = ChannelTypeInfo(element_type=BaseType.UNKNOWN)
+        if (
+            binding_ctx := ctx.selectReceiveBinding()
+        ) is not None and binding_ctx.tupleAssignmentTarget() is not None and channel_info.element_type == BaseType.ENUM:
+            raise ZincTypeError("close-aware select receive is not supported for enum channels in v1")
 
         block_name = self._next_block_name("select")
         self.symbols.enter_scope(block_name)
@@ -6268,6 +7062,7 @@ class SymbolTableVisitor(zincVisitor):
                         kind=SymbolKind.VARIABLE,
                         resolved_type=channel_info.element_type,
                         interval=binding_ctx.IDENTIFIER().getSourceInterval(),
+                        exact_type=channel_info.element_exact_type,
                         is_shadow=self.symbols.lookup_by_id(binding_name) is not None,
                     )
                     binding_symbol.tuple_info = self._copy_tuple_info(channel_info.element_tuple_info)
@@ -6286,6 +7081,7 @@ class SymbolTableVisitor(zincVisitor):
                     if len(tokens) != 2:
                         raise ZincTypeError("close-aware select receive requires exactly two bindings")
                     binding_types = [channel_info.element_type, BaseType.BOOLEAN]
+                    binding_exact_types = [channel_info.element_exact_type, default_exact_type(BaseType.BOOLEAN)]
                     binding_tuple_infos = [self._copy_tuple_info(channel_info.element_tuple_info), None]
                     binding_callable_infos = [channel_info.element_callable_info, None]
                     binding_struct_names = [channel_info.element_struct_qualified_name, None]
@@ -6299,6 +7095,7 @@ class SymbolTableVisitor(zincVisitor):
                             kind=SymbolKind.VARIABLE,
                             resolved_type=binding_types[i],
                             interval=token.getSourceInterval(),
+                            exact_type=binding_exact_types[i],
                             is_shadow=self.symbols.lookup_by_id(token.getText()) is not None,
                         )
                         binding_symbol.tuple_info = binding_tuple_infos[i]
@@ -6322,6 +7119,7 @@ class SymbolTableVisitor(zincVisitor):
         self._merge_channel_value_type(
             channel_name,
             value_type,
+            value_symbol.exact_type if value_symbol else None,
             value_callable_info,
             value_struct_qualified_name,
             value_anonymous_struct_info,
@@ -6490,6 +7288,7 @@ class SymbolTableVisitor(zincVisitor):
         self._merge_channel_value_type(
             channel_name,
             value_type,
+            value_symbol.exact_type if value_symbol else None,
             value_callable_info,
             value_struct_qualified_name,
             value_anonymous_struct_info,
@@ -6508,6 +7307,7 @@ class SymbolTableVisitor(zincVisitor):
         temp = self.symbols.define_temp(
             resolved_type=elem_type,
             interval=ctx.getSourceInterval(),
+            exact_type=channel_info.element_exact_type if channel_info is not None else None,
         )
         if channel_info is not None:
             temp.tuple_info = self._copy_tuple_info(channel_info.element_tuple_info)

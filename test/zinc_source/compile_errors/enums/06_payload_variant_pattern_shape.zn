@@ -1,0 +1,13 @@
+// expected-error: payload variant 'Message.Move' requires a field pattern
+enum Message {
+    Move { x: i32, y: i32 }
+}
+
+fn main() {
+    msg = Message.Move { x: 1, y: 2 }
+    match msg {
+        Message.Move => {
+            print("bad")
+        },
+    }
+}

@@ -14,7 +14,7 @@ from zinc.parser.zincLexer import zincLexer as ZincLexer
 from zinc.parser.zincParser import zincParser as ZincParser
 
 
-TopLevelKind = Literal["function", "struct", "const"]
+TopLevelKind = Literal["function", "struct", "enum", "const"]
 CompositionMode = Literal["orthogonal", "merge"]
 
 PKG_FILE_NAME = "pkg.toml"
@@ -148,6 +148,10 @@ class ModuleGraph:
         """Resolve a struct path for struct instantiation."""
         return self.resolve_top_level_path(module_id, path, {"struct"})
 
+    def resolve_enum_path(self, module_id: str, path: list[str]) -> TopLevelSymbol | None:
+        """Resolve an enum path for annotations and value construction."""
+        return self.resolve_top_level_path(module_id, path, {"enum"})
+
     def resolve_const_path(self, module_id: str, path: list[str]) -> TopLevelSymbol | None:
         """Resolve a const path for value expressions."""
         return self.resolve_top_level_path(module_id, path, {"const"})
@@ -157,21 +161,30 @@ class ModuleGraph:
         return self.resolve_top_level_path(module_id, path, {"function"})
 
     def resolve_static_method_target(self, module_id: str, path: list[str]) -> tuple[TopLevelSymbol, str] | None:
-        """Resolve a struct static-method target like ['Counter', 'new'] or ['fb', 'Counter', 'new']."""
+        """Resolve a struct/enum static-method target like ['Counter', 'new'] or ['fb', 'Counter', 'new']."""
         if len(path) == 2:
-            struct_symbol = self.resolve_local_or_imported(module_id, path[0], {"struct"})
-            if struct_symbol:
-                return struct_symbol, path[1]
+            type_symbol = self.resolve_local_or_imported(module_id, path[0], {"struct", "enum"})
+            if type_symbol:
+                return type_symbol, path[1]
             return None
 
         if len(path) == 3:
             alias_target = self.resolve_alias(module_id, path[0])
             if alias_target is None:
                 return None
-            struct_symbol = self.resolve_export(alias_target, path[1], {"struct"})
-            if struct_symbol:
-                return struct_symbol, path[2]
+            type_symbol = self.resolve_export(alias_target, path[1], {"struct", "enum"})
+            if type_symbol:
+                return type_symbol, path[2]
         return None
+
+    def resolve_enum_variant_path(self, module_id: str, path: list[str]) -> tuple[TopLevelSymbol, str] | None:
+        """Resolve an enum variant path like ['Message', 'Quit'] or ['pkg', 'Message', 'Quit']."""
+        if len(path) < 2:
+            return None
+        enum_symbol = self.resolve_enum_path(module_id, path[:-1])
+        if enum_symbol is None:
+            return None
+        return enum_symbol, path[-1]
 
     def path_for_module(self, module_id: str) -> Path:
         """Return the source file path for a module id."""
@@ -298,6 +311,13 @@ def extract_identifier_path(expr_ctx) -> list[str] | None:
 def struct_path_from_ctx(ctx: ZincParser.StructInstantiationContext) -> list[str]:
     """Extract the declared struct path from a struct instantiation node."""
     return qualified_name_path(ctx.qualifiedName())
+
+
+def enum_variant_path_from_ctx(ctx: ZincParser.EnumVariantConstructionContext) -> list[str]:
+    """Extract the enum variant path from an enum variant construction node."""
+    parts = qualified_name_path(ctx.enumVariantPath().qualifiedName())
+    parts.append(ctx.enumVariantPath().IDENTIFIER().getText())
+    return parts
 
 
 def qualified_name_path(ctx: ZincParser.QualifiedNameContext) -> list[str]:
@@ -450,6 +470,17 @@ def _collect_top_level_symbols(tree: ZincParser.ProgramContext, module_id: str) 
                 module_id=module_id,
                 name=name,
                 kind="struct",
+                ctx=ctx,
+                is_public=not name.startswith("_"),
+            )
+        elif stmt.enumDeclaration():
+            ctx = stmt.enumDeclaration()
+            name = ctx.IDENTIFIER().getText()
+            symbol = TopLevelSymbol(
+                qualified_name=ModuleGraph.qualified_name(module_id, name),
+                module_id=module_id,
+                name=name,
+                kind="enum",
                 ctx=ctx,
                 is_public=not name.startswith("_"),
             )

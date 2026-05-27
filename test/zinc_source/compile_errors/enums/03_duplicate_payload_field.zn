@@ -1,0 +1,9 @@
+// expected-error: enum variant 'Message.Move' has duplicate field 'x'
+enum Message {
+    Move { x: i32, y: i32 }
+}
+
+fn main() {
+    msg = Message.Move { x: 1, x: 2, y: 3 }
+    print("{msg}")
+}

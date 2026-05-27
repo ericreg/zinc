@@ -1,0 +1,13 @@
+// expected-error: unit variant 'Message.Quit' does not take fields in match patterns
+enum Message {
+    Quit
+}
+
+fn main() {
+    msg = Message.Quit
+    match msg {
+        Message.Quit { value } => {
+            print(value)
+        },
+    }
+}

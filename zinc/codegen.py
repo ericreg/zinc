@@ -7,7 +7,15 @@ from antlr4 import ParserRuleContext
 
 from zinc.parser.zincVisitor import zincVisitor
 from zinc.parser.zincParser import zincParser as ZincParser
-from zinc.atlas import Atlas, FunctionInstance, StructInstance, ConstInstance, StructFieldInfo, StructMethodInfo
+from zinc.atlas import (
+    Atlas,
+    ConstInstance,
+    EnumInstance,
+    FunctionInstance,
+    StructFieldInfo,
+    StructInstance,
+    StructMethodInfo,
+)
 from zinc.symbols import LexicalFunctionInfo, SymbolTable, SymbolKind
 from zinc.ast.types import (
     AnonymousStructTypeInfo,
@@ -151,6 +159,7 @@ class CodeGenVisitor(zincVisitor):
             *closure_envs,
             *callable_enums,
             *anonymous_structs,
+            *[self._generate_enum(e) for e in self.atlas.enums.values()],
             *[self._generate_struct(s) for s in self.atlas.structs.values()],
         ]
         functions = []
@@ -1310,10 +1319,13 @@ class CodeGenVisitor(zincVisitor):
                 arg_anonymous_struct_infos=info.param_anonymous_struct_infos,
             )
         if target.kind == "static_method":
-            struct_qualified_name = target.receiver_struct_qualified_name or target.qualified_name.rpartition("::")[0]
+            owner_qualified_name = target.receiver_struct_qualified_name or target.qualified_name.rpartition("::")[0]
             method_name = target.qualified_name.rpartition("::")[2]
-            struct = self.atlas.structs[struct_qualified_name]
-            return f"{self._struct_rust_name(struct)}::{method_name}"
+            if owner_qualified_name in self.atlas.structs:
+                return f"{self._struct_rust_name(self.atlas.structs[owner_qualified_name])}::{method_name}"
+            if owner_qualified_name in self.atlas.enums:
+                return f"{self._enum_rust_name(self.atlas.enums[owner_qualified_name])}::{method_name}"
+            return f"{self.module_graph.rust_base_name(owner_qualified_name)}::{method_name}"
         if target.kind == "bound_method":
             return target.qualified_name.rpartition("::")[2]
         if target.kind == "context_cancel":
@@ -1531,6 +1543,12 @@ class CodeGenVisitor(zincVisitor):
                         )
                     else:
                         processed.append(f"{arg}.clone()")
+                elif param_type == BaseType.INTEGER and i < len(callable_info.param_exact_types):
+                    exact_type = callable_info.param_exact_types[i]
+                    if exact_type in {"i32", "i64"}:
+                        processed.append(self._apply_literal_narrowing(arg, exact_type, arg_ctx))
+                    else:
+                        processed.append(arg)
                 else:
                     processed.append(arg)
             else:
@@ -1564,6 +1582,10 @@ class CodeGenVisitor(zincVisitor):
         """Return the flattened Rust name for a struct."""
         return self.module_graph.rust_base_name(struct.qualified_name)
 
+    def _enum_rust_name(self, enum: EnumInstance) -> str:
+        """Return the flattened Rust name for an enum."""
+        return self.module_graph.rust_base_name(enum.qualified_name)
+
     def _named_struct_rust_name(self, qualified_name: str | None) -> str:
         """Return the flattened Rust name for a named struct qualified name."""
         if qualified_name is None:
@@ -1571,6 +1593,15 @@ class CodeGenVisitor(zincVisitor):
         struct = self.atlas.structs.get(qualified_name)
         if struct is not None:
             return self._struct_rust_name(struct)
+        return self.module_graph.rust_base_name(qualified_name)
+
+    def _named_enum_rust_name(self, qualified_name: str | None) -> str:
+        """Return the flattened Rust name for a named enum qualified name."""
+        if qualified_name is None:
+            return "Enum"
+        enum = self.atlas.enums.get(qualified_name)
+        if enum is not None:
+            return self._enum_rust_name(enum)
         return self.module_graph.rust_base_name(qualified_name)
 
     def _const_rust_name(self, const: ConstInstance) -> str:
@@ -1787,9 +1818,50 @@ class CodeGenVisitor(zincVisitor):
 
         return "\n".join(lines)
 
+    def _generate_enum(self, enum: EnumInstance) -> str:
+        """Generate an enum definition and optional static impl block."""
+        lines = ["#[derive(Clone)]", f"enum {self._enum_rust_name(enum)} {{"]
+        for variant in enum.variants:
+            if variant.is_unit:
+                lines.append(f"    {variant.name},")
+                continue
+            field_parts = []
+            for field in variant.fields:
+                rust_type = self._type_with_metadata_to_rust(
+                    field.resolved_type,
+                    exact_type=field.exact_type,
+                    array_info=field.array_info,
+                    dict_info=field.dict_info,
+                    set_info=field.set_info,
+                    tuple_info=field.tuple_info,
+                    callable_info=field.callable_info,
+                    struct_qualified_name=field.struct_qualified_name,
+                    anonymous_struct_info=field.anonymous_struct_info,
+                    as_reference=False,
+                )
+                field_parts.append(f"{field.name}: {rust_type}")
+            lines.append(f"    {variant.name} {{ {', '.join(field_parts)} }},")
+        lines.append("}")
+
+        if enum.methods:
+            lines.append("")
+            lines.append(f"impl {self._enum_rust_name(enum)} {{")
+            for method in enum.methods:
+                method_code = self._generate_enum_method(method, enum)
+                for line in method_code.split("\n"):
+                    lines.append(f"    {line}")
+            lines.append("}")
+
+        return "\n".join(lines)
+
     def _generate_struct_method(self, method: StructMethodInfo, struct: StructInstance) -> str:
         """Generate a single struct method."""
         previous_declared = self._declared_vars.copy()
+        previous_module = self._current_module
+        previous_constructor_owner = self._current_constructor_owner
+        self._current_module = struct.module_id
+        if method.source_module_id is not None:
+            self._current_module = method.source_module_id
         self._declared_vars = {name for name, _, _ in method.parameters}
         if not method.is_static:
             self._declared_vars.add("self")
@@ -1811,11 +1883,6 @@ class CodeGenVisitor(zincVisitor):
         ret_type = f" -> {method.return_type}" if method.return_type else ""
 
         # Generate body
-        previous_module = self._current_module
-        previous_constructor_owner = self._current_constructor_owner
-        self._current_module = struct.module_id
-        if method.source_module_id is not None:
-            self._current_module = method.source_module_id
         self._current_struct = struct.qualified_name
         self._current_struct_fields = {f.name: f for f in struct.fields}
         self._current_constructor_owner = (
@@ -1834,6 +1901,43 @@ class CodeGenVisitor(zincVisitor):
                 lines.append(f"    {line}")
         lines.append("}")
 
+        return "\n".join(lines)
+
+    def _generate_enum_method(self, method: StructMethodInfo, enum: EnumInstance) -> str:
+        """Generate a single static enum method."""
+        previous_declared = self._declared_vars.copy()
+        previous_module = self._current_module
+        previous_constructor_owner = self._current_constructor_owner
+        self._current_module = enum.module_id
+        if method.source_module_id is not None:
+            self._current_module = method.source_module_id
+        self._declared_vars = {name for name, _, _ in method.parameters}
+
+        param_strs = []
+        for name, type_ann, resolved in method.parameters:
+            if type_ann:
+                param_strs.append(f"{name}: {self._zinc_type_to_rust(type_ann)}")
+            elif resolved:
+                param_strs.append(f"{name}: {resolved}")
+            else:
+                param_strs.append(f"{name}: i64")
+
+        params = ", ".join(param_strs)
+        ret_type = f" -> {method.return_type}" if method.return_type else ""
+
+        self._current_struct = None
+        self._current_struct_fields = None
+        self._current_constructor_owner = method.constructor_owner_qualified_name or enum.qualified_name
+        body_stmts = self._generate_block(method.body_ctx)
+        self._current_constructor_owner = previous_constructor_owner
+        self._current_module = previous_module
+        self._declared_vars = previous_declared
+
+        lines = [f"fn {method.name}({params}){ret_type} {{"]
+        for stmt in body_stmts:
+            for line in stmt.split("\n"):
+                lines.append(f"    {line}")
+        lines.append("}")
         return "\n".join(lines)
 
     def _zinc_type_to_rust(self, zinc_type: str) -> str:
@@ -1858,7 +1962,20 @@ class CodeGenVisitor(zincVisitor):
             "bool": "bool",
             "context": "__ZincContext",
         }
-        return mapping.get(zinc_type.lower(), zinc_type)
+        lowered = zinc_type.lower()
+        if lowered in mapping:
+            return mapping[lowered]
+        if zinc_type == "Self":
+            return "Self"
+        if self._current_module is not None:
+            parts = zinc_type.split(".")
+            struct_symbol = self.module_graph.resolve_struct_path(self._current_module, parts)
+            if struct_symbol is not None:
+                return self._named_struct_rust_name(struct_symbol.qualified_name)
+            enum_symbol = self.module_graph.resolve_enum_path(self._current_module, parts)
+            if enum_symbol is not None:
+                return self._named_enum_rust_name(enum_symbol.qualified_name)
+        return zinc_type
 
     def _generate_function(self, func: FunctionInstance) -> str:
         """Generate a function definition using mangled name."""
@@ -2121,11 +2238,25 @@ class CodeGenVisitor(zincVisitor):
 
             static_target = self.module_graph.resolve_static_method_target(self._current_module, parts)
             if static_target:
-                struct_symbol, method_name = static_target
-                struct = self.atlas.structs.get(struct_symbol.qualified_name)
-                if struct:
-                    return f"{self._struct_rust_name(struct)}::{method_name}"
-                return f"{self.module_graph.rust_base_name(struct_symbol.qualified_name)}::{method_name}"
+                owner_symbol, method_name = static_target
+                if owner_symbol.kind == "struct":
+                    struct = self.atlas.structs.get(owner_symbol.qualified_name)
+                    if struct:
+                        return f"{self._struct_rust_name(struct)}::{method_name}"
+                if owner_symbol.kind == "enum":
+                    enum = self.atlas.enums.get(owner_symbol.qualified_name)
+                    if enum:
+                        return f"{self._enum_rust_name(enum)}::{method_name}"
+                return f"{self.module_graph.rust_base_name(owner_symbol.qualified_name)}::{method_name}"
+
+            enum_variant = self.module_graph.resolve_enum_variant_path(self._current_module, parts)
+            if enum_variant:
+                enum_symbol, variant_name = enum_variant
+                return f"{self._named_enum_rust_name(enum_symbol.qualified_name)}::{variant_name}"
+
+            enum_symbol = self.module_graph.resolve_enum_path(self._current_module, parts)
+            if enum_symbol:
+                return self._named_enum_rust_name(enum_symbol.qualified_name)
 
             return token
 
@@ -2168,6 +2299,8 @@ class CodeGenVisitor(zincVisitor):
             return self.visit(ctx.collectionLiteral())
         if ctx.tupleLiteral():
             return self.visit(ctx.tupleLiteral())
+        if ctx.enumVariantConstruction():
+            return self.visit(ctx.enumVariantConstruction())
         if ctx.structInstantiation():
             return self.visit(ctx.structInstantiation())
         if ctx.getText() == "self":
@@ -2559,7 +2692,11 @@ class CodeGenVisitor(zincVisitor):
         if collection_type == BaseType.TUPLE:
             tuple_index = self._integer_literal_value(ctx.expression(1))
             if tuple_index is not None:
-                return f"{collection}.{tuple_index}"
+                value = f"{collection}.{tuple_index}"
+                result_type = self._get_expr_type(ctx)
+                if result_type == BaseType.ENUM:
+                    return f"{value}.clone()"
+                return value
 
         index_ctx = ctx.expression(1)
         # Cast non-literal integer indices to usize (Rust Vec indexing requires usize)
@@ -2568,9 +2705,12 @@ class CodeGenVisitor(zincVisitor):
             index = f"({index} as usize)"
         if captured_collection_name is not None:
             result_type = self._get_expr_type(ctx)
-            if result_type in {BaseType.INTEGER, BaseType.FLOAT, BaseType.BOOLEAN}:
-                return f"{captured_collection_name}.lock().unwrap()[{index}]"
-            return f"{captured_collection_name}.lock().unwrap()[{index}].clone()"
+            if result_type == BaseType.ENUM:
+                return f"{captured_collection_name}.lock().unwrap()[{index}].clone()"
+            return f"{captured_collection_name}.lock().unwrap()[{index}]"
+        result_type = self._get_expr_type(ctx)
+        if result_type == BaseType.ENUM:
+            return f"{collection}[{index}].clone()"
         return f"{collection}[{index}]"
 
     def _is_integer_literal(self, ctx) -> bool:
@@ -2618,11 +2758,21 @@ class CodeGenVisitor(zincVisitor):
 
                 static_target = self.module_graph.resolve_static_method_target(self._current_module, path)
                 if static_target:
-                    struct_symbol, method_name = static_target
-                    struct = self.atlas.structs.get(struct_symbol.qualified_name)
-                    if struct:
-                        return f"{self._struct_rust_name(struct)}::{method_name}"
-                    return f"{self.module_graph.rust_base_name(struct_symbol.qualified_name)}::{method_name}"
+                    owner_symbol, method_name = static_target
+                    if owner_symbol.kind == "struct":
+                        struct = self.atlas.structs.get(owner_symbol.qualified_name)
+                        if struct:
+                            return f"{self._struct_rust_name(struct)}::{method_name}"
+                    if owner_symbol.kind == "enum":
+                        enum = self.atlas.enums.get(owner_symbol.qualified_name)
+                        if enum:
+                            return f"{self._enum_rust_name(enum)}::{method_name}"
+                    return f"{self.module_graph.rust_base_name(owner_symbol.qualified_name)}::{method_name}"
+
+                enum_variant = self.module_graph.resolve_enum_variant_path(self._current_module, path)
+                if enum_variant:
+                    enum_symbol, variant_name = enum_variant
+                    return f"{self._named_enum_rust_name(enum_symbol.qualified_name)}::{variant_name}"
 
                 struct_symbol = self.module_graph.resolve_struct_path(self._current_module, path)
                 if struct_symbol:
@@ -2630,6 +2780,13 @@ class CodeGenVisitor(zincVisitor):
                     if struct:
                         return self._struct_rust_name(struct)
                     return self.module_graph.rust_base_name(struct_symbol.qualified_name)
+
+                enum_symbol = self.module_graph.resolve_enum_path(self._current_module, path)
+                if enum_symbol:
+                    enum = self.atlas.enums.get(enum_symbol.qualified_name)
+                    if enum:
+                        return self._enum_rust_name(enum)
+                    return self.module_graph.rust_base_name(enum_symbol.qualified_name)
 
         if isinstance(ctx.expression(), ZincParser.PrimaryExprContext):
             primary = ctx.expression().primaryExpression()
@@ -3261,13 +3418,149 @@ class CodeGenVisitor(zincVisitor):
                     fields.append(f"{f.name}: {f.rust_default()}")
             fields_str = ", ".join(fields)
             return f"{name} {{ {fields_str} }}"
+        # Fallback - just use provided fields
+        fields = [f"{k}: {v}" for k, v in provided_fields.items()]
+        fields_str = ", ".join(fields)
+        return f"{name} {{ {fields_str} }}"
+
+    def visitEnumVariantConstruction(self, ctx: ZincParser.EnumVariantConstructionContext) -> str:
+        """Visit enum payload construction."""
+        variant_name = ctx.enumVariantPath().IDENTIFIER().getText()
+        owner_rust = ctx.enumVariantPath().qualifiedName().getText()
+        variant = None
+        if self._current_module is not None:
+            target = self.module_graph.resolve_enum_variant_path(
+                self._current_module,
+                ctx.enumVariantPath().getText().split("."),
+            )
+            if target is not None:
+                enum_symbol, variant_name = target
+                owner_rust = self._named_enum_rust_name(enum_symbol.qualified_name)
+                enum_info = self.atlas.enums.get(enum_symbol.qualified_name)
+                if enum_info is not None:
+                    variant = next(
+                        (candidate for candidate in enum_info.variants if candidate.name == variant_name),
+                        None,
+                    )
+            else:
+                struct_symbol = self.module_graph.resolve_struct_path(
+                    self._current_module,
+                    ctx.enumVariantPath().getText().split("."),
+                )
+                if struct_symbol is not None:
+                    struct = self.atlas.structs.get(struct_symbol.qualified_name)
+                    name = self._struct_rust_name(struct) if struct else ctx.enumVariantPath().getText()
+                    provided_fields = {
+                        field.IDENTIFIER().getText(): self.visit(field.expression())
+                        for field in ctx.fieldInit()
+                    }
+                    provided_field_exprs = {
+                        field.IDENTIFIER().getText(): field.expression()
+                        for field in ctx.fieldInit()
+                    }
+                    if struct is not None:
+                        fields = []
+                        for info in struct.fields:
+                            if info.name in provided_fields:
+                                value = provided_fields[info.name]
+                                if info.rust_type() == "String" and (
+                                    self._expr_is_string_literal(provided_field_exprs.get(info.name))
+                                    or self._looks_like_rust_string_literal(value)
+                                ):
+                                    value = f"String::from({value})"
+                                fields.append(f"{info.name}: {value}")
+                            else:
+                                fields.append(f"{info.name}: {info.rust_default()}")
+                        return f"{name} {{ {', '.join(fields)} }}"
+                    return f"{name} {{ {', '.join(f'{key}: {value}' for key, value in provided_fields.items())} }}"
+
+        provided = {
+            field.IDENTIFIER().getText(): (self.visit(field.expression()), field.expression())
+            for field in ctx.fieldInit()
+        }
+        if variant is not None:
+            field_parts = []
+            for field in variant.fields:
+                value, expr_ctx = provided[field.name]
+                field_parts.append(f"{field.name}: {self._coerce_owned(value, field.resolved_type, expr_ctx)}")
         else:
-            # Fallback - just use provided fields
-            fields = [f"{k}: {v}" for k, v in provided_fields.items()]
-            fields_str = ", ".join(fields)
-            return f"{name} {{ {fields_str} }}"
+            field_parts = [f"{name}: {value}" for name, (value, _expr) in provided.items()]
+        return f"{owner_rust}::{variant_name} {{ {', '.join(field_parts)} }}"
+
+    def _match_pattern_local_names(self, pattern_ctx) -> set[str]:
+        """Return the names introduced by one enum match pattern."""
+        enum_pattern = pattern_ctx.enumVariantPattern()
+        if enum_pattern is None:
+            return set()
+        names = set()
+        for field_pattern in enum_pattern.enumVariantFieldPattern():
+            identifiers = list(field_pattern.IDENTIFIER())
+            if identifiers:
+                names.add(identifiers[-1].getText())
+        return names
+
+    def _render_match_pattern(self, pattern_ctx) -> str:
+        """Render one match arm pattern to Rust."""
+        if pattern_ctx.getText() == "_":
+            return "_"
+        enum_pattern = pattern_ctx.enumVariantPattern()
+        if enum_pattern is None or self._current_module is None:
+            return pattern_ctx.getText()
+        target = self.module_graph.resolve_enum_variant_path(
+            self._current_module,
+            enum_pattern.enumVariantPath().getText().split("."),
+        )
+        if target is None:
+            return pattern_ctx.getText().replace(".", "::")
+        enum_symbol, variant_name = target
+        owner_rust = self._named_enum_rust_name(enum_symbol.qualified_name)
+        field_patterns = list(enum_pattern.enumVariantFieldPattern())
+        if not field_patterns:
+            return f"{owner_rust}::{variant_name}"
+        fields = []
+        for field_pattern in field_patterns:
+            identifiers = list(field_pattern.IDENTIFIER())
+            if len(identifiers) == 1:
+                fields.append(identifiers[0].getText())
+            else:
+                fields.append(f"{identifiers[0].getText()}: {identifiers[1].getText()}")
+        return f"{owner_rust}::{variant_name} {{ {', '.join(fields)} }}"
+
+    def _render_match_arm_body(self, arm_ctx, local_names: set[str]) -> list[str]:
+        """Render one match arm body with its pattern bindings in scope."""
+        previous_declared = set(self._declared_vars)
+        self._declared_vars.update(local_names)
+        try:
+            if arm_ctx.block() is not None:
+                return self._generate_block(arm_ctx.block())
+            rendered = self.visit(arm_ctx.expression())
+            return [rendered if rendered.endswith(";") else f"{rendered};"]
+        finally:
+            self._declared_vars = previous_declared
 
     # --- Statement Visitors (return Rust statement strings) ---
+
+    def visitMatchStatement(self, ctx: ZincParser.MatchStatementContext) -> str:
+        """Visit a statement-form enum match."""
+        scrutinee = self.visit(ctx.expression())
+        staged_name = self._staged_temp_name("match", ctx)
+        lines = [
+            "{",
+            f"    let {staged_name} = {scrutinee};",
+            f"    match {staged_name}.clone() {{",
+        ]
+        for arm_ctx in ctx.matchArm():
+            pattern = self._render_match_pattern(arm_ctx.pattern())
+            body = self._render_match_arm_body(
+                arm_ctx,
+                self._match_pattern_local_names(arm_ctx.pattern()),
+            )
+            lines.append(f"        {pattern} => {{")
+            self._append_block_lines(lines, body, 3)
+            lines.append("        },")
+        lines.append("    }")
+        lines.append("}")
+        return "\n".join(lines)
 
     def visitFunctionDeclaration(self, ctx: ZincParser.FunctionDeclarationContext) -> str | None:
         """Nested functions are generated separately as hidden top-level Rust functions."""

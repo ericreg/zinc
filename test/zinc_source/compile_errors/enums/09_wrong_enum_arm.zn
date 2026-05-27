@@ -1,0 +1,17 @@
+// expected-error: does not belong to enum 'Message'
+enum Message {
+    Quit
+}
+
+enum Other {
+    Quit
+}
+
+fn main() {
+    msg = Message.Quit
+    match msg {
+        Other.Quit => {
+            print("bad")
+        },
+    }
+}

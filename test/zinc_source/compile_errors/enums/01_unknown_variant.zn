@@ -1,0 +1,9 @@
+// expected-error: enum 'Message' has no variant 'Missing'
+enum Message {
+    Quit
+}
+
+fn main() {
+    msg = Message.Missing
+    print("{msg}")
+}

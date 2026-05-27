@@ -1,0 +1,31 @@
+enum Signal {
+    Start
+    Stop
+}
+
+fn main() {
+    updates = chan()
+    updates <- Signal.Start
+    updates <- Signal.Stop
+
+    first = <-updates
+    second = <-updates
+
+    match first {
+        Signal.Start => {
+            print("start")
+        },
+        Signal.Stop => {
+            print("stop")
+        },
+    }
+
+    match second {
+        Signal.Start => {
+            print("start")
+        },
+        Signal.Stop => {
+            print("stop")
+        },
+    }
+}

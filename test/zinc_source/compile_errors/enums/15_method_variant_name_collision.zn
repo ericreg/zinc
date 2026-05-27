@@ -1,0 +1,12 @@
+// expected-error: enum 'Message' has both a variant and method named 'Quit'
+enum Message {
+    Quit
+
+    fn Quit() {
+        print("bad")
+    }
+}
+
+fn main() {
+    print(Message.Quit)
+}

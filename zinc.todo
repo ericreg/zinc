@@ -15,10 +15,14 @@ Implemented core pillars
 - [x] Multiline strings
 - [x] Closure support
 - [x] strict type annotations
+- [] return type annotations
 - [] metaprogramming model (seamless compile time)
 - [] decorators
 - [] support for lambda expressions
-
+- [] component constraints ( basically generics-lite)
+- [] any types
+- [] enums
+- [] rust like numerical literals
 
 out x = 
 
@@ -50,11 +54,14 @@ Language ergonomics
 
 - [ ] Metadata/introspection surface
       Possible shape:
+      - `fqn()`: fully qualified name
       - `name()`: symbol name
       - `fields()`:
       - `type()`
       - `components()`
-      - line_num()
+      - `line_num()`
+      - `has_component()`
+      - `implements_component()`
 
       ternary operators
 

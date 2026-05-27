@@ -1,0 +1,14 @@
+// expected-error: non-exhaustive match for enum 'Message'
+enum Message {
+    Quit
+    Move { x: i32, y: i32 }
+}
+
+fn main() {
+    msg = Message.Quit
+    match msg {
+        Message.Quit => {
+            print("quit")
+        },
+    }
+}

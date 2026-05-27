@@ -1,0 +1,28 @@
+enum Message {
+    Quit
+    Move { x: i32, y: i32 }
+
+    fn origin() {
+        return Message.Move { x: 0, y: 0 }
+    }
+
+    fn quit() {
+        return Message.Quit
+    }
+}
+
+fn print_msg(msg: Message) {
+    match msg {
+        Message.Quit => {
+            print("quit")
+        },
+        Message.Move { x, y } => {
+            print("{x},{y}")
+        },
+    }
+}
+
+fn main() {
+    print_msg(Message.origin())
+    print_msg(Message.quit())
+}

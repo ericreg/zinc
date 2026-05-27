@@ -1,0 +1,19 @@
+import enums/_lib/messages as messages
+
+fn print_remote(item: messages.Remote) {
+    match item {
+        messages.Remote.Ready => {
+            print("ready")
+        },
+        messages.Remote.Payload { text } => {
+            print(text)
+        },
+    }
+}
+
+fn main() {
+    first = messages.ready()
+    second = messages.Remote.Payload { text: "remote" }
+    print_remote(first)
+    print_remote(second)
+}

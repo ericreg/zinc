@@ -1,0 +1,16 @@
+// expected-error: duplicate match arm for variant 'Message.Quit'
+enum Message {
+    Quit
+}
+
+fn main() {
+    msg = Message.Quit
+    match msg {
+        Message.Quit => {
+            print("one")
+        },
+        Message.Quit => {
+            print("two")
+        },
+    }
+}

@@ -31,6 +31,7 @@ COMPILE_ERROR_GROUPS = (
     "modules",
     "concurrency",
     "structs",
+    "enums",
     "callables",
     "control_flow",
 )

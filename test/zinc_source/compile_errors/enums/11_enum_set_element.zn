@@ -1,0 +1,9 @@
+// expected-error: set element cannot be an enum in v1
+enum Status {
+    Idle
+}
+
+fn main() {
+    items = { Status.Idle }
+    print("{items.len()}")
+}

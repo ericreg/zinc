@@ -1,0 +1,28 @@
+enum Message {
+    Quit
+    Move { x: i32, y: i32 }
+    Write { text: string }
+}
+
+fn handle(msg: Message) {
+    match msg {
+        Message.Quit => {
+            print("quit")
+        },
+        Message.Move { x, y } => {
+            print("move {x} {y}")
+        },
+        Message.Write { text } => {
+            print(text)
+        },
+    }
+}
+
+fn main() {
+    first = Message.Move { y: 20, x: 10 }
+    second = Message.Write { text: "hello" }
+    items = [first, second, Message.Quit]
+    handle(items[0])
+    handle(items[1])
+    handle(items[2])
+}

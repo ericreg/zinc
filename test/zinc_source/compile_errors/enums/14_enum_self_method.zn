@@ -1,0 +1,12 @@
+// expected-error: enum method 'Message.bad' cannot use self
+enum Message {
+    Quit
+
+    fn bad() {
+        print(self)
+    }
+}
+
+fn main() {
+    print(Message.Quit)
+}

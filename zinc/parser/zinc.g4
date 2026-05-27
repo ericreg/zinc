@@ -12,6 +12,7 @@ statement
     : importStatement
     | constDeclaration
     | structDeclaration
+    | enumDeclaration
     | functionDeclaration
     | asyncFunctionDeclaration
     | superAssignment
@@ -59,6 +60,10 @@ structDeclaration
     : 'struct' IDENTIFIER structComposition? '{' structBody '}'
     ;
 
+enumDeclaration
+    : 'enum' IDENTIFIER '{' enumBody '}'
+    ;
+
 structComposition
     : '[' orthogonalComposition ']'
     | '[' mergeComposition ']'
@@ -83,6 +88,19 @@ structMember
 
 structField
     : 'const'? IDENTIFIER ':' (type | expression)
+    ;
+
+enumBody
+    : enumVariant* functionDeclaration*
+    ;
+
+enumVariant
+    : IDENTIFIER
+    | IDENTIFIER '{' enumVariantFieldType (',' enumVariantFieldType)* ','? '}'
+    ;
+
+enumVariantFieldType
+    : IDENTIFIER ':' type
     ;
 
 // --- Function Declaration ---
@@ -181,14 +199,29 @@ pattern
     : '_'                                       // wildcard
     | literal                                   // literal pattern
     | IDENTIFIER                                // binding pattern
+    | enumVariantPattern                        // enum variant pattern
     | rangePattern                              // range pattern (e.g., 0..17)
     | '(' pattern (',' pattern)* ')'            // tuple pattern
     | IDENTIFIER '{' fieldPattern (',' fieldPattern)* ','? '}'  // struct pattern
     ;
 
+enumVariantPattern
+    : enumVariantPath
+    | enumVariantPath '{' enumVariantFieldPattern (',' enumVariantFieldPattern)* ','? '}'
+    ;
+
 rangePattern
     : INTEGER '..' INTEGER
     | INTEGER '..=' INTEGER
+    ;
+
+enumVariantPath
+    : qualifiedName '.' IDENTIFIER
+    ;
+
+enumVariantFieldPattern
+    : IDENTIFIER
+    | IDENTIFIER ':' IDENTIFIER
     ;
 
 fieldPattern
@@ -251,6 +284,7 @@ ifExpression
 primaryExpression
     : literal
     | anonymousStructLiteral
+    | enumVariantConstruction
     | structInstantiation
     | IDENTIFIER
     | 'self'
@@ -314,6 +348,10 @@ structInstantiation
     : qualifiedName '{' (fieldInit (','? fieldInit)* ','?)? '}'
     ;
 
+enumVariantConstruction
+    : enumVariantPath '{' (fieldInit (','? fieldInit)* ','?)? '}'
+    ;
+
 fieldInit
     : IDENTIFIER ':' expression
     ;
@@ -344,6 +382,7 @@ lambdaExpression
 // --- Keywords ---
 USE         : 'use';
 STRUCT      : 'struct';
+ENUM        : 'enum';
 CONST       : 'const';
 FN          : 'fn';
 ASYNC       : 'async';

@@ -1,0 +1,12 @@
+// expected-error: close-aware receive is not supported for enum channels in v1
+enum Signal {
+    Start
+}
+
+fn main() {
+    updates = chan()
+    updates <- Signal.Start
+    value, ok = <-updates
+    print("{ok}")
+    print("{value}")
+}

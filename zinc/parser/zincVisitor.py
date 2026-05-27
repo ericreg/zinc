@@ -49,6 +49,11 @@ class zincVisitor(ParseTreeVisitor):
         return self.visitChildren(ctx)
 
 
+    # Visit a parse tree produced by zincParser#enumDeclaration.
+    def visitEnumDeclaration(self, ctx:zincParser.EnumDeclarationContext):
+        return self.visitChildren(ctx)
+
+
     # Visit a parse tree produced by zincParser#structComposition.
     def visitStructComposition(self, ctx:zincParser.StructCompositionContext):
         return self.visitChildren(ctx)
@@ -76,6 +81,21 @@ class zincVisitor(ParseTreeVisitor):
 
     # Visit a parse tree produced by zincParser#structField.
     def visitStructField(self, ctx:zincParser.StructFieldContext):
+        return self.visitChildren(ctx)
+
+
+    # Visit a parse tree produced by zincParser#enumBody.
+    def visitEnumBody(self, ctx:zincParser.EnumBodyContext):
+        return self.visitChildren(ctx)
+
+
+    # Visit a parse tree produced by zincParser#enumVariant.
+    def visitEnumVariant(self, ctx:zincParser.EnumVariantContext):
+        return self.visitChildren(ctx)
+
+
+    # Visit a parse tree produced by zincParser#enumVariantFieldType.
+    def visitEnumVariantFieldType(self, ctx:zincParser.EnumVariantFieldTypeContext):
         return self.visitChildren(ctx)
 
 
@@ -184,8 +204,23 @@ class zincVisitor(ParseTreeVisitor):
         return self.visitChildren(ctx)
 
 
+    # Visit a parse tree produced by zincParser#enumVariantPattern.
+    def visitEnumVariantPattern(self, ctx:zincParser.EnumVariantPatternContext):
+        return self.visitChildren(ctx)
+
+
     # Visit a parse tree produced by zincParser#rangePattern.
     def visitRangePattern(self, ctx:zincParser.RangePatternContext):
+        return self.visitChildren(ctx)
+
+
+    # Visit a parse tree produced by zincParser#enumVariantPath.
+    def visitEnumVariantPath(self, ctx:zincParser.EnumVariantPathContext):
+        return self.visitChildren(ctx)
+
+
+    # Visit a parse tree produced by zincParser#enumVariantFieldPattern.
+    def visitEnumVariantFieldPattern(self, ctx:zincParser.EnumVariantFieldPatternContext):
         return self.visitChildren(ctx)
 
 
@@ -381,6 +416,11 @@ class zincVisitor(ParseTreeVisitor):
 
     # Visit a parse tree produced by zincParser#structInstantiation.
     def visitStructInstantiation(self, ctx:zincParser.StructInstantiationContext):
+        return self.visitChildren(ctx)
+
+
+    # Visit a parse tree produced by zincParser#enumVariantConstruction.
+    def visitEnumVariantConstruction(self, ctx:zincParser.EnumVariantConstructionContext):
         return self.visitChildren(ctx)
 
 

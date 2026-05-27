@@ -1,0 +1,9 @@
+// expected-error: enum variant 'Message.Move' has no field 'z'
+enum Message {
+    Move { x: i32, y: i32 }
+}
+
+fn main() {
+    msg = Message.Move { x: 1, y: 2, z: 3 }
+    print("{msg}")
+}
