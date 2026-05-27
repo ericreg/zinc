@@ -269,6 +269,15 @@ class zincListener(ParseTreeListener):
         pass
 
 
+    # Enter a parse tree produced by zincParser#assignmentOperator.
+    def enterAssignmentOperator(self, ctx:zincParser.AssignmentOperatorContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#assignmentOperator.
+    def exitAssignmentOperator(self, ctx:zincParser.AssignmentOperatorContext):
+        pass
+
+
     # Enter a parse tree produced by zincParser#superAssignment.
     def enterSuperAssignment(self, ctx:zincParser.SuperAssignmentContext):
         pass
@@ -509,6 +518,15 @@ class zincListener(ParseTreeListener):
 
     # Exit a parse tree produced by zincParser#membershipExpr.
     def exitMembershipExpr(self, ctx:zincParser.MembershipExprContext):
+        pass
+
+
+    # Enter a parse tree produced by zincParser#powerExpr.
+    def enterPowerExpr(self, ctx:zincParser.PowerExprContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#powerExpr.
+    def exitPowerExpr(self, ctx:zincParser.PowerExprContext):
         pass
 
 

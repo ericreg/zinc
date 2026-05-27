@@ -70,19 +70,16 @@ class TypeInfo:
 
 def parse_literal(literal_text: str) -> BaseType:
     """Parse a literal string and return its type."""
-    # Handle negative numbers
-    text = literal_text.lstrip("-")
+    from zinc.numeric_literals import parse_numeric_literal
 
-    if text.isdigit():
-        return BaseType.INTEGER
-    elif text.replace(".", "", 1).isdigit() and text.count(".") < 2:
-        return BaseType.FLOAT
-    elif is_string_literal(literal_text):
+    if is_string_literal(literal_text):
         return BaseType.STRING
-    elif literal_text in ("true", "false"):
+    if literal_text in ("true", "false"):
         return BaseType.BOOLEAN
-    else:
-        raise ValueError(f"Unknown literal type: {literal_text}")
+    parsed = parse_numeric_literal(literal_text)
+    if parsed is not None:
+        return parsed.base_type
+    raise ValueError(f"Unknown literal type: {literal_text}")
 
 
 def type_to_rust(base_type: BaseType) -> str:
@@ -125,6 +122,8 @@ def normalize_exact_type(type_name: str | None) -> str | None:
         "u32": "u32",
         "u64": "u64",
         "u128": "u128",
+        "usize": "usize",
+        "isize": "isize",
         "f8": "f8",
         "f16": "f16",
         "f32": "f32",
@@ -153,6 +152,8 @@ def exact_type_to_base(type_name: str | None) -> BaseType:
         "u32": BaseType.INTEGER,
         "u64": BaseType.INTEGER,
         "u128": BaseType.INTEGER,
+        "usize": BaseType.INTEGER,
+        "isize": BaseType.INTEGER,
         "f8": BaseType.FLOAT,
         "f16": BaseType.FLOAT,
         "f32": BaseType.FLOAT,

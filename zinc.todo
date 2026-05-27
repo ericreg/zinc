@@ -18,13 +18,12 @@ Implemented core pillars
 - [x] enums
 - [x] metaprogramming model (seamless compile time)
 - [x] component constraints ( basically generics-lite)
-- [] return type annotations
+- [x] return type annotations
+- [x] type alternatives, i32 | f32, numeric is sugar for i32 | f32 | u8 | ...
 
 - [] decorators
 - [] support for lambda expressions
-
 - [] rust like numerical literals
-- [] type alternatives, i32 | f32, numeric is sugar for i32 | f32 | u8 | ...
 - [] default parameters
 - [] iterator stuff such as for i in (1..upper_bound).step_by(2)
 - [] math operators, +=, *=, -=, etc 

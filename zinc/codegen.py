@@ -38,6 +38,7 @@ from zinc.meta_runtime import (
     metadata_runtime_definitions,
 )
 from zinc.modules import extract_identifier_path, struct_path_from_ctx
+from zinc.numeric_literals import is_numeric_literal, numeric_literal_value
 from zinc.parser.zincParser import zincParser as ZincParser
 from zinc.parser.zincVisitor import zincVisitor
 from zinc.string_literals import is_interpolated_string_literal, is_string_literal, to_rust_string_literal
@@ -2490,6 +2491,12 @@ class CodeGenVisitor(zincVisitor):
 
         return f"({left} {op} {right})"
 
+    def visitPowerExpr(self, ctx: ZincParser.PowerExprContext) -> str:
+        """Visit exponentiation expression."""
+        left = self.visit(ctx.expression(0))
+        right = self.visit(ctx.expression(1))
+        return self._render_power_expr(left, ctx.expression(0), right, ctx.expression(1), ctx)
+
     def _get_expr_type(self, ctx) -> BaseType:
         """Get the resolved type of an expression from the symbol table or atlas."""
         # Special handling for function calls - look up return type from atlas
@@ -2529,6 +2536,29 @@ class CodeGenVisitor(zincVisitor):
             float_exact = exact_type_to_rust(self._get_expr_exact_type(left_ctx), BaseType.FLOAT)
             return left, f"({right} as {float_exact})"
         return left, right
+
+    def _coerce_numeric_rhs_for_target(self, value: str, value_ctx, target_type: BaseType, target_exact_type: str | None) -> str:
+        """Cast integer RHS values when mutating a float target."""
+        value_type = self._get_expr_type(value_ctx)
+        if target_type == BaseType.FLOAT and value_type == BaseType.INTEGER:
+            float_exact = exact_type_to_rust(target_exact_type, BaseType.FLOAT)
+            return f"({value} as {float_exact})"
+        return value
+
+    def _render_power_expr(self, left: str, left_ctx, right: str, right_ctx, result_ctx) -> str:
+        """Render Zinc exponentiation to Rust pow/powf calls."""
+        result_type = self._get_expr_type(result_ctx)
+        if result_type == BaseType.FLOAT:
+            float_exact = exact_type_to_rust(self._get_expr_exact_type(result_ctx), BaseType.FLOAT)
+            left_type = self._get_expr_type(left_ctx)
+            right_type = self._get_expr_type(right_ctx)
+            if left_type == BaseType.INTEGER:
+                left = f"({left} as {float_exact})"
+            if right_type == BaseType.INTEGER:
+                right = f"({right} as {float_exact})"
+            return f"({left}).powf({right})"
+        int_exact = exact_type_to_rust(self._get_expr_exact_type(result_ctx), BaseType.INTEGER)
+        return f"({left} as {int_exact}).pow(({right}) as u32)"
 
     def _get_expr_symbol(self, ctx):
         """Get the resolved symbol for an expression-like context."""
@@ -2658,7 +2688,7 @@ class CodeGenVisitor(zincVisitor):
         if isinstance(ctx, ZincParser.PrimaryExprContext):
             primary = ctx.primaryExpression()
             if primary and primary.literal() and primary.literal().INTEGER():
-                return int(primary.literal().getText(), 0)
+                return int(numeric_literal_value(primary.literal().getText()))
         return None
 
     def _binding_names(self, ctx) -> list[str]:
@@ -2835,7 +2865,7 @@ class CodeGenVisitor(zincVisitor):
             primary = ctx.primaryExpression()
             if primary and primary.literal():
                 lit_text = primary.literal().getText()
-                return bool(lit_text) and not is_string_literal(lit_text) and "." not in lit_text
+                return bool(lit_text) and primary.literal().INTEGER() is not None
         return False
 
     def visitRangeExpr(self, ctx: ZincParser.RangeExprContext) -> str:
@@ -3409,7 +3439,7 @@ class CodeGenVisitor(zincVisitor):
                 if primary.literal():
                     lit_text = primary.literal().getText()
                     # Check if it's a numeric literal (not a string)
-                    if lit_text and not is_string_literal(lit_text):
+                    if lit_text and is_numeric_literal(lit_text):
                         return True
                 # Variable reference - check if it's a known literal variable
                 if primary.IDENTIFIER():
@@ -3463,7 +3493,7 @@ class CodeGenVisitor(zincVisitor):
             primary = expr.primaryExpression()
             if primary and primary.literal():
                 lit_text = primary.literal().getText()
-                return lit_text and not is_string_literal(lit_text)
+                return bool(lit_text) and is_numeric_literal(lit_text)
         return False
 
     def _render_print_call(self, args: list[str], arg_ctxs: list | None = None) -> str:
@@ -3847,6 +3877,10 @@ class CodeGenVisitor(zincVisitor):
         target = ctx.assignmentTarget().getText()
         target_ctx = ctx.assignmentTarget()
         expr = ctx.expression()
+        assignment_op = ctx.assignmentOperator().getText()
+
+        if assignment_op != "=":
+            return self._render_compound_assignment(ctx, assignment_op)
 
         if target_ctx.tupleAssignmentTarget() and isinstance(expr, ZincParser.ChannelReceiveExprContext):
             names = self._binding_names(target_ctx.tupleAssignmentTarget())
@@ -4031,6 +4065,50 @@ class CodeGenVisitor(zincVisitor):
                     )
 
         return f"{target} = {value};"
+
+    def _render_compound_assignment(self, ctx: ZincParser.VariableAssignmentContext, assignment_op: str) -> str:
+        """Render numeric compound assignment operators."""
+        target_ctx = ctx.assignmentTarget()
+        expr = ctx.expression()
+        target = target_ctx.getText()
+        target_symbol = None
+        if target_ctx.IDENTIFIER():
+            target_symbol = self.symbols.lookup_by_interval(target_ctx.IDENTIFIER().getSourceInterval(), self._current_function)
+
+        target_type = target_symbol.resolved_type if target_symbol else self._get_expr_type(target_ctx)
+        target_exact_type = target_symbol.exact_type if target_symbol else self._get_expr_exact_type(target_ctx)
+        value = self._visit_expression_with_expectations(
+            expr,
+            expected_type=target_type if target_type != BaseType.UNKNOWN else None,
+            coerce_scalar=False,
+        )
+        if assignment_op != "**=":
+            value = self._coerce_numeric_rhs_for_target(value, expr, target_type, target_exact_type)
+
+        if target_ctx.IDENTIFIER() and target_symbol is not None:
+            target = self._rust_binding_name(target_symbol.unique_name) if target_symbol.unique_name in self._captured_binding_names else target
+
+        if assignment_op == "**=":
+            power_value = self._render_power_assignment_expr(target, target_type, target_exact_type, value, expr)
+            return f"{target} = {power_value};"
+        return f"{target} {assignment_op} {value};"
+
+    def _render_power_assignment_expr(
+        self,
+        target: str,
+        target_type: BaseType,
+        target_exact_type: str | None,
+        right: str,
+        right_ctx,
+    ) -> str:
+        """Render the RHS for exponentiation assignment."""
+        if target_type == BaseType.FLOAT:
+            float_exact = exact_type_to_rust(target_exact_type, BaseType.FLOAT)
+            right_type = self._get_expr_type(right_ctx)
+            if right_type == BaseType.INTEGER:
+                right = f"({right} as {float_exact})"
+            return f"({target}).powf({right})"
+        return f"({target}).pow(({right}) as u32)"
 
     def visitIfExpr(self, ctx: ZincParser.IfExprContext) -> str:
         """Visit an if-expression wrapper."""

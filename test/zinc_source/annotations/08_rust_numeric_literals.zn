@@ -1,0 +1,36 @@
+fn id_i16(x: i16) {
+    return x
+}
+
+fn id_u8(x: u8) {
+    return x
+}
+
+fn id_usize(x: usize) {
+    return x
+}
+
+fn id_f32(x: f32) {
+    return x
+}
+
+fn id_f64(x: f64) {
+    return x
+}
+
+fn main() {
+    print(1_000)
+    print(123_)
+    print(0b________1)
+    print(0b1111_0000_u16)
+    print(id_i16(0o70_i16))
+    print(id_u8(0xff_u8))
+    print(0x01_f32)
+    print(id_usize(5usize))
+    print(2.)
+    print(1e_6)
+    print(1e+_9)
+    print(id_f32(5_f32))
+    print(id_f32(123.456_f32))
+    print(id_f64(12E+99_f64))
+}

@@ -34,7 +34,22 @@ from zinc.parser.zincParser import zincParser as ZincParser
 from zinc.string_literals import is_string_literal, to_rust_string_literal
 
 CompositionMode = str
-NUMERIC_TYPE_ALTERNATIVES = ("i8", "i16", "i32", "i64", "i128", "u8", "u16", "u32", "u64", "u128", "f32", "f64")
+NUMERIC_TYPE_ALTERNATIVES = (
+    "i8",
+    "i16",
+    "i32",
+    "i64",
+    "i128",
+    "isize",
+    "u8",
+    "u16",
+    "u32",
+    "u64",
+    "u128",
+    "usize",
+    "f32",
+    "f64",
+)
 
 
 @dataclass
@@ -139,6 +154,8 @@ class StructFieldInfo:
                 "u32": "u32",
                 "u64": "u64",
                 "u128": "u128",
+                "usize": "usize",
+                "isize": "isize",
                 "f8": "f8",
                 "f16": "f16",
                 "f32": "f32",
@@ -167,6 +184,8 @@ class StructFieldInfo:
             "u32": "0",
             "u64": "0",
             "u128": "0",
+            "usize": "0",
+            "isize": "0",
             "f8": "0.0",
             "f16": "0.0",
             "f32": "0.0",

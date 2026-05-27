@@ -35,6 +35,10 @@ name = "annotations_07_type_alternatives"
 path = "src/annotations/07_type_alternatives.rs"
 
 [[bin]]
+name = "annotations_08_rust_numeric_literals"
+path = "src/annotations/08_rust_numeric_literals.rs"
+
+[[bin]]
 name = "arithmetic"
 path = "src/arithmetic.rs"
 
@@ -713,6 +717,10 @@ path = "src/monomorphization/19_generic_with_arrays.rs"
 [[bin]]
 name = "monomorphization_20_generic_with_channels"
 path = "src/monomorphization/20_generic_with_channels.rs"
+
+[[bin]]
+name = "operators_01_math_shorthand"
+path = "src/operators/01_math_shorthand.rs"
 
 [[bin]]
 name = "reassign_type"

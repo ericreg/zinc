@@ -152,7 +152,17 @@ typedVariableAssignment
     ;
 
 variableAssignment
-    : assignmentTarget '=' expression
+    : assignmentTarget assignmentOperator expression
+    ;
+
+assignmentOperator
+    : '='
+    | '+='
+    | '-='
+    | '*='
+    | '/='
+    | '%='
+    | '**='
     ;
 
 superAssignment
@@ -290,6 +300,7 @@ expression
     | 'await' expression                                        # awaitExpr
     | '<-' expression                                           # channelReceiveExpr
     | ('!' | '-' | 'not') expression                            # unaryExpr
+    | <assoc=right> expression '**' expression                  # powerExpr
     | expression ('*' | '/' | '%') expression                   # multiplicativeExpr
     | expression ('+' | '-') expression                         # additiveExpr
     | expression ('..' | '..=') expression                      # rangeExpr
@@ -472,18 +483,18 @@ ERR         : 'Err';
 SOME        : 'Some';
 NONE        : 'None';
 
-// --- Literals ---
-INTEGER
-    : '0'
-    | [1-9] [0-9]*
-    | '0x' [0-9a-fA-F]+
-    | '0o' [0-7]+
-    | '0b' [01]+
+FLOAT
+    : DecLiteral '.' DecLiteral FloatExponent? FloatSuffix?
+    | DecLiteral '.' {self._input.LA(1) != ord('.') and self._input.LA(1) != ord('_') and not (ord('0') <= self._input.LA(1) <= ord('9')) and not (ord('A') <= self._input.LA(1) <= ord('Z')) and not (ord('a') <= self._input.LA(1) <= ord('z'))}?
+    | DecLiteral FloatExponent FloatSuffix?
+    | DecLiteral FloatSuffix
     ;
 
-FLOAT
-    : [0-9]+ '.' [0-9]+ ([eE] [+-]? [0-9]+)?
-    | [0-9]+ [eE] [+-]? [0-9]+
+INTEGER
+    : DecLiteral IntegerSuffix?
+    | BinLiteral IntegerSuffix?
+    | OctLiteral IntegerSuffix?
+    | HexLiteral IntegerSuffix?
     ;
 
 STRING
@@ -499,6 +510,46 @@ fragment EscapeSequence
 
 fragment HexDigit
     : [0-9a-fA-F]
+    ;
+
+fragment DecLiteral
+    : [0-9] [0-9_]*
+    ;
+
+fragment BinLiteral
+    : '0b' '_'* [01] [01_]*
+    ;
+
+fragment OctLiteral
+    : '0o' '_'* [0-7] [0-7_]*
+    ;
+
+fragment HexLiteral
+    : '0x' '_'* [0-9a-fA-F] [0-9a-fA-F_]*
+    ;
+
+fragment IntegerSuffix
+    : 'u8'
+    | 'i8'
+    | 'u16'
+    | 'i16'
+    | 'u32'
+    | 'i32'
+    | 'u64'
+    | 'i64'
+    | 'u128'
+    | 'i128'
+    | 'usize'
+    | 'isize'
+    ;
+
+fragment FloatSuffix
+    : 'f32'
+    | 'f64'
+    ;
+
+fragment FloatExponent
+    : [eE] [+-]? '_'* [0-9] [0-9_]*
     ;
 
 // --- Identifiers ---

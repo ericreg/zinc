@@ -70,6 +70,7 @@ from zinc.modules import (
     struct_composition_from_ctx,
     struct_path_from_ctx,
 )
+from zinc.numeric_literals import numeric_literal_value, parse_numeric_literal
 from zinc.parser.zincLexer import zincLexer as ZincLexer
 from zinc.parser.zincParser import zincParser as ZincParser
 from zinc.parser.zincVisitor import zincVisitor
@@ -1651,9 +1652,9 @@ class SymbolTableVisitor(zincVisitor):
         """Parse a literal token into a Python value for fit checks."""
         base_type = parse_literal(text)
         if base_type == BaseType.INTEGER:
-            return int(text, 0)
+            return int(numeric_literal_value(text))
         if base_type == BaseType.FLOAT:
-            return float(text)
+            return float(numeric_literal_value(text))
         if base_type == BaseType.BOOLEAN:
             return text == "true"
         if base_type == BaseType.STRING:
@@ -2100,11 +2101,13 @@ class SymbolTableVisitor(zincVisitor):
             "i32": (-(2**31), 2**31 - 1),
             "i64": (-(2**63), 2**63 - 1),
             "i128": (-(2**127), 2**127 - 1),
+            "isize": (-(2**63), 2**63 - 1),
             "u8": (0, 2**8 - 1),
             "u16": (0, 2**16 - 1),
             "u32": (0, 2**32 - 1),
             "u64": (0, 2**64 - 1),
             "u128": (0, 2**128 - 1),
+            "usize": (0, 2**64 - 1),
         }
         bounds = ranges.get(exact_type)
         if bounds is None:
@@ -4808,7 +4811,7 @@ class SymbolTableVisitor(zincVisitor):
         if isinstance(ctx, ZincParser.PrimaryExprContext):
             primary = ctx.primaryExpression()
             if primary and primary.literal() and primary.literal().INTEGER():
-                return int(primary.literal().getText(), 0)
+                return int(numeric_literal_value(primary.literal().getText()))
         return None
 
     def _expr_symbol(self, ctx) -> Symbol | None:
@@ -6305,10 +6308,11 @@ class SymbolTableVisitor(zincVisitor):
         """Visit a literal and create a symbol for it."""
         text = ctx.getText()
         base_type = parse_literal(text)
+        parsed_number = parse_numeric_literal(text) if base_type in {BaseType.INTEGER, BaseType.FLOAT} else None
         self.symbols.define_temp(
             resolved_type=base_type,
             interval=ctx.getSourceInterval(),
-            exact_type=default_exact_type(base_type),
+            exact_type=parsed_number.exact_type if parsed_number is not None else default_exact_type(base_type),
             kind=SymbolKind.LITERAL,
             constant_value=self._parse_constant_literal(text),
         )
@@ -6841,6 +6845,32 @@ class SymbolTableVisitor(zincVisitor):
                 constant_value = left_symbol.constant_value / right_symbol.constant_value
             elif op == "%":
                 constant_value = left_symbol.constant_value % right_symbol.constant_value
+        self.symbols.define_temp(
+            resolved_type=result_type,
+            interval=ctx.getSourceInterval(),
+            exact_type=promote_exact_numeric(
+                left_symbol.exact_type if left_symbol else None,
+                right_symbol.exact_type if right_symbol else None,
+                result_type,
+            ),
+            constant_value=constant_value,
+        )
+        return result_type
+
+    def visitPowerExpr(self, ctx: ZincParser.PowerExprContext) -> BaseType:
+        """Handle exponentiation."""
+        left_info = self._value_info_for_value_context(ctx.expression(0))
+        right_info = self._value_info_for_value_context(ctx.expression(1))
+        left_type = left_info.base_type
+        right_type = right_info.base_type
+        if left_type not in {BaseType.INTEGER, BaseType.FLOAT} or right_type not in {BaseType.INTEGER, BaseType.FLOAT}:
+            raise ZincTypeError("exponentiation requires numeric operands")
+        result_type = TypeInfo.promote(TypeInfo(left_type), TypeInfo(right_type)).base
+        left_symbol = self._expr_symbol(ctx.expression(0))
+        right_symbol = self._expr_symbol(ctx.expression(1))
+        constant_value = None
+        if left_symbol and right_symbol and left_symbol.constant_value is not None and right_symbol.constant_value is not None:
+            constant_value = left_symbol.constant_value**right_symbol.constant_value
         self.symbols.define_temp(
             resolved_type=result_type,
             interval=ctx.getSourceInterval(),
@@ -8712,6 +8742,11 @@ class SymbolTableVisitor(zincVisitor):
         """Visit variable assignment with shadowing support."""
         expr_type = self.visit(ctx.expression())
         target = ctx.assignmentTarget()
+        assignment_op = ctx.assignmentOperator().getText()
+
+        if assignment_op != "=":
+            self._visit_compound_assignment(ctx, expr_type, assignment_op)
+            return
 
         if target.tupleAssignmentTarget() and isinstance(ctx.expression(), ZincParser.ChannelReceiveExprContext):
             tokens = self._binding_tokens(target.tupleAssignmentTarget())
@@ -9303,6 +9338,52 @@ class SymbolTableVisitor(zincVisitor):
                 resolved_type=expr_type,
                 interval=target.getSourceInterval(),
             )
+
+    def _visit_compound_assignment(self, ctx: ZincParser.VariableAssignmentContext, expr_type: BaseType, assignment_op: str) -> None:
+        """Resolve numeric compound assignment without creating shadow bindings."""
+        target = ctx.assignmentTarget()
+        if target.tupleAssignmentTarget():
+            raise ZincTypeError(f"operator '{assignment_op}' cannot be used with tuple destructuring")
+        if expr_type not in {BaseType.INTEGER, BaseType.FLOAT}:
+            raise ZincTypeError(f"operator '{assignment_op}' requires a numeric value")
+
+        if target.IDENTIFIER():
+            var_name = target.IDENTIFIER().getText()
+            existing = self.symbols.lookup_by_id(var_name)
+            if existing is None:
+                raise ZincTypeError(f"operator '{assignment_op}' requires existing variable '{var_name}'")
+            if existing.is_captured_ref:
+                raise ZincTypeError(f"assignment to captured outer variable '{var_name}' requires '<<-'")
+            if existing.resolved_type not in {BaseType.INTEGER, BaseType.FLOAT}:
+                raise ZincTypeError(f"operator '{assignment_op}' requires a numeric target")
+            if existing.resolved_type == BaseType.INTEGER and expr_type == BaseType.FLOAT:
+                raise ZincTypeError(f"operator '{assignment_op}' cannot assign a float value to integer variable '{var_name}'")
+
+            expr_symbol = self._expr_symbol(ctx.expression())
+            can_cast_integer_to_float = existing.resolved_type == BaseType.FLOAT and expr_type == BaseType.INTEGER
+            if not can_cast_integer_to_float and not self._assignment_metadata_compatible(
+                existing.resolved_type,
+                expr_type,
+                expected_exact_type=existing.declared_exact_type or existing.exact_type,
+                actual_exact_type=expr_symbol.exact_type if expr_symbol else None,
+                actual_constant_value=self._literal_constant_value_for_expr(ctx.expression(), expr_symbol),
+            ):
+                expected_label = existing.declared_exact_type or existing.exact_type or type_to_rust(existing.resolved_type)
+                raise ZincTypeError(f"variable '{var_name}' expects a compatible '{expected_label}' value")
+
+            existing.is_mutated = True
+            existing.constant_value = None
+            self.symbols.define_temp(
+                resolved_type=existing.resolved_type,
+                interval=target.getSourceInterval(),
+                exact_type=existing.exact_type,
+            )
+            return
+
+        self.symbols.define_temp(
+            resolved_type=expr_type,
+            interval=target.getSourceInterval(),
+        )
 
     def visitReturnStatement(self, ctx: ZincParser.ReturnStatementContext) -> None:
         """Visit return statement and track return type."""
