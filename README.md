@@ -360,21 +360,27 @@ Zinc uses a 3-pass compiler:
 
 ## TODO / Roadmap
 
-
 - [x] Modules and imports
 - [x] Dynamic variable rebinding
 - [x] Monomorphized functions
-- [x] Structs with methods
-- [x] Struct composition, forward and orthogonal
-- [x] First-class callables
-- [x] Channels, spawn, bounded channels, and select
-- [x] Arrays, dicts, sets, tuples, sorted maps, sorted sets
-- [x] Base types
-- [x] Multiline strings
+- [x] Structs and Struct composition
+- [x] Enums
+- [x] Callables and function vars/args
 - [x] Closure support
+- [x] Channels, spawn, close, and select
+- [x] Arrays (with list auto promotion) and Tuples
+- [x] Associative collections: dict, set, sort_dict, sort_set
+- [x] Multiline strings
 - [x] Strict type annotations
+- [x] Compile Time Metaprogramming
+- [x] Pattern matching
+- [x] Generic-emulation with `infer` and type constraints
+- [x] String interpolation
+- [x] Basic control flow: if/else, for loops, while loops, match expressions  
+
+Remaining items:
+
 - [ ] Error handling
-- [ ] Metaprogramming model (seamless compile time)
 - [ ] Decorators
 - [ ] Lambda expressions
 - [ ] Bimaps
