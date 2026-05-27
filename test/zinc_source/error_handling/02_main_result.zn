@@ -1,0 +1,12 @@
+fn run(flag: bool) -> Result<(), string> {
+    if flag {
+        return Err("boom")
+    }
+    return Ok(())
+}
+
+fn main() -> Result<(), string> {
+    return try {
+        run(false)
+    }
+}

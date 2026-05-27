@@ -1,0 +1,5 @@
+// expected-error: Err\(\.\.\.\) requires an expected Result<T, E> context
+fn main() {
+    value = Err("boom")
+    print(value)
+}

@@ -1,0 +1,5 @@
+// expected-error: None requires an expected Option<T> context
+fn main() {
+    value = None
+    print(value)
+}

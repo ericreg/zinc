@@ -1,0 +1,23 @@
+// expected-error: cannot mix Result and Option propagation in the same try block
+fn parse(flag: bool) -> Result<i64, string> {
+    if flag {
+        return Ok(1)
+    }
+    return Err("boom")
+}
+
+fn maybe(flag: bool) -> Option<i64> {
+    if flag {
+        return Some(1)
+    }
+    return None
+}
+
+fn main() {
+    value = try {
+        first = parse(true)
+        second = maybe(true)
+        first + second
+    }
+    print(value)
+}

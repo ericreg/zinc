@@ -1,0 +1,4 @@
+// expected-error: fail is only valid in Result-returning functions or Result try blocks
+fn main() {
+    fail "boom"
+}

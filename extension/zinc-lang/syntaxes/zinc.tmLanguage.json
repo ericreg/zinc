@@ -13,12 +13,14 @@
     { "include": "#anonymous_structs" },
     { "include": "#declarations" },
     { "include": "#types" },
+    { "include": "#builtin_types" },
     { "include": "#module_paths" },
     { "include": "#struct_instantiations" },
     { "include": "#constants" },
     { "include": "#self" },
     { "include": "#patterns_zinc" },
     { "include": "#keywords" },
+    { "include": "#result_option_constructors" },
     { "include": "#builtins" },
     { "include": "#function_calls" },
     { "include": "#operators" },
@@ -42,7 +44,9 @@
             { "include": "#strings" },
             { "include": "#numbers" },
             { "include": "#types" },
+            { "include": "#builtin_types" },
             { "include": "#keywords" },
+            { "include": "#result_option_constructors" },
             { "include": "#builtins" },
             { "include": "#operators" },
             { "include": "#punctuation" },
@@ -139,7 +143,10 @@
         { "include": "#numbers" },
         { "include": "#constants" },
         { "include": "#self" },
+        { "include": "#builtin_types" },
         { "include": "#keywords" },
+        { "include": "#result_option_constructors" },
+        { "include": "#builtins" },
         { "include": "#function_calls" },
         { "include": "#operators" },
         { "include": "#punctuation" },
@@ -382,6 +389,14 @@
         }
       ]
     },
+    "builtin_types": {
+      "patterns": [
+        {
+          "name": "support.type.builtin.zinc",
+          "match": "\\b(?:Context|Result|Option)\\b"
+        }
+      ]
+    },
     "module_paths": {
       "name": "entity.name.namespace.zinc",
       "match": "\\b[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)+\\b"
@@ -399,6 +414,10 @@
         {
           "name": "constant.language.nil.zinc",
           "match": "\\bnil\\b"
+        },
+        {
+          "name": "constant.language.option.none.zinc",
+          "match": "\\bNone\\b"
         }
       ]
     },
@@ -418,7 +437,7 @@
       "patterns": [
         {
           "name": "keyword.control.zinc",
-          "match": "\\b(?:if|else|for|in|while|loop|match|return|break|continue)\\b"
+          "match": "\\b(?:if|else|for|in|while|loop|match|return|break|continue|try|fail)\\b"
         },
         {
           "name": "keyword.other.concurrency.zinc",
@@ -434,7 +453,15 @@
         },
         {
           "name": "storage.type.special.zinc",
-          "match": "\\b(?:infer|Context)\\b"
+          "match": "\\b(?:infer)\\b"
+        }
+      ]
+    },
+    "result_option_constructors": {
+      "patterns": [
+        {
+          "name": "support.function.constructor.zinc",
+          "match": "\\b(?:Ok|Err|Some)\\s*(?=\\()"
         }
       ]
     },

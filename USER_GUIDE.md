@@ -1319,10 +1319,9 @@ fn main() {
 
 - `{}` is not allowed because it is ambiguous.
 - Empty arrays, sets, and dictionaries require type inference from later usage.
-- Float dictionary keys and float set elements are rejected.
+- Float dictionary keys and float set elements are rejected. (for now)
 - Tuple indexing requires ..a literal integer index.
 - Dictionary mutation during dictionary iteration is rejected.
-- Local variable annotations use `name: Type = expression` and are strict.
 - External package dependencies and re-export syntax are not implemented yet.
 
 ## Development Tests

@@ -6,11 +6,12 @@ Zinc is a modern programming language that compiles to Rust. It combines Go-like
 
 - **Compiles to Rust** - Leverages Rust's performance, safety, and ecosystem
 - **Go-style Concurrency** - Channels and `spawn` for easy concurrent programming
-- **Dynamic Typing** - Variables can be reassigned to different types
+- **Python-style Dynamic Typing** - Variables can be reassigned to different types
 - **Type Inference** - No explicit type annotations required
-- **Strict Annotations** - Any written type annotation is enforced at compile time
+- **Strict Type Annotations** - Any written type annotation is enforced at compile time
 - **Monomorphization** - Generic functions are specialized at compile time
-- **Structs with Methods** - Object-oriented programming with static and instance methods
+- **Rich Compile-Time Metadata** - Object-oriented programming with static and instance methods
+
 
 ## Getting Started
 
@@ -28,6 +29,8 @@ python -m zinc.main check program.zn
 ```
 
 ## Language Guide
+
+see [USER_GUIDE.md](./USER_GUIDE.md)
 
 ### Variables & Dynamic Typing
 
@@ -377,36 +380,14 @@ Zinc uses a 3-pass compiler:
 - [x] Generic-emulation with `infer` and type constraints
 - [x] String interpolation
 - [x] Basic control flow: if/else, for loops, while loops, match expressions  
-
-Remaining items:
-
-- [ ] Error handling
+- [x] Error handling: `try`, `match`, `fail`
+- [x] Modules and imports
 - [ ] Decorators
 - [ ] Lambda expressions
 - [ ] Bimaps
 - [ ] Priority queues
-
-
-
-
-- [x] Dynamic variable assignments
-- [x] Functions with monomorphic overloading
-- [x] Arithmetic expressions
-- [x] If / else if / else
-- [x] Channels (unbounded and bounded)
-- [x] For loops
-- [x] Arrays/lists
-- [x] String interpolation
-- [x] Constants
-- [x] Structs/objects with methods
-- [x] While loops
-- [x] Maps
-- [x] Sets
-- [x] Enums
-
-- [x] Modules and imports
-- [ ] A ton of tests
-- [ ] Tiny book documentation
+- [ ] Even more tests
+- [ ] mdbook documentation
 
 ## Development
 

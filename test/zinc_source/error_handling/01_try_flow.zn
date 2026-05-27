@@ -1,0 +1,80 @@
+fn parse(flag: bool) -> Result<i64, string> {
+    if flag {
+        return Ok(41)
+    }
+    return Err("boom")
+}
+
+fn maybe(flag: bool) -> Option<i64> {
+    if flag {
+        return Some(7)
+    }
+    return None
+}
+
+fn plus_two(flag: bool) -> Result<i64, string> {
+    return try {
+        value = parse(flag)
+        value + 1
+    }
+}
+
+fn guarded(flag: bool) -> Result<i64, string> {
+    return try {
+        if not flag {
+            fail "nope"
+        }
+        9
+    }
+}
+
+fn main() {
+    block_value = {
+        left = 1
+        right = 2
+        left + right
+    }
+    print(block_value)
+
+    result = try {
+        value = plus_two(true)
+        value + 1
+    }
+    match result {
+        Ok(value) => {
+            print(value)
+        },
+        Err(message) => {
+            print(message)
+        },
+    }
+
+    match try {
+        value = maybe(false)
+        value + 1
+    } {
+        Some(value) => {
+            print(value)
+        },
+        None => {
+            print("none")
+        },
+    }
+
+    match guarded(false) {
+        Ok(value) => {
+            print(value)
+        },
+        Err(message) => {
+            print(message)
+        },
+    }
+
+    typed_result: Result<i64, string> = Ok(1)
+    typed_option: Option<string> = Some("hi")
+    print(type(typed_result).family_name)
+    print(type(typed_result).args[0].name)
+    print(type(typed_result).args[1].name)
+    print(type(typed_option).family_name)
+    print(type(typed_option).args[0].name)
+}

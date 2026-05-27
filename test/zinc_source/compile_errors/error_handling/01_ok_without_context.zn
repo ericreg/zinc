@@ -1,0 +1,5 @@
+// expected-error: Ok\(\.\.\.\) requires an expected Result<T, E> context
+fn main() {
+    value = Ok(1)
+    print(value)
+}

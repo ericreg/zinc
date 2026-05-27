@@ -1,0 +1,4 @@
+// expected-error: syntax error\(s\) while parsing
+fn Ok() {
+    print(1)
+}
