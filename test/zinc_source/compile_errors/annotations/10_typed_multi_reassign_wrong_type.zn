@@ -1,0 +1,6 @@
+// expected-error: variable 'x' expects a compatible 'f32' value
+
+fn main() {
+    x, y, z: f32 = 1
+    x = "cat"
+}

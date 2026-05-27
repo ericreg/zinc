@@ -233,6 +233,14 @@ class zincListener(ParseTreeListener):
     def exitTypedVariableAssignment(self, ctx: zincParser.TypedVariableAssignmentContext):
         pass
 
+    # Enter a parse tree produced by zincParser#typedAssignmentTarget.
+    def enterTypedAssignmentTarget(self, ctx: zincParser.TypedAssignmentTargetContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#typedAssignmentTarget.
+    def exitTypedAssignmentTarget(self, ctx: zincParser.TypedAssignmentTargetContext):
+        pass
+
     # Enter a parse tree produced by zincParser#variableAssignment.
     def enterVariableAssignment(self, ctx: zincParser.VariableAssignmentContext):
         pass

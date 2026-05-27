@@ -122,6 +122,10 @@ class zincVisitor(ParseTreeVisitor):
     def visitTypedVariableAssignment(self, ctx: zincParser.TypedVariableAssignmentContext):
         return self.visitChildren(ctx)
 
+    # Visit a parse tree produced by zincParser#typedAssignmentTarget.
+    def visitTypedAssignmentTarget(self, ctx: zincParser.TypedAssignmentTargetContext):
+        return self.visitChildren(ctx)
+
     # Visit a parse tree produced by zincParser#variableAssignment.
     def visitVariableAssignment(self, ctx: zincParser.VariableAssignmentContext):
         return self.visitChildren(ctx)

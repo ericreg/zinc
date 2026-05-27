@@ -6,4 +6,19 @@ fn main() {
     (name, score) = ("ada", 9)
     print("{name}")
     print("{score}")
+
+    x, y, z = 1
+    print("{x} {y} {z}")
+    x = "cat"
+    y = 3.14
+    z = 3
+    print("{x} {y} {z}")
+
+    fx, fy, fz: f32 = 1
+    print("{fx} {fy} {fz}")
+
+    value, label, item = (3.14, "cat", struct { id: 123456 })
+    print("{value}")
+    print("{label}")
+    print("{item.id}")
 }

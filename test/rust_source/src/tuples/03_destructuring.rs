@@ -203,6 +203,11 @@ impl __ZincContext {
     }
 }
 
+#[derive(Clone, Default)]
+struct __ZincAnonStruct_AnonStruct_id_i64 {
+    id: i64,
+}
+
 fn main() {
     let (a, b) = (2, 3);
     println!("{}", a);
@@ -210,4 +215,22 @@ fn main() {
     let (name, score) = (String::from("ada"), 9);
     println!("{}", name);
     println!("{}", score);
+    let __zinc_multi_assign_41_47 = 1;
+    let x = __zinc_multi_assign_41_47.clone();
+    let y = __zinc_multi_assign_41_47.clone();
+    let mut z = __zinc_multi_assign_41_47;
+    println!("{} {} {}", x, y, z);
+    let x = "cat";
+    let y = 3.14;
+    z = 3;
+    println!("{} {} {}", x, y, z);
+    let __zinc_multi_assign_65_73 = 1;
+    let fx: f32 = (__zinc_multi_assign_65_73.clone() as f32);
+    let fy: f32 = (__zinc_multi_assign_65_73.clone() as f32);
+    let fz: f32 = (__zinc_multi_assign_65_73 as f32);
+    println!("{} {} {}", fx, fy, fz);
+    let (value, label, item) = (3.14, String::from("cat"), __ZincAnonStruct_AnonStruct_id_i64 { id: 123456 });
+    println!("{}", value);
+    println!("{}", label);
+    println!("{}", item.id);
 }

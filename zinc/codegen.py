@@ -266,13 +266,14 @@ class CodeGenVisitor(zincVisitor):
         # Track variable assignments of struct instances and literal values
         if stmt_ctx.typedVariableAssignment():
             var_ctx = stmt_ctx.typedVariableAssignment()
-            var_name = var_ctx.IDENTIFIER().getText()
+            var_names = [token.getText() for token in self._typed_assignment_tokens(var_ctx.typedAssignmentTarget())]
             expr = var_ctx.expression()
             struct_name = self._detect_struct_assignment(expr)
             if struct_name:
-                self._struct_instance_vars[f"{self._current_function}:{var_name}"] = struct_name
+                for var_name in var_names:
+                    self._struct_instance_vars[f"{self._current_function}:{var_name}"] = struct_name
             elif self._is_compile_time_literal_expr(expr):
-                self._literal_vars.add(var_name)
+                self._literal_vars.update(var_names)
         if stmt_ctx.variableAssignment():
             var_ctx = stmt_ctx.variableAssignment()
             target = var_ctx.assignmentTarget()
@@ -2751,6 +2752,23 @@ class CodeGenVisitor(zincVisitor):
         """Return identifier names from a binding/destructuring context."""
         return [token.getText() for token in ctx.getTokens(ZincParser.IDENTIFIER)]
 
+    def _typed_assignment_tokens(self, target_ctx) -> list:
+        """Return identifier tokens from a typed local binding target."""
+        if target_ctx.IDENTIFIER():
+            return [target_ctx.IDENTIFIER()]
+        if target_ctx.tupleAssignmentTarget():
+            return list(target_ctx.tupleAssignmentTarget().getTokens(ZincParser.IDENTIFIER))
+        return []
+
+    def _symbol_for_binding_token(self, token):
+        """Return the resolved binding symbol for a target token, falling back to the local name."""
+        symbol = self.symbols.lookup_by_interval(token.getSourceInterval(), self._current_function)
+        if symbol is None or symbol.id is None:
+            fallback = self._lookup_local_symbol(token.getText())
+            if fallback is not None:
+                return fallback
+        return symbol
+
     def _function_call_name(self, expr_ctx) -> str | None:
         """Return the simple callee name for calls like close(...)."""
         if isinstance(expr_ctx, ZincParser.FunctionCallExprContext):
@@ -2766,6 +2784,43 @@ class CodeGenVisitor(zincVisitor):
         if len(names) == 1:
             return f"({names[0]},)"
         return f"({', '.join(names)})"
+
+    def _render_identifier_assignment(self, name: str, symbol, value: str, *, include_type: bool = False) -> str:
+        """Render a local binding declaration or reassignment for one identifier."""
+        if symbol is None:
+            self._declared_vars.add(name)
+            return f"let {name} = {value};"
+
+        captured_target = symbol.unique_name in self._captured_binding_names
+        rendered_target = self._rust_binding_name(symbol.unique_name) if captured_target else name
+        if captured_target and not (symbol.is_shadow or name not in self._declared_vars):
+            return f"*{rendered_target}.lock().unwrap() = {value};"
+
+        if symbol.is_shadow or name not in self._declared_vars:
+            self._declared_vars.add(name)
+            needs_mut = symbol.is_mutated or name in self._mut_struct_vars
+            mut_prefix = "mut " if needs_mut else ""
+            if captured_target:
+                value = f"Arc::new(Mutex::new({value}))"
+            if include_type:
+                return f"let {mut_prefix}{rendered_target}: {self._symbol_rust_type(symbol)} = {value};"
+            return f"let {mut_prefix}{rendered_target} = {value};"
+
+        return f"{rendered_target} = {value};"
+
+    def _render_broadcast_assignment(self, ctx, target_tuple_ctx, expr_ctx, value: str, *, include_type: bool = False) -> str:
+        """Render x, y, z = expr by evaluating expr once and assigning clones in order."""
+        tokens = list(target_tuple_ctx.getTokens(ZincParser.IDENTIFIER))
+        temp_name = self._staged_temp_name("multi_assign", ctx)
+        lines = [f"let {temp_name} = {value};"]
+        for i, token in enumerate(tokens):
+            name = token.getText()
+            symbol = self._symbol_for_binding_token(token)
+            item_value = temp_name if i == len(tokens) - 1 else f"{temp_name}.clone()"
+            if symbol is not None:
+                item_value = self._coerce_numeric_rhs_for_target(item_value, expr_ctx, symbol.resolved_type, symbol.exact_type)
+            lines.append(self._render_identifier_assignment(name, symbol, item_value, include_type=include_type))
+        return "\n".join(lines)
 
     def visitUnaryExpr(self, ctx: ZincParser.UnaryExprContext) -> str:
         """Visit unary expression."""
@@ -3900,8 +3955,33 @@ class CodeGenVisitor(zincVisitor):
 
     def visitTypedVariableAssignment(self, ctx: ZincParser.TypedVariableAssignmentContext) -> str:
         """Visit a typed local declaration."""
-        var_name = ctx.IDENTIFIER().getText()
-        symbol = self.symbols.lookup_by_interval(ctx.IDENTIFIER().getSourceInterval(), self._current_function)
+        target_ctx = ctx.typedAssignmentTarget()
+        if target_ctx.tupleAssignmentTarget():
+            value = self._visit_expression_with_expectations(ctx.expression(), coerce_scalar=False)
+            expr_type = self._get_expr_type(ctx.expression())
+            tuple_info = self._get_tuple_info(ctx.expression())
+            if expr_type == BaseType.TUPLE and tuple_info is not None:
+                tokens = self._typed_assignment_tokens(target_ctx)
+                target_symbols = [self._symbol_for_binding_token(token) for token in tokens]
+                temp_name = self._staged_temp_name("destructure", ctx)
+                lines = [f"let {temp_name} = {value};"]
+                for i, (token, symbol) in enumerate(zip(tokens, target_symbols, strict=False)):
+                    name = token.getText()
+                    item_value = f"{temp_name}.{i}"
+                    if (
+                        symbol is not None
+                        and i < len(tuple_info.element_types)
+                        and symbol.resolved_type == BaseType.FLOAT
+                        and tuple_info.element_types[i] == BaseType.INTEGER
+                    ):
+                        item_value = f"({item_value} as {exact_type_to_rust(symbol.exact_type, BaseType.FLOAT)})"
+                    lines.append(self._render_identifier_assignment(name, symbol, item_value, include_type=True))
+                return "\n".join(lines)
+            return self._render_broadcast_assignment(ctx, target_ctx.tupleAssignmentTarget(), ctx.expression(), value, include_type=True)
+
+        token = target_ctx.IDENTIFIER()
+        var_name = token.getText()
+        symbol = self.symbols.lookup_by_interval(token.getSourceInterval(), self._current_function)
         value = self._visit_expression_with_expectations(
             ctx.expression(),
             expected_type=symbol.resolved_type if symbol else None,
@@ -3911,20 +3991,12 @@ class CodeGenVisitor(zincVisitor):
             callable_info=symbol.callable_info if symbol else None,
             coerce_scalar=False,
         )
+        if symbol is not None:
+            value = self._coerce_numeric_rhs_for_target(value, ctx.expression(), symbol.resolved_type, symbol.exact_type)
         if symbol is None:
             return f"let {var_name} = {value};"
 
-        rendered_target = var_name
-        if symbol.unique_name in self._captured_binding_names:
-            rendered_target = self._rust_binding_name(symbol.unique_name)
-            value = f"Arc::new(Mutex::new({value}))"
-
-        type_str = self._symbol_rust_type(symbol)
-        self._declared_vars.add(var_name)
-        needs_mut = symbol.is_mutated or var_name in self._mut_struct_vars
-        if needs_mut:
-            return f"let mut {rendered_target}: {type_str} = {value};"
-        return f"let {rendered_target}: {type_str} = {value};"
+        return self._render_identifier_assignment(var_name, symbol, value, include_type=True)
 
     def visitVariableAssignment(self, ctx: ZincParser.VariableAssignmentContext) -> str:
         """Visit variable assignment with shadowing support."""
@@ -4030,9 +4102,13 @@ class CodeGenVisitor(zincVisitor):
             value = f"Arc::new(Mutex::new({value}))" if (target_symbol.is_shadow or target not in self._declared_vars) else value
 
         if target_ctx.tupleAssignmentTarget():
+            expr_type = self._get_expr_type(expr)
+            tuple_info = self._get_tuple_info(expr)
+            if expr_type != BaseType.TUPLE or tuple_info is None:
+                return self._render_broadcast_assignment(ctx, target_ctx.tupleAssignmentTarget(), expr, value)
             names = self._binding_names(target_ctx.tupleAssignmentTarget())
             target_symbols = [
-                self.symbols.lookup_by_interval(token.getSourceInterval(), self._current_function)
+                self._symbol_for_binding_token(token)
                 for token in target_ctx.tupleAssignmentTarget().getTokens(ZincParser.IDENTIFIER)
             ]
             needs_declaration = any(symbol is None or symbol.is_shadow or symbol.id not in self._declared_vars for symbol in target_symbols)

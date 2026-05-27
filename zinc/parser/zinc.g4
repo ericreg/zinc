@@ -148,7 +148,12 @@ tupleType
 
 // --- Statements ---
 typedVariableAssignment
-    : IDENTIFIER ':' type '=' expression
+    : typedAssignmentTarget ':' type '=' expression
+    ;
+
+typedAssignmentTarget
+    : IDENTIFIER
+    | tupleAssignmentTarget
     ;
 
 variableAssignment

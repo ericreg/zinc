@@ -2288,7 +2288,11 @@ class SymbolTableVisitor(zincVisitor):
         if actual_constant_value is not None:
             if expected_type == BaseType.INTEGER and isinstance(actual_constant_value, int):
                 return self._integer_value_fits_exact_type(actual_constant_value, expected_exact)
-            if expected_type == BaseType.FLOAT and isinstance(actual_constant_value, float):
+            if (
+                expected_type == BaseType.FLOAT
+                and isinstance(actual_constant_value, (int, float))
+                and not isinstance(actual_constant_value, bool)
+            ):
                 return expected_exact.startswith("f")
             if expected_type == BaseType.BOOLEAN and isinstance(actual_constant_value, bool):
                 return expected_exact == "bool"
@@ -5931,7 +5935,7 @@ class SymbolTableVisitor(zincVisitor):
                 return
             if isinstance(node, ZincParser.TypedVariableAssignmentContext):
                 walk(node.expression())
-                local_names.add(node.IDENTIFIER().getText())
+                local_names.update(token.getText() for token in self._typed_assignment_tokens(node.typedAssignmentTarget()))
                 return
             if isinstance(node, ZincParser.ForStatementContext):
                 walk(node.expression())
@@ -9004,31 +9008,64 @@ class SymbolTableVisitor(zincVisitor):
         )
         return BaseType.UNKNOWN
 
-    def visitTypedVariableAssignment(self, ctx: ZincParser.TypedVariableAssignmentContext) -> None:
-        """Visit a typed local declaration and enforce the annotation strictly."""
-        expr_type = self.visit(ctx.expression())
-        var_name = ctx.IDENTIFIER().getText()
+    def _typed_assignment_tokens(self, target_ctx) -> list:
+        """Return identifier tokens from a typed local binding target."""
+        if target_ctx.IDENTIFIER():
+            return [target_ctx.IDENTIFIER()]
+        if target_ctx.tupleAssignmentTarget():
+            return self._binding_tokens(target_ctx.tupleAssignmentTarget())
+        return []
+
+    def _tuple_element_value_info(self, tuple_info: TupleTypeInfo, index: int) -> ResolvedValueInfo:
+        """Build value metadata for one tuple element."""
+        element_type = tuple_info.element_types[index]
+        element_exact_type = tuple_info.element_exact_types[index] if index < len(tuple_info.element_exact_types) else None
+        return ResolvedValueInfo(
+            base_type=element_type,
+            exact_type=element_exact_type or self._resolved_exact_type(element_type, None),
+            tuple_info=self._copy_tuple_info(tuple_info.element_tuple_infos.get(index)),
+            callable_info=self._copy_callable_info(tuple_info.element_callable_infos.get(index)),
+            struct_qualified_name=tuple_info.element_struct_qualified_names.get(index),
+            anonymous_struct_info=self._copy_anonymous_struct_info(tuple_info.element_anonymous_struct_infos.get(index)),
+            result_info=self._copy_result_info(tuple_info.element_result_infos.get(index)),
+            option_info=self._copy_option_info(tuple_info.element_option_infos.get(index)),
+        )
+
+    def _tuple_literal_element_exprs(self, expr_ctx) -> list | None:
+        """Return tuple literal element expressions for direct tuple literal RHS values."""
+        if isinstance(expr_ctx, ZincParser.ParenExprContext):
+            return self._tuple_literal_element_exprs(expr_ctx.expression())
+        if isinstance(expr_ctx, ZincParser.PrimaryExprContext):
+            primary = expr_ctx.primaryExpression()
+            if primary and primary.tupleLiteral():
+                return list(primary.tupleLiteral().expression())
+        return None
+
+    def _define_typed_local_binding(
+        self,
+        token,
+        owner_ctx,
+        type_ctx,
+        annotated_type: BaseType,
+        annotated_array_info: ArrayTypeInfo | None,
+        annotated_dict_info: DictTypeInfo | None,
+        annotated_set_info: SetTypeInfo | None,
+        annotated_tuple_info: TupleTypeInfo | None,
+        annotated_callable_info: CallableTypeInfo | None,
+        annotated_struct_qualified_name: str | None,
+        annotated_anonymous_struct_info: AnonymousStructTypeInfo | None,
+        annotated_result_info: ResultTypeInfo | None,
+        annotated_option_info: OptionTypeInfo | None,
+        declared_exact_type: str | None,
+        expr_info: ResolvedValueInfo,
+        expr_symbol: Symbol | None,
+        expr_ctx,
+    ) -> None:
+        """Define one annotated local binding after checking the expression metadata."""
+        var_name = token.getText()
         existing = self.symbols.lookup_by_id(var_name)
 
-        (
-            annotated_type,
-            annotated_array_info,
-            annotated_dict_info,
-            annotated_set_info,
-            annotated_tuple_info,
-            annotated_callable_info,
-            annotated_struct_qualified_name,
-            annotated_anonymous_struct_info,
-            annotated_result_info,
-            annotated_option_info,
-        ) = self._type_metadata_from_type_ctx(ctx.type_())
-        declared_exact_type = self._exact_type_name_from_type_ctx(ctx.type_())
-
-        expr_symbol = self._expr_symbol(ctx.expression())
-        expr_info = self._value_info_from_symbol(expr_type, expr_symbol)
-        if self._try_context_stack and annotated_type not in {BaseType.RESULT, BaseType.OPTION}:
-            expr_info = self._unwrap_try_value(ctx.expression(), expr_info)
-            expr_type = expr_info.base_type
+        expr_type = expr_info.base_type
         expr_exact_type = expr_info.exact_type
         expr_constant_value = expr_symbol.constant_value if expr_symbol else None
         expr_channel_info = self._copy_channel_info(expr_info.channel_info)
@@ -9041,13 +9078,14 @@ class SymbolTableVisitor(zincVisitor):
         expr_anonymous_struct_info = self._copy_anonymous_struct_info(expr_info.anonymous_struct_info)
         expr_result_info = self._copy_result_info(expr_info.result_info)
         expr_option_info = self._copy_option_info(expr_info.option_info)
+        actual_constant_value = self._literal_constant_value_for_expr(expr_ctx, expr_symbol) if expr_ctx is not None else None
 
         if not self._assignment_metadata_compatible(
             annotated_type,
             expr_type,
             expected_exact_type=declared_exact_type,
             actual_exact_type=expr_exact_type,
-            actual_constant_value=self._literal_constant_value_for_expr(ctx.expression(), expr_symbol),
+            actual_constant_value=actual_constant_value,
             expected_array=annotated_array_info,
             actual_array=expr_array_info,
             expected_dict=annotated_dict_info,
@@ -9067,20 +9105,20 @@ class SymbolTableVisitor(zincVisitor):
             expected_option=annotated_option_info,
             actual_option=expr_option_info,
         ):
-            expected_label = declared_exact_type or ctx.type_().getText()
+            expected_label = declared_exact_type or type_ctx.getText()
             raise ZincTypeError(f"variable '{var_name}' expects a compatible '{expected_label}' value")
 
         new_sym = self.symbols.define(
             id=var_name,
             kind=SymbolKind.VARIABLE,
             resolved_type=annotated_type,
-            interval=ctx.IDENTIFIER().getSourceInterval(),
+            interval=token.getSourceInterval(),
             exact_type=declared_exact_type,
             declared_exact_type=declared_exact_type,
             has_declared_type=True,
             is_shadow=existing is not None,
             constant_value=expr_constant_value,
-            line_num=ctx.start.line if ctx.start is not None else 0,
+            line_num=owner_ctx.start.line if owner_ctx.start is not None else 0,
         )
 
         if annotated_type == BaseType.ARRAY:
@@ -9109,6 +9147,228 @@ class SymbolTableVisitor(zincVisitor):
             struct_qualified_name = annotated_struct_qualified_name or expr_struct_qualified_name
             if struct_qualified_name is not None:
                 self._struct_symbol_bindings[new_sym.unique_name] = struct_qualified_name
+
+    def visitTypedVariableAssignment(self, ctx: ZincParser.TypedVariableAssignmentContext) -> None:
+        """Visit a typed local declaration and enforce the annotation strictly."""
+        (
+            annotated_type,
+            annotated_array_info,
+            annotated_dict_info,
+            annotated_set_info,
+            annotated_tuple_info,
+            annotated_callable_info,
+            annotated_struct_qualified_name,
+            annotated_anonymous_struct_info,
+            annotated_result_info,
+            annotated_option_info,
+        ) = self._type_metadata_from_type_ctx(ctx.type_())
+        declared_exact_type = self._exact_type_name_from_type_ctx(ctx.type_())
+
+        expr_type = self.visit(ctx.expression())
+        expr_symbol = self._expr_symbol(ctx.expression())
+        expr_info = self._value_info_from_symbol(expr_type, expr_symbol)
+        if self._try_context_stack and annotated_type not in {BaseType.RESULT, BaseType.OPTION}:
+            expr_info = self._unwrap_try_value(ctx.expression(), expr_info)
+
+        target_ctx = ctx.typedAssignmentTarget()
+        tokens = self._typed_assignment_tokens(target_ctx)
+        if target_ctx.tupleAssignmentTarget() and expr_info.base_type == BaseType.TUPLE and expr_info.tuple_info is not None:
+            if len(tokens) != len(expr_info.tuple_info.element_types):
+                raise ZincTypeError("tuple destructuring arity mismatch")
+            element_exprs = self._tuple_literal_element_exprs(ctx.expression())
+            for i, token in enumerate(tokens):
+                element_info = self._tuple_element_value_info(expr_info.tuple_info, i)
+                element_symbol = None
+                element_expr = None
+                if element_exprs is not None and i < len(element_exprs):
+                    element_expr = element_exprs[i]
+                    element_symbol = self._expr_symbol(element_expr)
+                    element_info = self._value_info_from_symbol(element_info.base_type, element_symbol)
+                self._define_typed_local_binding(
+                    token,
+                    ctx,
+                    ctx.type_(),
+                    annotated_type,
+                    annotated_array_info,
+                    annotated_dict_info,
+                    annotated_set_info,
+                    annotated_tuple_info,
+                    annotated_callable_info,
+                    annotated_struct_qualified_name,
+                    annotated_anonymous_struct_info,
+                    annotated_result_info,
+                    annotated_option_info,
+                    declared_exact_type,
+                    element_info,
+                    element_symbol,
+                    element_expr,
+                )
+            return
+
+        for token in tokens:
+            self._define_typed_local_binding(
+                token,
+                ctx,
+                ctx.type_(),
+                annotated_type,
+                annotated_array_info,
+                annotated_dict_info,
+                annotated_set_info,
+                annotated_tuple_info,
+                annotated_callable_info,
+                annotated_struct_qualified_name,
+                annotated_anonymous_struct_info,
+                annotated_result_info,
+                annotated_option_info,
+                declared_exact_type,
+                expr_info,
+                expr_symbol,
+                ctx.expression(),
+            )
+
+    def _apply_value_info_to_binding_symbol(self, symbol: Symbol, info: ResolvedValueInfo) -> None:
+        """Copy rich value metadata onto a local binding symbol."""
+        if info.base_type == BaseType.ARRAY and info.array_info is not None:
+            self._apply_array_info_to_symbol(symbol, self._copy_array_info(info.array_info))
+        elif info.base_type == BaseType.CHANNEL:
+            symbol.channel_info = self._copy_channel_info(info.channel_info)
+        elif info.base_type == BaseType.DICT:
+            symbol.dict_info = self._copy_dict_info(info.dict_info)
+        elif info.base_type == BaseType.SET:
+            symbol.set_info = self._copy_set_info(info.set_info)
+        elif info.base_type == BaseType.TUPLE:
+            symbol.tuple_info = self._copy_tuple_info(info.tuple_info)
+        elif info.base_type == BaseType.CALLABLE:
+            symbol.callable_info = self._copy_callable_info(info.callable_info)
+        elif info.base_type == BaseType.RESULT:
+            symbol.result_info = self._copy_result_info(info.result_info)
+        elif info.base_type == BaseType.OPTION:
+            symbol.option_info = self._copy_option_info(info.option_info)
+        elif info.base_type == BaseType.STRUCT:
+            symbol.anonymous_struct_info = self._copy_anonymous_struct_info(info.anonymous_struct_info)
+            if info.struct_qualified_name is not None:
+                self._struct_symbol_bindings[symbol.unique_name] = info.struct_qualified_name
+
+    def _binding_accepts_value_info(
+        self,
+        existing: Symbol,
+        info: ResolvedValueInfo,
+        expr_ctx,
+        expr_symbol: Symbol | None,
+    ) -> bool:
+        """Return True when an existing binding can receive a value without changing its contract."""
+        return self._assignment_metadata_compatible(
+            existing.resolved_type,
+            info.base_type,
+            expected_exact_type=existing.declared_exact_type or existing.exact_type,
+            actual_exact_type=info.exact_type,
+            actual_constant_value=self._literal_constant_value_for_expr(expr_ctx, expr_symbol),
+            expected_array=self._array_info_from_symbol(existing),
+            actual_array=self._copy_array_info(info.array_info),
+            expected_dict=existing.dict_info,
+            actual_dict=self._copy_dict_info(info.dict_info),
+            expected_set=existing.set_info,
+            actual_set=self._copy_set_info(info.set_info),
+            expected_tuple=existing.tuple_info,
+            actual_tuple=self._copy_tuple_info(info.tuple_info),
+            expected_callable=existing.callable_info,
+            actual_callable=self._copy_callable_info(info.callable_info),
+            expected_struct_qualified_name=self._struct_qualified_name_for_symbol(existing),
+            actual_struct_qualified_name=info.struct_qualified_name,
+            expected_anonymous_struct_info=existing.anonymous_struct_info,
+            actual_anonymous_struct_info=self._copy_anonymous_struct_info(info.anonymous_struct_info),
+            expected_result=existing.result_info,
+            actual_result=self._copy_result_info(info.result_info),
+            expected_option=existing.option_info,
+            actual_option=self._copy_option_info(info.option_info),
+        )
+
+    def _define_broadcast_local_binding(
+        self,
+        token,
+        owner_ctx,
+        expr_info: ResolvedValueInfo,
+        expr_symbol: Symbol | None,
+        expr_ctx,
+    ) -> None:
+        """Bind one identifier for a multi-name assignment from a shared RHS value."""
+        var_name = token.getText()
+        existing = self.symbols.lookup_by_id(var_name)
+        if existing is not None and existing.is_captured_ref:
+            raise ZincTypeError(f"assignment to captured outer variable '{var_name}' requires '<<-'")
+
+        if existing is not None and existing.is_captured_binding and not self._binding_accepts_value_info(
+            existing,
+            expr_info,
+            expr_ctx,
+            expr_symbol,
+        ):
+            raise ZincTypeError(f"captured outer variable '{var_name}' cannot change type after capture")
+
+        if existing is not None and existing.has_declared_type and not self._binding_accepts_value_info(
+            existing,
+            expr_info,
+            expr_ctx,
+            expr_symbol,
+        ):
+            expected_label = existing.declared_exact_type or type_to_rust(existing.resolved_type)
+            raise ZincTypeError(f"variable '{var_name}' expects a compatible '{expected_label}' value")
+
+        constant_value = expr_symbol.constant_value if expr_symbol else None
+        should_shadow = False
+        if existing is not None and not existing.has_declared_type and not existing.is_captured_binding:
+            should_shadow = (
+                existing.resolved_type != expr_info.base_type
+                or (
+                    existing.declared_exact_type is None
+                    and not existing.has_declared_type
+                    and expr_info.base_type in {BaseType.INTEGER, BaseType.FLOAT, BaseType.STRING, BaseType.BOOLEAN, BaseType.CONTEXT}
+                    and existing.exact_type is not None
+                    and expr_info.exact_type is not None
+                    and existing.exact_type != expr_info.exact_type
+                )
+                or (
+                    expr_info.base_type == BaseType.STRUCT
+                    and not self._structs_compatible(
+                        self._struct_qualified_name_for_symbol(existing),
+                        existing.anonymous_struct_info,
+                        expr_info.struct_qualified_name,
+                        expr_info.anonymous_struct_info,
+                    )
+                )
+                or (
+                    expr_info.base_type == BaseType.ENUM
+                    and existing.exact_type is not None
+                    and expr_info.exact_type is not None
+                    and existing.exact_type != expr_info.exact_type
+                )
+            )
+
+        if existing is None or should_shadow:
+            new_sym = self.symbols.define(
+                id=var_name,
+                kind=SymbolKind.VARIABLE,
+                resolved_type=expr_info.base_type,
+                interval=token.getSourceInterval(),
+                exact_type=expr_info.exact_type,
+                is_shadow=existing is not None,
+                constant_value=constant_value,
+                line_num=owner_ctx.start.line if owner_ctx.start is not None else 0,
+            )
+            self._apply_value_info_to_binding_symbol(new_sym, expr_info)
+            return
+
+        existing.is_mutated = True
+        if not existing.has_declared_type:
+            existing.exact_type = expr_info.exact_type
+        existing.constant_value = constant_value
+        self._apply_value_info_to_binding_symbol(existing, expr_info)
+        temp = self.symbols.define_temp(
+            resolved_type=existing.resolved_type,
+            interval=token.getSourceInterval(),
+            exact_type=existing.declared_exact_type or existing.exact_type,
+        )
+        self._apply_value_info_to_binding_symbol(temp, expr_info)
 
     def _mark_mutated_call_arguments(self, func_instance: FunctionInstance, arg_exprs: list) -> None:
         """Mark caller variables as mutable when callee parameters are inferred mutable."""
@@ -9813,7 +10073,10 @@ class SymbolTableVisitor(zincVisitor):
                             interval=token.getSourceInterval(),
                         )
                     return
-                raise ZincTypeError("tuple destructuring assignment requires a tuple value")
+                expr_info = self._value_info_from_symbol(expr_type, expr_symbol)
+                for token in self._binding_tokens(target.tupleAssignmentTarget()):
+                    self._define_broadcast_local_binding(token, ctx, expr_info, expr_symbol, ctx.expression())
+                return
 
             tokens = self._binding_tokens(target.tupleAssignmentTarget())
             if len(tokens) != len(tuple_info.element_types):

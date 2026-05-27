@@ -410,7 +410,7 @@
         },
         {
           "name": "meta.type.annotation.field.zinc",
-          "match": "^\\s*(?:(const)\\s+)?([A-Za-z_][A-Za-z0-9_]*)(\\s*:\\s*)(\\[[^\\n\\]]+\\]|\\([^\\n\\)]*\\)\\s*->\\s*[^,\\)\\n]+|\\([^\\n\\)]+\\)|(?:i8|i16|i32|i64|i128|u8|u16|u32|u64|u128|f8|f16|f32|f64|f128|string|bool|Context|numeric|infer)\\b|[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*(?:\\s*<[^\\n{};=]+>)?)(?=\\s*(?://.*)?$)",
+          "match": "^\\s*(?:(const)\\s+)?((?:[A-Za-z_][A-Za-z0-9_]*\\s*,\\s*)*[A-Za-z_][A-Za-z0-9_]*)(\\s*:\\s*)(\\[[^\\n\\]]+\\]|\\([^\\n\\)]*\\)\\s*->\\s*[^,\\)\\n]+|\\([^\\n\\)]+\\)|(?:i8|i16|i32|i64|i128|u8|u16|u32|u64|u128|f8|f16|f32|f64|f128|string|bool|Context|numeric|infer)\\b|[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*(?:\\s*<[^\\n{};=]+>)?)(?=\\s*(?:=|(?://.*)?$))",
           "captures": {
             "1": { "name": "storage.modifier.const.zinc" },
             "2": { "name": "variable.other.member.zinc" },
