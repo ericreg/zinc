@@ -21,4 +21,32 @@ fn main() {
     print("{value}")
     print("{label}")
     print("{item.id}")
+
+    nested_left, nested_pair = (1, (2, 3))
+    nested_a, nested_b = nested_pair
+    print("{nested_left} {nested_a} {nested_b}")
+
+    (single,) = (99,)
+    print("{single}")
+
+    typed_a, typed_b: f32 = (1, 2)
+    print("{typed_a} {typed_b}")
+
+    sx, sy = "dog"
+    print("{sx} {sy}")
+    sx = "cat"
+    sy = "bird"
+    print("{sx} {sy}")
+
+    p1, p2 = struct { id: 7 }
+    print("{p1.id} {p2.id}")
+
+    rx: f32 = 0
+    ry: f32 = 0
+    rx, ry = 2
+    print("{rx} {ry}")
+
+    first, second = (10, 20)
+    first, second = (second, first)
+    print("{first} {second}")
 }

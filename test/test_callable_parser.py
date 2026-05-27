@@ -137,6 +137,7 @@ def test_named_and_default_arguments_parse() -> None:
         fn main() {
             add(y=2, x=1)
             add(1, y=2)
+            add(1, x=2)
         }
         """
     )
@@ -148,6 +149,8 @@ def test_named_and_default_arguments_parse() -> None:
     first_call = tree.statement(1).functionDeclaration().block().statement(0).expressionStatement().expression()
     assert first_call.argumentList().argument(0).IDENTIFIER().getText() == "y"
     assert first_call.argumentList().argument(1).IDENTIFIER().getText() == "x"
+    duplicate_syntax_call = tree.statement(1).functionDeclaration().block().statement(2).expressionStatement().expression()
+    assert duplicate_syntax_call.argumentList().argument(1).IDENTIFIER().getText() == "x"
 
 
 def test_bar_lambda_syntax_is_rejected() -> None:

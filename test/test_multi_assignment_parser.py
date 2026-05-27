@@ -38,6 +38,8 @@ def test_broadcast_and_typed_multi_assignment_parse() -> None:
         fn main() {
             x, y, z = 1
             a, b, c: f32 = 1
+            (single,) = (1,)
+            typed_x, typed_y: f32 = (1, 2)
         }
         """
     )
@@ -47,3 +49,6 @@ def test_broadcast_and_typed_multi_assignment_parse() -> None:
     assert block.statement(0).variableAssignment().assignmentTarget().tupleAssignmentTarget() is not None
     typed_target = block.statement(1).typedVariableAssignment().typedAssignmentTarget()
     assert typed_target.tupleAssignmentTarget() is not None
+    assert block.statement(2).variableAssignment().assignmentTarget().tupleAssignmentTarget() is not None
+    typed_destructure_target = block.statement(3).typedVariableAssignment().typedAssignmentTarget()
+    assert typed_destructure_target.tupleAssignmentTarget() is not None

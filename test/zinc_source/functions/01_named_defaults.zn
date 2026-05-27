@@ -10,6 +10,16 @@ fn numeric_default(x: numeric = 10, y: numeric = 2.5) {
     return x + y
 }
 
+fn order3(a: i64, b: i64 = 20, c: i64 = 300) {
+    return a * 10000 + b * 100 + c
+}
+
+const DEFAULT_COUNT = 7i32
+
+fn tag(prefix: string = "id", count: i32 = DEFAULT_COUNT) {
+    return "{prefix}:{count}"
+}
+
 fn inc(x: i64 = 1) {
     return x + 1
 }
@@ -34,12 +44,29 @@ fn main() {
     print(add())
     print(add(y=3, x=2))
     print(add(5, y=6))
+    print(add(x=4))
+    print(add(y=6))
+    print(add(7))
     print(blend())
+    print(blend(x=3.5))
+    print(blend(2.5, y=4))
     print(numeric_default())
+    print(numeric_default(y=4, x=1.5))
+    print(numeric_default(x=2))
+    print(order3(1))
+    print(order3(1, 2))
+    print(order3(1, c=3, b=2))
+    print(order3(c=3, a=1, b=2))
+    print(tag())
+    print(tag(prefix="item"))
+    print(tag(count=9, prefix="row"))
 
     ch = chan()
     spawn send_value(out=ch)
     print(<-ch)
+    ch2 = chan()
+    spawn send_value(value=13, out=ch2)
+    print(<-ch2)
 
     lambda = fn(x: i64 = 4) {
         return x * 2
@@ -51,8 +78,13 @@ fn main() {
     counter.add()
     counter.add(amount=4)
     print(counter.value_or(extra=5))
+    counter.add(2)
+    counter.add(amount=3)
+    print(counter.value_or())
+    print(counter.value_or(extra=1))
 
     f = inc
     print(f(x=9))
+    print(f(x=3))
     print(f())
 }
