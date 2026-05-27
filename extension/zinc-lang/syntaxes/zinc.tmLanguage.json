@@ -14,6 +14,7 @@
     { "include": "#declarations" },
     { "include": "#types" },
     { "include": "#builtin_types" },
+    { "include": "#named_arguments" },
     { "include": "#module_paths" },
     { "include": "#struct_instantiations" },
     { "include": "#constants" },
@@ -147,6 +148,7 @@
         { "include": "#keywords" },
         { "include": "#result_option_constructors" },
         { "include": "#builtins" },
+        { "include": "#named_arguments" },
         { "include": "#function_calls" },
         { "include": "#operators" },
         { "include": "#punctuation" },
@@ -375,7 +377,7 @@
             "1": { "name": "variable.parameter.zinc" },
             "2": { "name": "punctuation.separator.type.zinc" }
           },
-          "end": "(?=\\s*(?:[,\\)]))",
+          "end": "(?=\\s*(?:=|[,\\)]))",
           "patterns": [
             { "include": "#builtin_types" },
             { "include": "#type_atoms" },
@@ -399,7 +401,7 @@
         },
         {
           "name": "meta.type.annotation.parameter.zinc",
-          "match": "(?<=[\\(,])\\s*([A-Za-z_][A-Za-z0-9_]*)(\\s*:\\s*)(\\[[^\\n\\]]+\\]|\\([^\\n\\)]*\\)\\s*->\\s*[^,\\)\\n]+|\\([^\\n\\)]+\\)|[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*(?:\\s*<[^\\n{};=]+>)?)(?=\\s*(?:[,\\)]))",
+          "match": "(?<=[\\(,])\\s*([A-Za-z_][A-Za-z0-9_]*)(\\s*:\\s*)(\\[[^\\n\\]]+\\]|\\([^\\n\\)]*\\)\\s*->\\s*[^,\\)\\n]+|\\([^\\n\\)]+\\)|[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*(?:\\s*<[^\\n{};=]+>)?)(?=\\s*(?:=|[,\\)]))",
           "captures": {
             "1": { "name": "variable.parameter.zinc" },
             "2": { "name": "punctuation.separator.type.zinc" },
@@ -511,6 +513,18 @@
         {
           "name": "support.function.builtin.zinc",
           "match": "\\b(?:print|chan|close|dict|set|sort_dict|sort_set|meta|type|line|has_component|implements)\\s*(?=\\()"
+        }
+      ]
+    },
+    "named_arguments": {
+      "patterns": [
+        {
+          "name": "meta.argument.named.zinc",
+          "match": "(?<=[\\(,])\\s*([A-Za-z_][A-Za-z0-9_]*)(\\s*=)(?=\\s*[^=])",
+          "captures": {
+            "1": { "name": "variable.parameter.argument.zinc" },
+            "2": { "name": "keyword.operator.assignment.zinc" }
+          }
         }
       ]
     },

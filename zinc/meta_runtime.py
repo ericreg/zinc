@@ -261,6 +261,7 @@ def metadata_runtime_definitions() -> list[str]:
                 "    pub value_type: __ZincTypeMeta,",
                 "    pub declared_type: __ZincTypeMeta,",
                 "    pub has_declared_type: bool,",
+                "    pub has_default: bool,",
                 "}",
             ]
         ),
@@ -279,6 +280,7 @@ def metadata_runtime_definitions() -> list[str]:
                 "    pub value_type: __ZincTypeMeta,",
                 "    pub declared_type: __ZincTypeMeta,",
                 "    pub has_declared_type: bool,",
+                "    pub has_default: bool,",
                 "}",
             ]
         ),

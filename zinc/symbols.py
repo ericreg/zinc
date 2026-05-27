@@ -31,12 +31,12 @@ from zinc.ast.types import (
     type_to_rust,
 )
 from zinc.atlas import (
+    NUMERIC_TYPE_ALTERNATIVES,
     Atlas,
     ConstInstance,
     EnumInstance,
     EnumVariantInfo,
     FunctionInstance,
-    NUMERIC_TYPE_ALTERNATIVES,
     StructFieldInfo,
     StructInstance,
     StructMethodInfo,
@@ -104,6 +104,8 @@ class Symbol:
     exact_type: str | None = None
     declared_exact_type: str | None = None
     has_declared_type: bool = False
+    parameter_index: int = 0
+    has_default: bool = False
     is_mutated: bool = False  # True if variable needs 'mut' (reassigned or mutating method called)
     is_shadow: bool = False  # True if this shadows a previous binding of the same name
     element_type: BaseType | None = None  # For arrays: type of elements
@@ -188,6 +190,37 @@ class ResolvedValueInfo:
     option_info: OptionTypeInfo | None = None
 
 
+@dataclass
+class RawCallArgument:
+    """One syntactic call argument before binding to parameters."""
+
+    name: str | None
+    expression: ParserRuleContext
+    ctx: ParserRuleContext
+
+
+@dataclass
+class ParameterSpec:
+    """One callable parameter slot used for named/default binding."""
+
+    name: str
+    ctx: ParserRuleContext | None = None
+    default_expr: ParserRuleContext | None = None
+    owner_module_id: str | None = None
+
+
+@dataclass
+class BoundArgument:
+    """One canonical call argument after binding to declaration order."""
+
+    expression: ParserRuleContext
+    parameter_name: str
+    parameter_index: int
+    parameter_ctx: ParserRuleContext | None = None
+    is_default: bool = False
+    owner_module_id: str | None = None
+
+
 class SymbolTable:
     """Scoped symbol table with lookup by id or source interval."""
 
@@ -239,6 +272,8 @@ class SymbolTable:
         exact_type: str | None = None,
         declared_exact_type: str | None = None,
         has_declared_type: bool = False,
+        parameter_index: int = 0,
+        has_default: bool = False,
         is_shadow: bool = False,
         constant_value: object | None = None,
         line_num: int = 0,
@@ -259,6 +294,8 @@ class SymbolTable:
             exact_type=exact_type,
             declared_exact_type=declared_exact_type,
             has_declared_type=has_declared_type,
+            parameter_index=parameter_index,
+            has_default=has_default,
             source_interval=interval,
             is_shadow=is_shadow,
             constant_value=constant_value,
@@ -371,6 +408,7 @@ class SymbolTableVisitor(zincVisitor):
         # Maps (caller_function, call_site_interval) -> mangled name for CodeGen to use
         # Scoped by caller function to handle different specializations of the same generic
         self.specialization_map: dict[tuple[str | None, tuple[int, int]], str] = {}
+        self.bound_call_args: dict[tuple[str | None, tuple[int, int]], list[BoundArgument]] = {}
         # Track channel variables and their type info (var_name -> ChannelTypeInfo)
         self._channel_infos: dict[str, ChannelTypeInfo] = {}
         # Track all caller channel infos for function parameters (param_name -> list of ChannelTypeInfos)
@@ -895,6 +933,8 @@ class SymbolTableVisitor(zincVisitor):
         return replace(
             method,
             parameters=[(name, type_ann, resolved) for name, type_ann, resolved in method.parameters],
+            parameter_defaults=dict(method.parameter_defaults),
+            parameter_default_texts=dict(method.parameter_default_texts),
         )
 
     def _merge_struct_fields(
@@ -1100,15 +1140,21 @@ class SymbolTableVisitor(zincVisitor):
     ) -> StructMethodInfo:
         """Analyze a struct method for static/instance and self mutability."""
         name = ctx.IDENTIFIER().getText()
+        self._validate_parameter_defaults_for_ctx(ctx, f"method '{name}'", source_module_id)
 
         # Parse parameters
         parameters: list[tuple[str, str | None, str | None]] = []
+        parameter_defaults: dict[int, ParserRuleContext] = {}
+        parameter_default_texts: dict[int, str] = {}
         if ctx.parameterList():
-            for param_ctx in ctx.parameterList().parameter():
+            for index, param_ctx in enumerate(ctx.parameterList().parameter()):
                 param_name = param_ctx.IDENTIFIER().getText()
                 type_ctx = self._single_type_ctx(param_ctx)
                 param_type = type_ctx.getText() if type_ctx is not None else None
                 parameters.append((param_name, param_type, None))
+                if param_ctx.expression() is not None:
+                    parameter_defaults[index] = param_ctx.expression()
+                    parameter_default_texts[index] = param_ctx.expression().getText()
 
         # Track self usage in method body
         self_reads, self_writes = self._track_self_usage(ctx.block())
@@ -1140,6 +1186,8 @@ class SymbolTableVisitor(zincVisitor):
         return StructMethodInfo(
             name=name,
             parameters=resolved_params,
+            parameter_defaults=parameter_defaults,
+            parameter_default_texts=parameter_default_texts,
             is_static=is_static,
             self_mutability=self_mutability,
             return_type=return_type,
@@ -1675,6 +1723,108 @@ class SymbolTableVisitor(zincVisitor):
         if isinstance(expr_ctx, (ZincParser.AdditiveExprContext, ZincParser.MultiplicativeExprContext)):
             return all(self._is_compile_time_literal_expr(expr_ctx.expression(i)) for i in range(2))
         return False
+
+    def _is_allowed_parameter_default(self, expr_ctx, owner_module_id: str | None) -> bool:
+        """Return True for v1 constant parameter defaults."""
+        if self._is_compile_time_literal_expr(expr_ctx):
+            return True
+        if owner_module_id is None:
+            return False
+        previous_module = self._current_module
+        self._current_module = owner_module_id
+        try:
+            path = extract_identifier_path(expr_ctx)
+            return bool(path and self.module_graph.resolve_const_path(owner_module_id, path))
+        finally:
+            self._current_module = previous_module
+
+    def _validate_parameter_defaults_for_ctx(self, ctx, label: str, owner_module_id: str | None) -> None:
+        """Validate default parameter ordering, const-ness, and annotations."""
+        specs = self._parameter_specs_from_ctx(ctx, owner_module_id)
+        seen_default = False
+        for spec in specs:
+            if spec.default_expr is None:
+                if seen_default:
+                    raise ZincTypeError(f"{label} parameter '{spec.name}' must have a default because an earlier parameter has one")
+                continue
+            seen_default = True
+            if not self._is_allowed_parameter_default(spec.default_expr, owner_module_id):
+                raise ZincTypeError(f"{label} parameter '{spec.name}' default must be a literal or compile-time constant")
+            if spec.ctx is None:
+                continue
+            type_ctx = self._single_type_ctx(spec.ctx)
+            if not self._type_alternative_ctxs(spec.ctx):
+                continue
+            previous_module = self._current_module
+            if owner_module_id is not None:
+                self._current_module = owner_module_id
+            try:
+                default_type = self.visit(spec.default_expr)
+                default_symbol = self._expr_symbol(spec.default_expr)
+            finally:
+                self._current_module = previous_module
+            if self._has_type_alternative_constraint(spec.ctx):
+                if not self._type_satisfies_type_alternatives(
+                    spec.ctx,
+                    default_type,
+                    default_symbol.exact_type if default_symbol else self._resolved_exact_type(default_type, None),
+                    dict_info=self._copy_dict_info(default_symbol.dict_info) if default_symbol else None,
+                    set_info=self._copy_set_info(default_symbol.set_info) if default_symbol else None,
+                    tuple_info=self._copy_tuple_info(default_symbol.tuple_info) if default_symbol else None,
+                    callable_info=self._copy_callable_info(default_symbol.callable_info) if default_symbol else None,
+                    struct_qualified_name=self._struct_qualified_name_for_symbol(default_symbol),
+                    anonymous_struct_info=self._copy_anonymous_struct_info(default_symbol.anonymous_struct_info)
+                    if default_symbol
+                    else None,
+                    result_info=self._copy_result_info(default_symbol.result_info) if default_symbol else None,
+                    option_info=self._copy_option_info(default_symbol.option_info) if default_symbol else None,
+                ):
+                    raise ZincTypeError(
+                        f"parameter '{spec.name}' default expects a compatible '{spec.ctx.typeAlternative().getText()}' value"
+                    )
+                continue
+            if type_ctx is None:
+                continue
+            (
+                expected_type,
+                expected_array,
+                expected_dict,
+                expected_set,
+                expected_tuple,
+                expected_callable,
+                expected_struct_qualified_name,
+                expected_anonymous_struct_info,
+                expected_result,
+                expected_option,
+            ) = self._type_metadata_from_type_ctx(type_ctx)
+            if not self._assignment_metadata_compatible(
+                expected_type,
+                default_type,
+                expected_exact_type=self._exact_type_name_from_type_ctx(type_ctx),
+                actual_exact_type=default_symbol.exact_type if default_symbol else self._resolved_exact_type(default_type, None),
+                actual_constant_value=self._literal_constant_value_for_expr(spec.default_expr, default_symbol),
+                expected_array=expected_array,
+                actual_array=self._array_info_from_symbol(default_symbol),
+                expected_dict=expected_dict,
+                actual_dict=self._copy_dict_info(default_symbol.dict_info) if default_symbol else None,
+                expected_set=expected_set,
+                actual_set=self._copy_set_info(default_symbol.set_info) if default_symbol else None,
+                expected_tuple=expected_tuple,
+                actual_tuple=self._copy_tuple_info(default_symbol.tuple_info) if default_symbol else None,
+                expected_callable=expected_callable,
+                actual_callable=self._copy_callable_info(default_symbol.callable_info) if default_symbol else None,
+                expected_struct_qualified_name=expected_struct_qualified_name,
+                actual_struct_qualified_name=self._struct_qualified_name_for_symbol(default_symbol),
+                expected_anonymous_struct_info=expected_anonymous_struct_info,
+                actual_anonymous_struct_info=self._copy_anonymous_struct_info(default_symbol.anonymous_struct_info)
+                if default_symbol
+                else None,
+                expected_result=expected_result,
+                actual_result=self._copy_result_info(default_symbol.result_info) if default_symbol else None,
+                expected_option=expected_option,
+                actual_option=self._copy_option_info(default_symbol.option_info) if default_symbol else None,
+            ):
+                raise ZincTypeError(f"parameter '{spec.name}' default expects a compatible '{type_ctx.getText()}' value")
 
     def _literal_constant_value_for_expr(self, expr_ctx, expr_symbol: Symbol | None) -> object | None:
         """Return a fit-check constant only for literal expressions, not typed bindings."""
@@ -3385,6 +3535,7 @@ class SymbolTableVisitor(zincVisitor):
                 "value_type": param_type,
                 "declared_type": declared_type,
                 "has_declared_type": type_ctx is not None,
+                "has_default": param_ctx.expression() is not None,
             },
         )
         meta.methods = {"owner": lambda args: owner_meta}
@@ -3398,6 +3549,7 @@ class SymbolTableVisitor(zincVisitor):
         index: int,
         *,
         owner_meta: MetaValue,
+        has_default: bool = False,
     ) -> MetaValue:
         """Return MethodParameterMeta for an analyzed method parameter."""
         name, type_ann, resolved = param
@@ -3424,6 +3576,7 @@ class SymbolTableVisitor(zincVisitor):
                 "value_type": value_type,
                 "declared_type": value_type if type_ann or resolved else unknown_type_meta(),
                 "has_declared_type": bool(type_ann),
+                "has_default": has_default,
             },
         )
         meta.methods = {"owner": lambda args: owner_meta}
@@ -3504,6 +3657,7 @@ class SymbolTableVisitor(zincVisitor):
                 param,
                 index,
                 owner_meta=method_meta,
+                has_default=index in method.parameter_defaults,
             )
             for index, param in enumerate(method.parameters)
         ]
@@ -3618,7 +3772,7 @@ class SymbolTableVisitor(zincVisitor):
             struct_qname = FUNCTION_PARAM_META_QNAME
             fields = {
                 **base_fields,
-                "index": 0,
+                "index": symbol.parameter_index,
                 "value_type": self._type_meta_from_symbol(symbol),
                 "declared_type": self._type_meta_from_base(
                     exact_type_to_base(symbol.declared_exact_type),
@@ -3627,6 +3781,7 @@ class SymbolTableVisitor(zincVisitor):
                 if symbol.has_declared_type
                 else unknown_type_meta(),
                 "has_declared_type": symbol.has_declared_type,
+                "has_default": symbol.has_default,
             }
         else:
             struct_qname = VARIABLE_META_QNAME
@@ -3889,11 +4044,9 @@ class SymbolTableVisitor(zincVisitor):
             return target[index]
         if isinstance(expr_ctx, ZincParser.FunctionCallExprContext):
             callee = expr_ctx.expression()
-            args = (
-                [self._evaluate_constraint_expr(arg, slots) for arg in expr_ctx.argumentList().expression()]
-                if expr_ctx.argumentList()
-                else []
-            )
+            raw_args = self._raw_call_arguments(expr_ctx.argumentList())
+            self._require_positional_arguments(raw_args, "constraint call")
+            args = [self._evaluate_constraint_expr(arg.expression, slots) for arg in raw_args]
             if isinstance(callee, ZincParser.PrimaryExprContext):
                 primary = callee.primaryExpression()
                 name_token = None
@@ -4399,6 +4552,21 @@ class SymbolTableVisitor(zincVisitor):
             if len(current.param_types) != len(incoming.param_types):
                 raise ZincTypeError(f"incompatible callable signatures for {label}") from exc
             merged = self._copy_callable_info(current) or CallableTypeInfo()
+            if merged.param_names and incoming.param_names and merged.param_names != incoming.param_names:
+                merged.param_names = []
+                merged.param_default_texts = {}
+                merged.param_default_exprs = {}
+                merged.param_default_owner_modules = {}
+            elif not merged.param_names and incoming.param_names:
+                merged.param_names = list(incoming.param_names)
+            if bool(merged.param_default_texts) != bool(incoming.param_default_texts):
+                merged.param_default_texts = {}
+                merged.param_default_exprs = {}
+                merged.param_default_owner_modules = {}
+            elif merged.param_default_texts and incoming.param_default_texts and merged.param_default_texts != incoming.param_default_texts:
+                merged.param_default_texts = {}
+                merged.param_default_exprs = {}
+                merged.param_default_owner_modules = {}
             while len(merged.param_exact_types) < len(merged.param_types):
                 merged.param_exact_types.append(None)
             for i, incoming_type in enumerate(incoming.param_types):
@@ -5005,6 +5173,249 @@ class SymbolTableVisitor(zincVisitor):
                     return primary.IDENTIFIER().getText()
         return None
 
+    def _call_key(self, ctx) -> tuple[str | None, tuple[int, int]]:
+        """Return the scoped call-site key shared with code generation."""
+        return (self._current_function, ctx.getSourceInterval())
+
+    def _raw_call_arguments(self, argument_list_ctx) -> list[RawCallArgument]:
+        """Return syntactic call arguments without applying parameter binding."""
+        if argument_list_ctx is None:
+            return []
+        return [
+            RawCallArgument(
+                name=arg_ctx.IDENTIFIER().getText() if arg_ctx.IDENTIFIER() and arg_ctx.EQ() else None,
+                expression=arg_ctx.expression(),
+                ctx=arg_ctx,
+            )
+            for arg_ctx in argument_list_ctx.argument()
+        ]
+
+    def _raw_call_exprs(self, ctx) -> list:
+        """Return call argument expressions in written order."""
+        return [arg.expression for arg in self._raw_call_arguments(ctx.argumentList())]
+
+    def _require_positional_arguments(self, raw_args: list[RawCallArgument], label: str) -> None:
+        """Reject named arguments for builtins and builtin collection methods."""
+        if any(arg.name is not None for arg in raw_args):
+            raise ZincTypeError(f"{label} does not accept named arguments")
+
+    def _parameter_specs_from_ctx(self, ctx, owner_module_id: str | None) -> list[ParameterSpec]:
+        """Build parameter binding specs from a function-like parse node."""
+        if not hasattr(ctx, "parameterList") or ctx.parameterList() is None:
+            return []
+        return [
+            ParameterSpec(
+                name=param_ctx.IDENTIFIER().getText(),
+                ctx=param_ctx,
+                default_expr=param_ctx.expression(),
+                owner_module_id=owner_module_id,
+            )
+            for param_ctx in ctx.parameterList().parameter()
+        ]
+
+    def _parameter_specs_from_method(self, method: StructMethodInfo) -> list[ParameterSpec]:
+        """Build parameter binding specs from analyzed method metadata."""
+        return [
+            ParameterSpec(
+                name=name,
+                default_expr=method.parameter_defaults.get(index),
+                owner_module_id=method.source_module_id,
+            )
+            for index, (name, _type_ann, _resolved) in enumerate(method.parameters)
+        ]
+
+    def _parameter_specs_from_callable_info(self, callable_info: CallableTypeInfo) -> list[ParameterSpec]:
+        """Build parameter binding specs from callable metadata."""
+        names = callable_info.param_names or [f"arg_{index}" for index in range(len(callable_info.param_types))]
+        return [
+            ParameterSpec(
+                name=name,
+                default_expr=callable_info.param_default_exprs.get(index),
+                owner_module_id=callable_info.param_default_owner_modules.get(index),
+            )
+            for index, name in enumerate(names)
+        ]
+
+    def _bind_call_arguments(
+        self,
+        ctx,
+        specs: list[ParameterSpec],
+        label: str,
+    ) -> list[BoundArgument]:
+        """Bind positional/named/default call arguments into declaration order."""
+        raw_args = self._raw_call_arguments(ctx.argumentList())
+        name_to_index = {spec.name: index for index, spec in enumerate(specs)}
+        bound: list[BoundArgument | None] = [None] * len(specs)
+        used_indexes: set[int] = set()
+        positional_index = 0
+        saw_named = False
+
+        for raw in raw_args:
+            if raw.name is not None:
+                saw_named = True
+                if raw.name not in name_to_index:
+                    raise ZincTypeError(f"{label} got an unknown named argument '{raw.name}'")
+                index = name_to_index[raw.name]
+            else:
+                if saw_named:
+                    raise ZincTypeError(f"{label} positional arguments must come before named arguments")
+                if positional_index >= len(specs):
+                    raise ZincTypeError(f"{label} got too many arguments")
+                index = positional_index
+                positional_index += 1
+
+            if index in used_indexes:
+                raise ZincTypeError(f"{label} got multiple values for argument '{specs[index].name}'")
+            used_indexes.add(index)
+            bound[index] = BoundArgument(
+                expression=raw.expression,
+                parameter_name=specs[index].name,
+                parameter_index=index,
+                parameter_ctx=specs[index].ctx,
+                owner_module_id=specs[index].owner_module_id,
+            )
+
+        for index, spec in enumerate(specs):
+            if bound[index] is not None:
+                continue
+            if spec.default_expr is None:
+                raise ZincTypeError(f"{label} missing required argument '{spec.name}'")
+            bound[index] = BoundArgument(
+                expression=spec.default_expr,
+                parameter_name=spec.name,
+                parameter_index=index,
+                parameter_ctx=spec.ctx,
+                is_default=True,
+                owner_module_id=spec.owner_module_id,
+            )
+
+        result = [arg for arg in bound if arg is not None]
+        self.bound_call_args[self._call_key(ctx)] = result
+        return result
+
+    def _default_integer_exact_override(self, bound_arg: BoundArgument) -> str | None:
+        """Use i32 for omitted unsuffixed integer parameter defaults."""
+        if not bound_arg.is_default:
+            return None
+        expr = bound_arg.expression
+        if not isinstance(expr, ZincParser.PrimaryExprContext):
+            return None
+        primary = expr.primaryExpression()
+        if primary is None or primary.literal() is None or primary.literal().INTEGER() is None:
+            return None
+        text = primary.literal().getText()
+        if re.search(r"(u8|i8|u16|i16|u32|i32|u64|i64|u128|i128|usize|isize)$", text):
+            return None
+        return "i32"
+
+    def _visit_bound_argument(self, bound_arg: BoundArgument) -> BaseType:
+        """Visit a bound call argument, evaluating defaults in declaration module."""
+        previous_module = self._current_module
+        if bound_arg.is_default and bound_arg.owner_module_id is not None:
+            self._current_module = bound_arg.owner_module_id
+        try:
+            arg_type = self.visit(bound_arg.expression)
+        finally:
+            self._current_module = previous_module
+
+        exact_override = self._default_integer_exact_override(bound_arg)
+        if exact_override is not None:
+            symbol = self._expr_symbol(bound_arg.expression)
+            if symbol is not None:
+                symbol.exact_type = exact_override
+        return arg_type
+
+    def _collect_bound_argument_info(self, bound_args: list[BoundArgument]):
+        """Collect canonical argument types and rich metadata for a bound call."""
+        arg_types: list[BaseType] = []
+        arg_exact_types: list[str | None] = []
+        arg_exprs: list = []
+        arg_channel_infos: dict[int, ChannelTypeInfo] = {}
+        arg_array_infos: dict[int, ArrayTypeInfo] = {}
+        arg_dict_infos: dict[int, DictTypeInfo] = {}
+        arg_set_infos: dict[int, SetTypeInfo] = {}
+        arg_tuple_infos: dict[int, TupleTypeInfo] = {}
+        arg_callable_infos: dict[int, CallableTypeInfo] = {}
+        arg_result_infos: dict[int, ResultTypeInfo] = {}
+        arg_option_infos: dict[int, OptionTypeInfo] = {}
+        arg_struct_qualified_names: dict[int, str] = {}
+        arg_anonymous_struct_infos: dict[int, AnonymousStructTypeInfo] = {}
+
+        for i, bound_arg in enumerate(bound_args):
+            arg_expr = bound_arg.expression
+            arg_exprs.append(arg_expr)
+            arg_type = self._visit_bound_argument(bound_arg)
+            arg_types.append(arg_type)
+            arg_symbol = self._expr_symbol(arg_expr)
+            exact_override = self._default_integer_exact_override(bound_arg)
+            arg_exact_types.append(exact_override or (arg_symbol.exact_type if arg_symbol else self._resolved_exact_type(arg_type, None)))
+
+            if arg_type == BaseType.CHANNEL:
+                if isinstance(arg_expr, ZincParser.PrimaryExprContext):
+                    primary = arg_expr.primaryExpression()
+                    if primary and primary.IDENTIFIER():
+                        chan_var = primary.IDENTIFIER().getText()
+                        if chan_var in self._channel_infos:
+                            arg_channel_infos[i] = self._channel_infos[chan_var]
+                            continue
+                if arg_symbol and arg_symbol.channel_info:
+                    arg_channel_infos[i] = self._copy_channel_info(arg_symbol.channel_info) or ChannelTypeInfo()
+            elif arg_type == BaseType.ARRAY:
+                if arg_symbol and arg_symbol.element_type:
+                    copied_array = self._array_info_from_symbol(arg_symbol)
+                    if copied_array is not None:
+                        arg_array_infos[i] = copied_array
+                elif isinstance(arg_expr, ZincParser.PrimaryExprContext):
+                    primary = arg_expr.primaryExpression()
+                    if primary and primary.IDENTIFIER():
+                        arr_symbol = self.symbols.lookup_by_id(primary.IDENTIFIER().getText())
+                        if arr_symbol and arr_symbol.element_type:
+                            copied_array = self._array_info_from_symbol(arr_symbol)
+                            if copied_array is not None:
+                                arg_array_infos[i] = copied_array
+            elif arg_type == BaseType.DICT:
+                if arg_symbol and arg_symbol.dict_info:
+                    arg_dict_infos[i] = self._copy_dict_info(arg_symbol.dict_info) or DictTypeInfo()
+            elif arg_type == BaseType.SET:
+                if arg_symbol and arg_symbol.set_info:
+                    arg_set_infos[i] = self._copy_set_info(arg_symbol.set_info) or SetTypeInfo()
+            elif arg_type == BaseType.TUPLE:
+                if arg_symbol and arg_symbol.tuple_info:
+                    copied = self._copy_tuple_info(arg_symbol.tuple_info)
+                    if copied:
+                        arg_tuple_infos[i] = copied
+            elif arg_type == BaseType.CALLABLE:
+                if arg_symbol and arg_symbol.callable_info:
+                    arg_callable_infos[i] = self._copy_callable_info(arg_symbol.callable_info) or CallableTypeInfo()
+            elif arg_type == BaseType.RESULT:
+                if arg_symbol and arg_symbol.result_info:
+                    arg_result_infos[i] = self._copy_result_info(arg_symbol.result_info) or ResultTypeInfo()
+            elif arg_type == BaseType.OPTION:
+                if arg_symbol and arg_symbol.option_info:
+                    arg_option_infos[i] = self._copy_option_info(arg_symbol.option_info) or OptionTypeInfo()
+            elif arg_type == BaseType.STRUCT and arg_symbol:
+                struct_qualified_name, anonymous_struct_info = self._struct_metadata_for_symbol(arg_symbol)
+                if struct_qualified_name is not None:
+                    arg_struct_qualified_names[i] = struct_qualified_name
+                if anonymous_struct_info is not None:
+                    arg_anonymous_struct_infos[i] = self._copy_anonymous_struct_info(anonymous_struct_info) or AnonymousStructTypeInfo()
+
+        return (
+            arg_types,
+            arg_exact_types,
+            arg_exprs,
+            arg_channel_infos,
+            arg_array_infos,
+            arg_dict_infos,
+            arg_set_infos,
+            arg_tuple_infos,
+            arg_callable_infos,
+            arg_result_infos,
+            arg_option_infos,
+            arg_struct_qualified_names,
+            arg_anonymous_struct_infos,
+        )
+
     def _is_empty_collection_constructor(self, expr_ctx) -> bool:
         """Check if an expression is dict/set/sort_dict/sort_set()."""
         return self._function_call_name(expr_ctx) in {"dict", "sort_dict", "set", "sort_set"}
@@ -5055,6 +5466,7 @@ class SymbolTableVisitor(zincVisitor):
 
         # Use mangled name for scope so symbols are per-specialization
         self.symbols.enter_scope(func.mangled_name)
+        self._validate_parameter_defaults_for_ctx(ctx, f"function '{func.name}'", func.module_id)
 
         lexical_info = self.lexical_functions.get(func.qualified_name)
         if lexical_info is not None:
@@ -5182,6 +5594,8 @@ class SymbolTableVisitor(zincVisitor):
                     exact_type=param_exact_type,
                     declared_exact_type=declared_exact_type,
                     has_declared_type=type_ctx is not None,
+                    parameter_index=i,
+                    has_default=param_ctx.expression() is not None,
                     line_num=param_ctx.start.line if param_ctx.start is not None else 0,
                 )
                 # Track channel parameters for element type inference
@@ -5558,8 +5972,13 @@ class SymbolTableVisitor(zincVisitor):
         target: CallableTarget,
     ) -> CallableTypeInfo:
         """Build callable metadata from a function or lambda parse node."""
+        target_module_id = target.qualified_name.split("::", 1)[0] if "::" in target.qualified_name else self._current_module
         param_types: list[BaseType] = []
         param_exact_types: list[str | None] = []
+        param_names: list[str] = []
+        param_default_texts: dict[int, str] = {}
+        param_default_exprs: dict[int, ParserRuleContext] = {}
+        param_default_owner_modules: dict[int, str] = {}
         param_array_infos: dict[int, ArrayTypeInfo] = {}
         param_dict_infos: dict[int, DictTypeInfo] = {}
         param_set_infos: dict[int, SetTypeInfo] = {}
@@ -5571,6 +5990,12 @@ class SymbolTableVisitor(zincVisitor):
         param_option_infos: dict[int, OptionTypeInfo] = {}
         if hasattr(ctx, "parameterList") and ctx.parameterList():
             for i, param_ctx in enumerate(ctx.parameterList().parameter()):
+                param_names.append(param_ctx.IDENTIFIER().getText())
+                if param_ctx.expression() is not None:
+                    param_default_texts[i] = param_ctx.expression().getText()
+                    param_default_exprs[i] = param_ctx.expression()
+                    if target_module_id is not None:
+                        param_default_owner_modules[i] = target_module_id
                 type_ctx = self._single_type_ctx(param_ctx)
                 if type_ctx is not None:
                     (
@@ -5643,6 +6068,10 @@ class SymbolTableVisitor(zincVisitor):
         return CallableTypeInfo(
             param_types=param_types,
             param_exact_types=param_exact_types,
+            param_names=param_names,
+            param_default_texts=param_default_texts,
+            param_default_exprs=param_default_exprs,
+            param_default_owner_modules=param_default_owner_modules,
             param_array_infos=param_array_infos,
             param_dict_infos=param_dict_infos,
             param_set_infos=param_set_infos,
@@ -5737,9 +6166,17 @@ class SymbolTableVisitor(zincVisitor):
         """Build callable metadata from analyzed struct-method metadata."""
         param_types: list[BaseType] = []
         param_exact_types: list[str | None] = []
+        param_names: list[str] = []
+        param_default_exprs: dict[int, ParserRuleContext] = {}
+        param_default_owner_modules: dict[int, str] = {}
         for _name, type_ann, resolved in method.parameters:
+            param_names.append(_name)
             param_types.append(self._type_name_to_base(resolved or type_ann))
             param_exact_types.append(self._exact_type_name_from_text(resolved or type_ann))
+        for index, expr in method.parameter_defaults.items():
+            param_default_exprs[index] = expr
+            if method.source_module_id is not None:
+                param_default_owner_modules[index] = method.source_module_id
         return_info = self._resolved_named_type_info(
             method.return_type,
             source_module_id=method.source_module_id,
@@ -5749,6 +6186,10 @@ class SymbolTableVisitor(zincVisitor):
         return CallableTypeInfo(
             param_types=param_types,
             param_exact_types=param_exact_types,
+            param_names=param_names,
+            param_default_texts=dict(method.parameter_default_texts),
+            param_default_exprs=param_default_exprs,
+            param_default_owner_modules=param_default_owner_modules,
             return_type=return_info.base_type,
             return_exact_type=return_info.exact_type,
             return_struct_qualified_name=return_info.struct_qualified_name,
@@ -5763,6 +6204,7 @@ class SymbolTableVisitor(zincVisitor):
         return CallableTypeInfo(
             param_types=[],
             param_exact_types=[],
+            param_names=[],
             return_type=BaseType.VOID,
             targets=(
                 CallableTarget(
@@ -5876,9 +6318,24 @@ class SymbolTableVisitor(zincVisitor):
 
     def _callable_return_info_from_function(self, func: FunctionInstance) -> CallableTypeInfo:
         """Convert a resolved function specialization into a callable signature."""
+        param_names: list[str] = []
+        param_default_texts: dict[int, str] = {}
+        param_default_exprs: dict[int, ParserRuleContext] = {}
+        param_default_owner_modules: dict[int, str] = {}
+        if hasattr(func.ctx, "parameterList") and func.ctx.parameterList():
+            for index, param_ctx in enumerate(func.ctx.parameterList().parameter()):
+                param_names.append(param_ctx.IDENTIFIER().getText())
+                if param_ctx.expression() is not None:
+                    param_default_texts[index] = param_ctx.expression().getText()
+                    param_default_exprs[index] = param_ctx.expression()
+                    param_default_owner_modules[index] = func.module_id
         return CallableTypeInfo(
             param_types=list(func.arg_types),
             param_exact_types=list(func.arg_exact_types),
+            param_names=param_names,
+            param_default_texts=param_default_texts,
+            param_default_exprs=param_default_exprs,
+            param_default_owner_modules=param_default_owner_modules,
             param_array_infos={
                 index: self._copy_array_info(info)
                 for index, info in func.arg_array_infos.items()
@@ -6183,9 +6640,7 @@ class SymbolTableVisitor(zincVisitor):
                 expected_option=expected_option_info,
                 actual_option=actual_option_info,
             ):
-                raise ZincTypeError(
-                    f"parameter '{param_ctx.IDENTIFIER().getText()}' expects a compatible '{type_ctx.getText()}' value"
-                )
+                raise ZincTypeError(f"parameter '{param_ctx.IDENTIFIER().getText()}' expects a compatible '{type_ctx.getText()}' value")
 
     def _current_function_ctx(self):
         """Return the parse context for the current function-like owner."""
@@ -7545,7 +8000,11 @@ class SymbolTableVisitor(zincVisitor):
                 name_token = primary.IDENTIFIER() or (primary.TYPE_KW() if hasattr(primary, "TYPE_KW") else None)
             if name_token is not None:
                 builtin_name = name_token.getText()
-                args = list(ctx.argumentList().expression()) if ctx.argumentList() else []
+                args = []
+                if builtin_name in {"line", "meta", "type", "has_component", "implements"}:
+                    raw_args = self._raw_call_arguments(ctx.argumentList())
+                    self._require_positional_arguments(raw_args, f"{builtin_name}()")
+                    args = [arg.expression for arg in raw_args]
                 if builtin_name == "line":
                     if args:
                         raise ZincTypeError("line() does not accept arguments")
@@ -7617,7 +8076,9 @@ class SymbolTableVisitor(zincVisitor):
             _tag, meta_value, method_name = callee_symbol.constant_value
             method_args: list[object] = []
             if ctx.argumentList():
-                for arg_ctx in ctx.argumentList().expression():
+                raw_args = self._raw_call_arguments(ctx.argumentList())
+                self._require_positional_arguments(raw_args, f"{method_name}()")
+                for arg_ctx in [arg.expression for arg in raw_args]:
                     self.visit(arg_ctx)
                     arg_symbol = self._expr_symbol(arg_ctx)
                     method_args.append(arg_symbol.constant_value if arg_symbol else None)
@@ -7643,8 +8104,10 @@ class SymbolTableVisitor(zincVisitor):
         arg_option_infos: dict[int, OptionTypeInfo] = {}
         arg_struct_qualified_names: dict[int, str] = {}
         arg_anonymous_struct_infos: dict[int, AnonymousStructTypeInfo] = {}
-        if ctx.argumentList():
-            for i, arg_expr in enumerate(ctx.argumentList().expression()):
+        raw_args = self._raw_call_arguments(ctx.argumentList())
+        if raw_args:
+            for i, raw_arg in enumerate(raw_args):
+                arg_expr = raw_arg.expression
                 arg_exprs.append(arg_expr)
                 arg_type = self.visit(arg_expr)
                 if arg_type == BaseType.NEVER:
@@ -7730,6 +8193,27 @@ class SymbolTableVisitor(zincVisitor):
             primary = callee_ctx.primaryExpression()
             if primary and primary.IDENTIFIER():
                 lexical_function = self._current_lexical_function(primary.IDENTIFIER().getText())
+                if lexical_function is not None:
+                    bound_args = self._bind_call_arguments(
+                        ctx,
+                        self._parameter_specs_from_ctx(lexical_function.ctx, lexical_function.module_id),
+                        f"call to '{lexical_function.display_name}'",
+                    )
+                    (
+                        arg_types,
+                        arg_exact_types,
+                        arg_exprs,
+                        arg_channel_infos,
+                        arg_array_infos,
+                        arg_dict_infos,
+                        arg_set_infos,
+                        arg_tuple_infos,
+                        arg_callable_infos,
+                        arg_result_infos,
+                        arg_option_infos,
+                        arg_struct_qualified_names,
+                        arg_anonymous_struct_infos,
+                    ) = self._collect_bound_argument_info(bound_args)
                 if lexical_function is not None and BaseType.UNKNOWN not in arg_types:
                     self._validate_constraints(
                         lexical_function.ctx,
@@ -7814,6 +8298,7 @@ class SymbolTableVisitor(zincVisitor):
             if primary and primary.IDENTIFIER():
                 func_name = primary.IDENTIFIER().getText()
                 if func_name == "chan":
+                    self._require_positional_arguments(raw_args, "chan()")
                     if len(arg_types) > 1:
                         raise ZincTypeError("chan() accepts at most one capacity argument")
                     if arg_types and arg_types[0] != BaseType.INTEGER:
@@ -7828,6 +8313,7 @@ class SymbolTableVisitor(zincVisitor):
                     )
                     return BaseType.CHANNEL
                 if func_name == "close":
+                    self._require_positional_arguments(raw_args, "close()")
                     if len(arg_types) != 1:
                         raise ZincTypeError("close() expects exactly one channel argument")
                     if arg_types[0] != BaseType.CHANNEL:
@@ -7837,7 +8323,15 @@ class SymbolTableVisitor(zincVisitor):
                         interval=ctx.getSourceInterval(),
                     )
                     return BaseType.VOID
+                if func_name == "print":
+                    self._require_positional_arguments(raw_args, "print()")
+                    self.symbols.define_temp(
+                        resolved_type=BaseType.VOID,
+                        interval=ctx.getSourceInterval(),
+                    )
+                    return BaseType.VOID
                 if func_name in {"dict", "sort_dict"}:
+                    self._require_positional_arguments(raw_args, f"{func_name}()")
                     if arg_types:
                         raise ZincTypeError(f"{func_name}() does not accept arguments")
                     symbol = self.symbols.define_temp(
@@ -7847,6 +8341,7 @@ class SymbolTableVisitor(zincVisitor):
                     symbol.dict_info = DictTypeInfo(kind=func_name)
                     return BaseType.DICT
                 if func_name in {"set", "sort_set"}:
+                    self._require_positional_arguments(raw_args, f"{func_name}()")
                     if arg_types:
                         raise ZincTypeError(f"{func_name}() does not accept arguments")
                     symbol = self.symbols.define_temp(
@@ -7863,6 +8358,7 @@ class SymbolTableVisitor(zincVisitor):
             path = extract_identifier_path(callee_ctx) if self._current_module is not None else None
 
             if path == ["Context", "background"]:
+                self._require_positional_arguments(raw_args, "Context.background()")
                 if arg_types:
                     raise ZincTypeError("Context.background() does not accept arguments")
                 self.symbols.define_temp(
@@ -7872,6 +8368,7 @@ class SymbolTableVisitor(zincVisitor):
                 return BaseType.CONTEXT
 
             if path == ["Context", "with_cancel"]:
+                self._require_positional_arguments(raw_args, "Context.with_cancel()")
                 if len(arg_types) != 1 or arg_types[0] != BaseType.CONTEXT:
                     raise ZincTypeError("Context.with_cancel() expects a context argument")
                 temp = self.symbols.define_temp(
@@ -7888,6 +8385,7 @@ class SymbolTableVisitor(zincVisitor):
             receiver_type = self.visit(receiver_ctx)
             if receiver_type == BaseType.CONTEXT:
                 if method_name == "done":
+                    self._require_positional_arguments(raw_args, "Context.done()")
                     if arg_types:
                         raise ZincTypeError("Context.done() does not accept arguments")
                     temp = self.symbols.define_temp(
@@ -7900,6 +8398,7 @@ class SymbolTableVisitor(zincVisitor):
                     )
                     return BaseType.CHANNEL
                 if method_name == "cancel":
+                    self._require_positional_arguments(raw_args, "Context.cancel()")
                     if arg_types:
                         raise ZincTypeError("Context.cancel() does not accept arguments")
                     self.symbols.define_temp(
@@ -7910,6 +8409,7 @@ class SymbolTableVisitor(zincVisitor):
 
             # len() always returns an integer (usize in Rust, i64 in Zinc)
             if method_name == "len":
+                self._require_positional_arguments(raw_args, f"{method_name}()")
                 self.symbols.define_temp(
                     resolved_type=BaseType.INTEGER,
                     interval=ctx.getSourceInterval(),
@@ -7918,6 +8418,7 @@ class SymbolTableVisitor(zincVisitor):
                 return BaseType.INTEGER
 
             if method_name in {"is_empty", "contains", "contains_key"}:
+                self._require_positional_arguments(raw_args, f"{method_name}()")
                 self.symbols.define_temp(
                     resolved_type=BaseType.BOOLEAN,
                     interval=ctx.getSourceInterval(),
@@ -7940,6 +8441,7 @@ class SymbolTableVisitor(zincVisitor):
 
                         # For push on arrays, track element type
                         if method_name == "push" and var_symbol.resolved_type == BaseType.ARRAY and arg_types:
+                            self._require_positional_arguments(raw_args, "array.push()")
                             arg_symbol = self._expr_symbol(arg_exprs[0])
                             if var_symbol.element_type is None:
                                 var_symbol.element_type = arg_types[0]
@@ -7969,6 +8471,7 @@ class SymbolTableVisitor(zincVisitor):
                                 var_symbol.option_info = self._copy_option_info(arg_symbol.option_info)
 
                         if var_symbol.resolved_type == BaseType.DICT and var_symbol.dict_info:
+                            self._require_positional_arguments(raw_args, f"dict.{method_name}()")
                             dict_info = var_symbol.dict_info
                             if method_name == "insert":
                                 if len(arg_types) != 2:
@@ -8066,6 +8569,7 @@ class SymbolTableVisitor(zincVisitor):
                                 return BaseType.VOID
 
                         if var_symbol.resolved_type == BaseType.SET and var_symbol.set_info:
+                            self._require_positional_arguments(raw_args, f"set.{method_name}()")
                             set_info = var_symbol.set_info
                             if method_name in {"push", "insert", "contains", "remove"}:
                                 if len(arg_types) != 1:
@@ -8116,6 +8620,26 @@ class SymbolTableVisitor(zincVisitor):
             and not is_direct_static_method
         ):
             callable_info = callee_symbol.callable_info
+            bound_args = self._bind_call_arguments(
+                ctx,
+                self._parameter_specs_from_callable_info(callable_info),
+                "indirect call",
+            )
+            (
+                arg_types,
+                arg_exact_types,
+                arg_exprs,
+                arg_channel_infos,
+                arg_array_infos,
+                arg_dict_infos,
+                arg_set_infos,
+                arg_tuple_infos,
+                arg_callable_infos,
+                arg_result_infos,
+                arg_option_infos,
+                arg_struct_qualified_names,
+                arg_anonymous_struct_infos,
+            ) = self._collect_bound_argument_info(bound_args)
             if len(callable_info.param_types) != len(arg_types):
                 raise ZincTypeError("indirect call arity mismatch")
 
@@ -8331,6 +8855,12 @@ class SymbolTableVisitor(zincVisitor):
                     if method:
                         if not method.is_static:
                             raise ZincTypeError("instance methods must be bound to a receiver before use as callable values")
+                        bound_args = self._bind_call_arguments(
+                            ctx,
+                            self._parameter_specs_from_method(method),
+                            f"call to '{method_name}'",
+                        )
+                        self._collect_bound_argument_info(bound_args)
                         return_info = self._resolved_named_type_info(
                             method.return_type,
                             source_module_id=method.source_module_id or owner_symbol.module_id,
@@ -8356,6 +8886,27 @@ class SymbolTableVisitor(zincVisitor):
                 "implements",
             ):
                 func_def = self.atlas.function_defs.get(resolved_function.qualified_name)
+                if func_def:
+                    bound_args = self._bind_call_arguments(
+                        ctx,
+                        self._parameter_specs_from_ctx(func_def, resolved_function.module_id),
+                        f"call to '{resolved_function.name}'",
+                    )
+                    (
+                        arg_types,
+                        arg_exact_types,
+                        arg_exprs,
+                        arg_channel_infos,
+                        arg_array_infos,
+                        arg_dict_infos,
+                        arg_set_infos,
+                        arg_tuple_infos,
+                        arg_callable_infos,
+                        arg_result_infos,
+                        arg_option_infos,
+                        arg_struct_qualified_names,
+                        arg_anonymous_struct_infos,
+                    ) = self._collect_bound_argument_info(bound_args)
                 if func_def and BaseType.UNKNOWN not in arg_types:
                     self._validate_constraints(
                         func_def,
@@ -8686,7 +9237,9 @@ class SymbolTableVisitor(zincVisitor):
             if any(field.is_infer for field in struct_info.fields):
                 concrete_anonymous_struct_info = AnonymousStructTypeInfo(fields=concrete_fields)
             for field in struct_info.fields:
-                if field.type_alternatives and constraint_slots.get(field.name) not in self._type_meta_list_from_names(field.type_alternatives):
+                if field.type_alternatives and constraint_slots.get(field.name) not in self._type_meta_list_from_names(
+                    field.type_alternatives
+                ):
                     raise ZincTypeError(
                         f"struct field '{struct_info.name}.{field.name}' expects a compatible '{'|'.join(field.type_alternatives)}' value"
                     )
@@ -10198,56 +10751,55 @@ class SymbolTableVisitor(zincVisitor):
         # Collect argument types and track channel arguments
         arg_types: list[BaseType] = []
         arg_exact_types: list[str | None] = []
-        arg_exprs = list(ctx.argumentList().expression()) if ctx.argumentList() else []
+        raw_args = self._raw_call_arguments(ctx.argumentList())
+        arg_exprs = [arg.expression for arg in raw_args]
         arg_channel_infos: dict[int, ChannelTypeInfo] = {}
         arg_callable_infos: dict[int, CallableTypeInfo] = {}
         arg_result_infos: dict[int, ResultTypeInfo] = {}
         arg_option_infos: dict[int, OptionTypeInfo] = {}
         arg_struct_qualified_names: dict[int, str] = {}
         arg_anonymous_struct_infos: dict[int, AnonymousStructTypeInfo] = {}
-        if ctx.argumentList():
-            for i, arg_expr in enumerate(arg_exprs):
-                arg_type = self.visit(arg_expr)
-                arg_types.append(arg_type)
-                arg_symbol = self._expr_symbol(arg_expr)
-                arg_exact_types.append(arg_symbol.exact_type if arg_symbol else self._resolved_exact_type(arg_type, None))
-
-                if arg_type == BaseType.CHANNEL:
-                    if isinstance(arg_expr, ZincParser.PrimaryExprContext):
-                        arg_primary = arg_expr.primaryExpression()
-                        if arg_primary and arg_primary.IDENTIFIER():
-                            chan_var = arg_primary.IDENTIFIER().getText()
-                            if chan_var in self._channel_infos:
-                                arg_channel_infos[i] = self._channel_infos[chan_var]
-                                continue
-                    arg_symbol = self._expr_symbol(arg_expr)
-                    if arg_symbol and arg_symbol.channel_info:
-                        arg_channel_infos[i] = self._copy_channel_info(arg_symbol.channel_info) or ChannelTypeInfo()
-                elif arg_type == BaseType.CALLABLE:
-                    arg_symbol = self._expr_symbol(arg_expr)
-                    if arg_symbol and arg_symbol.callable_info:
-                        arg_callable_infos[i] = self._copy_callable_info(arg_symbol.callable_info) or CallableTypeInfo()
-                elif arg_type == BaseType.RESULT:
-                    arg_symbol = self._expr_symbol(arg_expr)
-                    if arg_symbol and arg_symbol.result_info:
-                        arg_result_infos[i] = self._copy_result_info(arg_symbol.result_info) or ResultTypeInfo()
-                elif arg_type == BaseType.OPTION:
-                    arg_symbol = self._expr_symbol(arg_expr)
-                    if arg_symbol and arg_symbol.option_info:
-                        arg_option_infos[i] = self._copy_option_info(arg_symbol.option_info) or OptionTypeInfo()
-                elif arg_type == BaseType.STRUCT:
-                    arg_symbol = self._expr_symbol(arg_expr)
-                    if arg_symbol:
-                        struct_qualified_name, anonymous_struct_info = self._struct_metadata_for_symbol(arg_symbol)
-                        if struct_qualified_name is not None:
-                            arg_struct_qualified_names[i] = struct_qualified_name
-                        if anonymous_struct_info is not None:
-                            arg_anonymous_struct_infos[i] = (
-                                self._copy_anonymous_struct_info(anonymous_struct_info) or AnonymousStructTypeInfo()
-                            )
+        if raw_args:
+            raw_bound_args = [BoundArgument(arg.expression, arg.name or f"arg_{index}", index) for index, arg in enumerate(raw_args)]
+            (
+                arg_types,
+                arg_exact_types,
+                arg_exprs,
+                arg_channel_infos,
+                _arg_array_infos,
+                _arg_dict_infos,
+                _arg_set_infos,
+                _arg_tuple_infos,
+                arg_callable_infos,
+                arg_result_infos,
+                arg_option_infos,
+                arg_struct_qualified_names,
+                arg_anonymous_struct_infos,
+            ) = self._collect_bound_argument_info(raw_bound_args)
 
         if path and len(path) == 1:
             lexical_function = self._current_lexical_function(path[0])
+            if lexical_function is not None:
+                bound_args = self._bind_call_arguments(
+                    ctx,
+                    self._parameter_specs_from_ctx(lexical_function.ctx, lexical_function.module_id),
+                    f"spawn call to '{lexical_function.display_name}'",
+                )
+                (
+                    arg_types,
+                    arg_exact_types,
+                    arg_exprs,
+                    arg_channel_infos,
+                    _arg_array_infos,
+                    _arg_dict_infos,
+                    _arg_set_infos,
+                    _arg_tuple_infos,
+                    arg_callable_infos,
+                    arg_result_infos,
+                    arg_option_infos,
+                    arg_struct_qualified_names,
+                    arg_anonymous_struct_infos,
+                ) = self._collect_bound_argument_info(bound_args)
             if lexical_function is not None and BaseType.UNKNOWN not in arg_types:
                 self._validate_annotated_parameters(
                     lexical_function.ctx,
@@ -10290,6 +10842,27 @@ class SymbolTableVisitor(zincVisitor):
             resolved_function = self.module_graph.resolve_function_path(self._current_module, path)
             if resolved_function is not None and resolved_function.name not in ("print", "chan"):
                 func_def = self.atlas.function_defs.get(resolved_function.qualified_name)
+                if func_def is not None:
+                    bound_args = self._bind_call_arguments(
+                        ctx,
+                        self._parameter_specs_from_ctx(func_def, resolved_function.module_id),
+                        f"spawn call to '{resolved_function.name}'",
+                    )
+                    (
+                        arg_types,
+                        arg_exact_types,
+                        arg_exprs,
+                        arg_channel_infos,
+                        _arg_array_infos,
+                        _arg_dict_infos,
+                        _arg_set_infos,
+                        _arg_tuple_infos,
+                        arg_callable_infos,
+                        arg_result_infos,
+                        arg_option_infos,
+                        arg_struct_qualified_names,
+                        arg_anonymous_struct_infos,
+                    ) = self._collect_bound_argument_info(bound_args)
                 if func_def is not None and BaseType.UNKNOWN not in arg_types:
                     self._validate_annotated_parameters(
                         func_def,
@@ -10331,6 +10904,12 @@ class SymbolTableVisitor(zincVisitor):
         callee_type = self.visit(func_expr)
         callee_symbol = self._expr_symbol(func_expr)
         if callee_type == BaseType.CALLABLE and callee_symbol and callee_symbol.callable_info:
+            bound_args = self._bind_call_arguments(
+                ctx,
+                self._parameter_specs_from_callable_info(callee_symbol.callable_info),
+                "spawn callable",
+            )
+            self._collect_bound_argument_info(bound_args)
             if not self._callable_is_transport_safe(callee_symbol.callable_info):
                 raise ZincTypeError("closure captures are not transport-safe for spawn")
             return

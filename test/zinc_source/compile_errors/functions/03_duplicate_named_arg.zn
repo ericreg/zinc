@@ -1,0 +1,8 @@
+// expected-error: multiple values for argument 'x'
+fn add(x, y) {
+    return x + y
+}
+
+fn main() {
+    add(1, x=2)
+}

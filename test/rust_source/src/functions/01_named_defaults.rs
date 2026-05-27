@@ -203,31 +203,97 @@ impl __ZincContext {
     }
 }
 
-async fn monomorphization_20_generic_with_channels__double_sender_Channel_i64(ch: __ZincChannel<i64>, val: i64) {
-    ch.send(val).await;
-    ch.send(val).await;
+#[derive(Clone)]
+struct __ZincClosureEnv_functions_01_named_defaults___lambda_functions_01_named_defaults__main_196_209 {
 }
 
-async fn monomorphization_20_generic_with_channels__sender_Channel_i64(ch: __ZincChannel<i64>, val: i64) {
-    ch.send(val).await;
+#[derive(Clone)]
+enum __ZincCallable_i64_to_i64 {
+    Closed,
+    V0(__ZincClosureEnv_functions_01_named_defaults___lambda_functions_01_named_defaults__main_196_209),
+    V1,
+}
+
+impl Default for __ZincCallable_i64_to_i64 {
+    fn default() -> Self {
+        Self::Closed
+    }
+}
+
+impl __ZincCallable_i64_to_i64 {
+    fn call(&self, arg_0: i64) -> i64 {
+        match self {
+            Self::Closed => panic!("callable used after closed receive"),
+            Self::V0(env) => functions_01_named_defaults____lambda_functions_01_named_defaults__main_196_209_i64(env.clone(), arg_0),
+            Self::V1 => functions_01_named_defaults__inc_i64(arg_0),
+        }
+    }
+}
+
+struct functions_01_named_defaults__Counter {
+    pub value: i64,
+}
+
+impl Default for functions_01_named_defaults__Counter {
+    fn default() -> Self {
+        Self { value: 0 }
+    }
+}
+
+impl functions_01_named_defaults__Counter {
+    fn add(&mut self, amount: i64) {
+        self.value += amount;
+    }
+    fn value_or(&self, extra: i64) -> i64 {
+        return (self.value + extra);
+    }
+}
+
+fn functions_01_named_defaults____lambda_functions_01_named_defaults__main_196_209_i64(__env: __ZincClosureEnv_functions_01_named_defaults___lambda_functions_01_named_defaults__main_196_209, x: i64) -> i64 {
+    return (x * 2);
+}
+
+fn functions_01_named_defaults__add_i32_i32(x: i32, y: i32) -> i32 {
+    return (x + y);
+}
+
+fn functions_01_named_defaults__blend_i32_i32(x: i32, y: i32) -> i32 {
+    return (x + y);
+}
+
+fn functions_01_named_defaults__inc_i64(x: i64) -> i64 {
+    return (x + 1);
+}
+
+fn functions_01_named_defaults__numeric_default_i32_f64(x: i32, y: f64) -> f64 {
+    return ((x as f64) + y);
+}
+
+async fn functions_01_named_defaults__send_value_Channel_i64(out: __ZincChannel<i64>, value: i64) {
+    out.send(value).await;
 }
 
 #[tokio::main]
 async fn main() {
     let mut __zinc_spawn_handles = Vec::new();
-    let int_ch = __ZincChannel::<i64>::unbounded();
-    __zinc_spawn_handles.push(tokio::spawn({ let __zinc_spawn_arg_0 = int_ch.clone(); async move { monomorphization_20_generic_with_channels__sender_Channel_i64(__zinc_spawn_arg_0.clone(), 42).await; } }));
-    let x = int_ch.recv().await;
-    println!("received int: {}", x);
-    let int_ch2 = __ZincChannel::<i64>::unbounded();
-    __zinc_spawn_handles.push(tokio::spawn({ let __zinc_spawn_arg_0 = int_ch2.clone(); async move { monomorphization_20_generic_with_channels__double_sender_Channel_i64(__zinc_spawn_arg_0.clone(), 100).await; } }));
-    let y1 = int_ch2.recv().await;
-    let y2 = int_ch2.recv().await;
-    println!("double received: {}, {}", y1, y2);
-    let int_ch3 = __ZincChannel::<i64>::unbounded();
-    __zinc_spawn_handles.push(tokio::spawn({ let __zinc_spawn_arg_0 = int_ch3.clone(); async move { monomorphization_20_generic_with_channels__sender_Channel_i64(__zinc_spawn_arg_0.clone(), 999).await; } }));
-    let z = int_ch3.recv().await;
-    println!("received another int: {}", z);
+    println!("{}", functions_01_named_defaults__add_i32_i32(10, 20));
+    println!("{}", functions_01_named_defaults__add_i32_i32(2, 3));
+    println!("{}", functions_01_named_defaults__add_i32_i32(5, 6));
+    println!("{}", functions_01_named_defaults__blend_i32_i32(10, 5));
+    println!("{}", functions_01_named_defaults__numeric_default_i32_f64(10, 2.5));
+    let ch = __ZincChannel::<i64>::unbounded();
+    __zinc_spawn_handles.push(tokio::spawn({ let __zinc_spawn_arg_0 = ch.clone(); async move { functions_01_named_defaults__send_value_Channel_i64(__zinc_spawn_arg_0.clone(), 8).await; } }));
+    println!("{}", ch.recv().await);
+    let lambda = __ZincCallable_i64_to_i64::V0(__ZincClosureEnv_functions_01_named_defaults___lambda_functions_01_named_defaults__main_196_209 {});
+    println!("{}", lambda.call(4));
+    println!("{}", lambda.call(6));
+    let mut counter = functions_01_named_defaults__Counter { value: 0 };
+    counter.add(1);
+    counter.add(4);
+    println!("{}", counter.value_or(5));
+    let f = __ZincCallable_i64_to_i64::V1;
+    println!("{}", f.call(9));
+    println!("{}", f.call(1));
     while let Some(__zinc_spawn_handle) = __zinc_spawn_handles.pop() {
         __zinc_spawn_handle.await.unwrap();
     }

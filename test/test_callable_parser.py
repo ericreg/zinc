@@ -44,7 +44,7 @@ def test_callable_annotations_and_fn_lambdas_parse() -> None:
 
     assert errors == []
     decl = tree.statement(0).functionDeclaration()
-    assert decl.parameterList().parameter(0).type_().getText() == "(i64)->i64"
+    assert decl.parameterList().parameter(0).typeAlternative().getText() == "(i64)->i64"
     assign_expr = decl.block().statement(0).variableAssignment().expression()
     assert isinstance(assign_expr, zincParser.LambdaExprContext)
 
@@ -91,7 +91,7 @@ def test_callable_field_and_return_lambda_parse() -> None:
 
     assert errors == []
     field = tree.statement(0).structDeclaration().structBody().structMember(0).structField()
-    assert field.type_().getText() == "(i64)->i64"
+    assert field.typeAlternative().getText() == "(i64)->i64"
     return_expr = tree.statement(1).functionDeclaration().block().statement(0).returnStatement().expression()
     assert isinstance(return_expr, zincParser.LambdaExprContext)
 
@@ -121,9 +121,33 @@ def test_module_qualified_reference_and_returned_callable_call_parse() -> None:
     assign_expr = tree.statement(2).functionDeclaration().block().statement(0).variableAssignment().expression()
     assert isinstance(assign_expr, zincParser.MemberAccessExprContext)
     print_call = tree.statement(2).functionDeclaration().block().statement(2).expressionStatement().expression()
-    nested_call = print_call.argumentList().expression(0)
+    nested_call = print_call.argumentList().argument(0).expression()
     assert isinstance(nested_call, zincParser.FunctionCallExprContext)
     assert isinstance(nested_call.expression(), zincParser.FunctionCallExprContext)
+
+
+def test_named_and_default_arguments_parse() -> None:
+    """Parameter defaults and named call arguments parse without making '=' an expression."""
+    tree, errors = parse_program(
+        """
+        fn add(x: i32 = 10, y = 20) {
+            print(x + y)
+        }
+
+        fn main() {
+            add(y=2, x=1)
+            add(1, y=2)
+        }
+        """
+    )
+
+    assert errors == []
+    params = tree.statement(0).functionDeclaration().parameterList().parameter()
+    assert params[0].expression().getText() == "10"
+    assert params[1].expression().getText() == "20"
+    first_call = tree.statement(1).functionDeclaration().block().statement(0).expressionStatement().expression()
+    assert first_call.argumentList().argument(0).IDENTIFIER().getText() == "y"
+    assert first_call.argumentList().argument(1).IDENTIFIER().getText() == "x"
 
 
 def test_bar_lambda_syntax_is_rejected() -> None:

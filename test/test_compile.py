@@ -35,6 +35,7 @@ COMPILE_ERROR_GROUPS = (
     "enums",
     "callables",
     "control_flow",
+    "functions",
 )
 
 
@@ -135,6 +136,7 @@ def compile_zinc(source_path: Path) -> str:
         symbol_visitor.specialization_map,
         symbol_visitor._channel_infos,
         symbol_visitor.lexical_functions,
+        symbol_visitor.bound_call_args,
     )
     program = codegen.generate()
     return program.render()

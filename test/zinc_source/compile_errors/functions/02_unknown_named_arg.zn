@@ -1,0 +1,8 @@
+// expected-error: unknown named argument 'z'
+fn add(x, y) {
+    return x + y
+}
+
+fn main() {
+    add(x=1, z=2)
+}

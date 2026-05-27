@@ -1,0 +1,12 @@
+// expected-error: default must be a literal or compile-time constant
+fn add(x = other()) {
+    return x
+}
+
+fn other() {
+    return 1
+}
+
+fn main() {
+    print(add())
+}

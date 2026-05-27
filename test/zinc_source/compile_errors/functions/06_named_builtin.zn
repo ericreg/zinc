@@ -1,0 +1,4 @@
+// expected-error: print\(\) does not accept named arguments
+fn main() {
+    print(value=1)
+}

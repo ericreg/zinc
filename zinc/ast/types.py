@@ -841,6 +841,10 @@ class CallableTypeInfo:
 
     param_types: list[BaseType] = field(default_factory=list)
     param_exact_types: list[str | None] = field(default_factory=list)
+    param_names: list[str] = field(default_factory=list)
+    param_default_texts: dict[int, str] = field(default_factory=dict)
+    param_default_exprs: dict[int, object] = field(default_factory=dict)
+    param_default_owner_modules: dict[int, str] = field(default_factory=dict)
     param_array_infos: dict[int, ArrayTypeInfo] = field(default_factory=dict)
     param_dict_infos: dict[int, DictTypeInfo] = field(default_factory=dict)
     param_set_infos: dict[int, SetTypeInfo] = field(default_factory=dict)
@@ -867,6 +871,10 @@ class CallableTypeInfo:
         return CallableTypeInfo(
             param_types=list(self.param_types),
             param_exact_types=list(self.param_exact_types),
+            param_names=list(self.param_names),
+            param_default_texts=dict(self.param_default_texts),
+            param_default_exprs=dict(self.param_default_exprs),
+            param_default_owner_modules=dict(self.param_default_owner_modules),
             param_array_infos={index: info.copy() for index, info in self.param_array_infos.items()},
             param_dict_infos={index: info.copy() for index, info in self.param_dict_infos.items()},
             param_set_infos={index: info.copy() for index, info in self.param_set_infos.items()},
@@ -920,12 +928,35 @@ class CallableTypeInfo:
         if self.structural_key() != other.structural_key():
             raise ValueError("cannot merge callable infos with different structural signatures")
         merged = self.copy()
+        merged._merge_call_metadata_from(other)
         seen = {target.storage_key() for target in merged.targets}
         for target in other.targets:
             if target.storage_key() not in seen:
                 merged.targets = (*merged.targets, target)
                 seen.add(target.storage_key())
         return merged
+
+    def _merge_call_metadata_from(self, other: CallableTypeInfo) -> None:
+        """Merge parameter names/defaults without changing callable type identity."""
+        if self.param_names and other.param_names and self.param_names != other.param_names:
+            self.param_names = []
+            self.param_default_texts = {}
+            self.param_default_exprs = {}
+            self.param_default_owner_modules = {}
+            return
+        if not self.param_names and other.param_names:
+            self.param_names = list(other.param_names)
+
+        if bool(self.param_default_texts) != bool(other.param_default_texts):
+            self.param_default_texts = {}
+            self.param_default_exprs = {}
+            self.param_default_owner_modules = {}
+            return
+        if self.param_default_texts and other.param_default_texts and self.param_default_texts != other.param_default_texts:
+            self.param_default_texts = {}
+            self.param_default_exprs = {}
+            self.param_default_owner_modules = {}
+            return
 
     def rust_type_name(self) -> str:
         """Return the generated Rust enum name for this signature."""

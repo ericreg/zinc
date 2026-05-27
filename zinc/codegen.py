@@ -42,7 +42,7 @@ from zinc.numeric_literals import is_numeric_literal, numeric_literal_value
 from zinc.parser.zincParser import zincParser as ZincParser
 from zinc.parser.zincVisitor import zincVisitor
 from zinc.string_literals import is_interpolated_string_literal, is_string_literal, to_rust_string_literal
-from zinc.symbols import LexicalFunctionInfo, SymbolKind, SymbolTable
+from zinc.symbols import BoundArgument, LexicalFunctionInfo, SymbolKind, SymbolTable
 
 
 @dataclass
@@ -103,6 +103,7 @@ class CodeGenVisitor(zincVisitor):
         specialization_map: dict[tuple[str | None, tuple[int, int]], str] | None = None,
         channel_infos: dict[str, ChannelTypeInfo] | None = None,
         lexical_functions: dict[str, LexicalFunctionInfo] | None = None,
+        bound_call_args: dict[tuple[str | None, tuple[int, int]], list[BoundArgument]] | None = None,
     ):
         self.atlas = atlas
         self.module_graph = atlas.module_graph
@@ -110,6 +111,7 @@ class CodeGenVisitor(zincVisitor):
         self._specialization_map = specialization_map or {}  # (caller, interval) -> mangled
         self._channel_infos = channel_infos or {}  # var_name -> ChannelTypeInfo
         self._lexical_functions = lexical_functions or {}
+        self._bound_call_args = bound_call_args or {}
         self._uses_async = False
         self._current_function: str | None = None
         self._current_module: str | None = None
@@ -328,7 +330,7 @@ class CodeGenVisitor(zincVisitor):
         if stmt_ctx.spawnStatement():
             expressions.append(stmt_ctx.spawnStatement().expression())
             if stmt_ctx.spawnStatement().argumentList():
-                expressions.extend(stmt_ctx.spawnStatement().argumentList().expression())
+                expressions.extend(self._raw_call_exprs(stmt_ctx.spawnStatement().argumentList()))
         return expressions
 
     def _walk_expression_if_blocks(self, node, visit_block) -> None:
@@ -1614,6 +1616,20 @@ class CodeGenVisitor(zincVisitor):
                 processed.append(arg)
         return processed
 
+    def _prepare_spawn_args(self, call_args: list, args: list[str]) -> tuple[list[str], list[str]]:
+        """Clone channel arguments before entering the async move block."""
+        setup: list[str] = []
+        prepared: list[str] = []
+        for i, arg_code in enumerate(args):
+            arg_ctx = self._call_arg_expr(call_args[i]) if i < len(call_args) else None
+            if arg_ctx is not None and self._get_expr_type(arg_ctx) == BaseType.CHANNEL:
+                clone_name = f"__zinc_spawn_arg_{i}"
+                setup.append(f"let {clone_name} = {arg_code}.clone();")
+                prepared.append(clone_name)
+            else:
+                prepared.append(arg_code)
+        return setup, prepared
+
     def _mark_async_functions(self) -> None:
         """Mark functions that need async because they spawn or call async functions."""
         async_funcs = {
@@ -2260,6 +2276,46 @@ class CodeGenVisitor(zincVisitor):
     def _looks_like_rust_string_literal(self, value: str) -> bool:
         """Return True when rendered Rust code is definitely a string literal."""
         return value.startswith('"') or value.startswith('r"') or bool(re.match(r"^r#+\"", value))
+
+    def _call_key(self, ctx) -> tuple[str | None, tuple[int, int]]:
+        """Return the scoped call-site key shared with semantic analysis."""
+        return (self._current_function, ctx.getSourceInterval())
+
+    def _raw_call_exprs(self, argument_list_ctx) -> list:
+        """Return call argument expressions in written order."""
+        if argument_list_ctx is None:
+            return []
+        return [arg_ctx.expression() for arg_ctx in argument_list_ctx.argument()]
+
+    def _call_args_for_ctx(self, ctx) -> list:
+        """Return bound call arguments when available, otherwise raw expressions."""
+        return self._bound_call_args.get(self._call_key(ctx)) or self._raw_call_exprs(ctx.argumentList())
+
+    def _call_arg_expr(self, arg) -> object:
+        """Return the parse expression for a raw or bound call argument."""
+        return arg.expression if isinstance(arg, BoundArgument) else arg
+
+    def _with_default_module(self, arg, render):
+        """Render a default argument in its declaration module."""
+        if not isinstance(arg, BoundArgument) or not arg.is_default or arg.owner_module_id is None:
+            return render()
+        previous_module = self._current_module
+        self._current_module = arg.owner_module_id
+        try:
+            return render()
+        finally:
+            self._current_module = previous_module
+
+    def _visit_call_arg(self, arg) -> str:
+        """Visit a raw or bound call argument."""
+        return self._with_default_module(arg, lambda: self.visit(self._call_arg_expr(arg)))
+
+    def _visit_call_arg_with_expectations(self, arg, **kwargs) -> str:
+        """Visit a raw or bound call argument with expected type metadata."""
+        return self._with_default_module(
+            arg,
+            lambda: self._visit_expression_with_expectations(self._call_arg_expr(arg), **kwargs),
+        )
 
     # --- Expression Visitors (return Rust code strings) ---
 
@@ -2979,11 +3035,9 @@ class CodeGenVisitor(zincVisitor):
         if constant_value is not None:
             return self._render_constant_value(constant_value)
         callee_ctx = ctx.expression()
-        args = []
-        arg_ctxs = []
-        if ctx.argumentList():
-            arg_ctxs = list(ctx.argumentList().expression())
-            args = [self.visit(arg) for arg in arg_ctxs]
+        call_args = self._call_args_for_ctx(ctx)
+        arg_ctxs = [self._call_arg_expr(arg) for arg in call_args]
+        args = [self._visit_call_arg(arg) for arg in call_args]
 
         if self._function_call_name(ctx) == "close":
             channel_arg = args[0] if args else "__zinc_missing_close_arg"
@@ -3032,9 +3086,9 @@ class CodeGenVisitor(zincVisitor):
         if direct_mangled:
             func = self.atlas.functions.get(direct_mangled)
             if func is not None:
-                args = self._render_function_args_for_instance(func, arg_ctxs)
+                args = self._render_function_args_for_instance(func, call_args)
             else:
-                args = [self.visit(arg) for arg in arg_ctxs]
+                args = [self._visit_call_arg(arg) for arg in call_args]
             args = self._process_function_args(direct_mangled, args, arg_ctxs)
             if func is not None:
                 closure_info = self._closure_info(func.qualified_name)
@@ -3116,7 +3170,7 @@ class CodeGenVisitor(zincVisitor):
                         and self.module_graph.resolve_function_path(self._current_module, [name]) is not None
                     )
             if not is_bare_top_level_function:
-                args = self._render_callable_args_for_signature(callee_symbol.callable_info, arg_ctxs)
+                args = self._render_callable_args_for_signature(callee_symbol.callable_info, call_args)
                 args = self._process_callable_args(callee_symbol.callable_info, args, arg_ctxs)
                 callable_expr = callee
                 if isinstance(callee_ctx, ZincParser.MemberAccessExprContext):
@@ -3132,9 +3186,9 @@ class CodeGenVisitor(zincVisitor):
                     mangled = self._specialization_map.get(key) or self.module_graph.rust_base_name(resolved_function.qualified_name)
                     func = self.atlas.functions.get(mangled)
                     if func is not None:
-                        args = self._render_function_args_for_instance(func, arg_ctxs)
+                        args = self._render_function_args_for_instance(func, call_args)
                     else:
-                        args = [self.visit(arg) for arg in arg_ctxs]
+                        args = [self._visit_call_arg(arg) for arg in call_args]
                     args = self._process_function_args(mangled, args, arg_ctxs)
                     call = f"{mangled}({', '.join(args)})"
                     if self.atlas.functions.get(mangled) and self.atlas.functions[mangled].is_async:
@@ -3269,13 +3323,13 @@ class CodeGenVisitor(zincVisitor):
 
         return f"{callee}({', '.join(args)})"
 
-    def _render_function_args_for_instance(self, func: FunctionInstance, arg_ctxs: list) -> list[str]:
+    def _render_function_args_for_instance(self, func: FunctionInstance, call_args: list) -> list[str]:
         """Render function-call arguments with the function signature as context."""
         rendered: list[str] = []
-        for i, arg_ctx in enumerate(arg_ctxs):
+        for i, arg in enumerate(call_args):
             rendered.append(
-                self._visit_expression_with_expectations(
-                    arg_ctx,
+                self._visit_call_arg_with_expectations(
+                    arg,
                     expected_type=func.arg_types[i] if i < len(func.arg_types) else None,
                     dict_info=func.arg_dict_infos.get(i),
                     set_info=func.arg_set_infos.get(i),
@@ -3287,13 +3341,13 @@ class CodeGenVisitor(zincVisitor):
             )
         return rendered
 
-    def _render_callable_args_for_signature(self, callable_info: CallableTypeInfo, arg_ctxs: list) -> list[str]:
+    def _render_callable_args_for_signature(self, callable_info: CallableTypeInfo, call_args: list) -> list[str]:
         """Render indirect-call arguments with a callable signature as context."""
         rendered: list[str] = []
-        for i, arg_ctx in enumerate(arg_ctxs):
+        for i, arg in enumerate(call_args):
             rendered.append(
-                self._visit_expression_with_expectations(
-                    arg_ctx,
+                self._visit_call_arg_with_expectations(
+                    arg,
                     expected_type=callable_info.param_types[i] if i < len(callable_info.param_types) else None,
                     dict_info=callable_info.param_dict_infos.get(i),
                     set_info=callable_info.param_set_infos.get(i),
@@ -3914,8 +3968,9 @@ class CodeGenVisitor(zincVisitor):
                 if primary and primary.IDENTIFIER() and primary.IDENTIFIER().getText() == "chan":
                     var_name = target
                     capacity = None
-                    if expr.argumentList() and expr.argumentList().expression():
-                        capacity = self.visit(expr.argumentList().expression(0))
+                    chan_args = self._call_args_for_ctx(expr)
+                    if chan_args:
+                        capacity = self._visit_call_arg(chan_args[0])
                     # Look up channel info to get element type
                     if var_name in self._channel_infos:
                         chan_info = self._channel_infos[var_name]
@@ -4086,7 +4141,9 @@ class CodeGenVisitor(zincVisitor):
             value = self._coerce_numeric_rhs_for_target(value, expr, target_type, target_exact_type)
 
         if target_ctx.IDENTIFIER() and target_symbol is not None:
-            target = self._rust_binding_name(target_symbol.unique_name) if target_symbol.unique_name in self._captured_binding_names else target
+            target = (
+                self._rust_binding_name(target_symbol.unique_name) if target_symbol.unique_name in self._captured_binding_names else target
+            )
 
         if assignment_op == "**=":
             power_value = self._render_power_assignment_expr(target, target_type, target_exact_type, value, expr)
@@ -4467,14 +4524,8 @@ class CodeGenVisitor(zincVisitor):
         callee_symbol = self._get_expr_symbol(func_expr)
         args = []
         setup = []
-        if ctx.argumentList():
-            for i, arg in enumerate(ctx.argumentList().expression()):
-                arg_code = self.visit(arg)
-                if self._get_expr_type(arg) == BaseType.CHANNEL:
-                    clone_name = f"__zinc_spawn_arg_{i}"
-                    setup.append(f"let {clone_name} = {arg_code}.clone();")
-                    arg_code = clone_name
-                args.append(arg_code)
+        call_args = self._call_args_for_ctx(ctx)
+        arg_ctxs = [self._call_arg_expr(arg) for arg in call_args]
 
         # Look up mangled name from specialization map (scoped by current function)
         key = (self._current_function, ctx.getSourceInterval())
@@ -4483,22 +4534,33 @@ class CodeGenVisitor(zincVisitor):
         if mangled:
             func = self.atlas.functions.get(mangled)
             if func is not None:
+                args = self._render_function_args_for_instance(func, call_args)
+                setup, args = self._prepare_spawn_args(call_args, args)
+                args = self._process_function_args(mangled, args, arg_ctxs)
+            else:
+                args = [self._visit_call_arg(arg) for arg in call_args]
+                setup, args = self._prepare_spawn_args(call_args, args)
+            if func is not None:
                 closure_info = self._closure_info(func.qualified_name)
                 if closure_info is not None:
                     args = [self._closure_env_constructor(closure_info), *args]
                 call_needs_await = func.is_async
             call = f"{mangled}({', '.join(args)})"
         elif callee_symbol and callee_symbol.callable_info:
+            args = self._render_callable_args_for_signature(callee_symbol.callable_info, call_args)
+            setup, args = self._prepare_spawn_args(call_args, args)
             args = self._process_callable_args(
                 callee_symbol.callable_info,
                 args,
-                list(ctx.argumentList().expression()) if ctx.argumentList() else None,
+                arg_ctxs,
             )
             callable_expr = func_name
             if self._is_direct_callable_expr(func_expr, callee_symbol):
                 callable_expr = self._render_callable_value(callee_symbol.callable_info)
             call = f"{callable_expr}.call({', '.join(args)})"
         else:
+            args = [self._visit_call_arg(arg) for arg in call_args]
+            setup, args = self._prepare_spawn_args(call_args, args)
             call = f"{func_name}({', '.join(args)})"
         async_call = f"{call}.await" if call_needs_await else call
         if setup:

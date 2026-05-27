@@ -20,13 +20,19 @@ Implemented core pillars
 - [x] component constraints ( basically generics-lite)
 - [x] return type annotations
 - [x] type alternatives, i32 | f32, numeric is sugar for i32 | f32 | u8 | ...
+- [x] rust like numerical literals
+- [x] math operators, +=, *=, -=, etc 
+- [] default parameters
+- [] arg matching
+- [] multiple assignment, x, y, z = 1
 
 - [] decorators
 - [] support for lambda expressions
-- [] rust like numerical literals
-- [] default parameters
+
+
 - [] iterator stuff such as for i in (1..upper_bound).step_by(2)
-- [] math operators, +=, *=, -=, etc 
+
+- [] bitwise operations
 out x = 
 
 Currently (possibly forever) unsupported
@@ -124,3 +130,48 @@ Example Applications:
 - kalman filter
 - webserver
 - math benchmarks
+
+
+
+// x is locked to i32, default value is 10 if not provided
+// y is locked to i32, default value is 10 if not provided
+fn my_func(x: i32 = 10, y: i32 = 10) { 
+}
+
+// x is locked to numeric, default value is 10 if not provided
+// y is locked to numeric, default value is 10 if not provided
+fn my_func(x: numeric = 10,  y: numeric = 10) { 
+}
+
+
+// x has no specified type, if no value is provided then it is i32
+// but if a value is provided we take that type instead
+// y is still locked to i32
+fn my_func(x = 10, y: i32 = 10) {
+}
+
+// named arguments should be allowed via the arg= syntax
+// y is still locked to i32
+a = 34.5
+b = 50.0
+my_func(x=a, y=b)
+
+// the order of args shouldn't matter is all args are names
+my_func(y=b, x=a)
+
+// is equivalent to 
+my_func(x=a, y=b)
+
+
+// unnamed args must always come first
+fn func_2(a, b, c) { }
+
+x = 1
+y = 2
+z = 3
+
+// there are valid
+func_2(x, b=y, c=z)
+
+// this is not
+func_2(c=z, b=y, x)

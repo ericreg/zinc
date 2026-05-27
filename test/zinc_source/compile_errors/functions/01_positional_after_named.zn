@@ -1,0 +1,8 @@
+// expected-error: positional arguments must come before named arguments
+fn add(a, b, c) {
+    return a + b + c
+}
+
+fn main() {
+    add(c=3, b=2, 1)
+}

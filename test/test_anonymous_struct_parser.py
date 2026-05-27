@@ -56,9 +56,9 @@ def test_anonymous_struct_literals_and_types_parse() -> None:
 
     assert errors == []
     holder_field = tree.statement(0).structDeclaration().structBody().structMember(0).structField()
-    assert holder_field.type_().anonymousStructType() is not None
+    assert holder_field.typeAlternative().type_(0).anonymousStructType() is not None
     area_decl = tree.statement(1).functionDeclaration()
-    assert area_decl.parameterList().parameter(0).type_().anonymousStructType() is not None
+    assert area_decl.parameterList().parameter(0).typeAlternative().type_(0).anonymousStructType() is not None
     assign_expr = area_decl.block().statement(0).variableAssignment().expression()
     assert isinstance(assign_expr, zincParser.PrimaryExprContext)
     assert assign_expr.primaryExpression().anonymousStructLiteral() is not None
@@ -78,7 +78,7 @@ def test_empty_anonymous_struct_parses() -> None:
     )
 
     assert errors == []
-    assert tree.statement(0).functionDeclaration().parameterList().parameter(0).type_().anonymousStructType() is not None
+    assert tree.statement(0).functionDeclaration().parameterList().parameter(0).typeAlternative().type_(0).anonymousStructType() is not None
     assign_expr = tree.statement(1).functionDeclaration().block().statement(0).variableAssignment().expression()
     assert assign_expr.primaryExpression().anonymousStructLiteral() is not None
 
@@ -156,8 +156,8 @@ def test_anonymous_struct_nested_in_array_and_callable_annotations_parse() -> No
 
     assert errors == []
     fields = tree.statement(0).structDeclaration().structBody().structMember()
-    assert fields[0].structField().type_().getText() == "[struct{x:i64y:i64}]"
-    assert fields[1].structField().type_().getText() == "(struct{x:i64})->struct{label:string}"
+    assert fields[0].structField().typeAlternative().getText() == "[struct{x:i64y:i64}]"
+    assert fields[1].structField().typeAlternative().getText() == "(struct{x:i64})->struct{label:string}"
 
 
 def test_anonymous_struct_type_rejects_comma_separated_fields() -> None:

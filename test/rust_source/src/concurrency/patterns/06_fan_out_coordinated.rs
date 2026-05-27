@@ -217,8 +217,8 @@ async fn main() {
     let doubles = __ZincChannel::<i64>::unbounded();
     let triples = __ZincChannel::<i64>::unbounded();
     let source = 5;
-    __zinc_spawn_handles.push(tokio::spawn({ let __zinc_spawn_arg_0 = doubles.clone(); async move { concurrency_patterns_06_fan_out_coordinated__double_Channel_i64(__zinc_spawn_arg_0, source).await; } }));
-    __zinc_spawn_handles.push(tokio::spawn({ let __zinc_spawn_arg_0 = triples.clone(); async move { concurrency_patterns_06_fan_out_coordinated__triple_Channel_i64(__zinc_spawn_arg_0, source).await; } }));
+    __zinc_spawn_handles.push(tokio::spawn({ let __zinc_spawn_arg_0 = doubles.clone(); async move { concurrency_patterns_06_fan_out_coordinated__double_Channel_i64(__zinc_spawn_arg_0.clone(), source).await; } }));
+    __zinc_spawn_handles.push(tokio::spawn({ let __zinc_spawn_arg_0 = triples.clone(); async move { concurrency_patterns_06_fan_out_coordinated__triple_Channel_i64(__zinc_spawn_arg_0.clone(), source).await; } }));
     println!("{}", doubles.recv().await);
     println!("{}", triples.recv().await);
     while let Some(__zinc_spawn_handle) = __zinc_spawn_handles.pop() {

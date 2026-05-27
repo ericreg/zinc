@@ -216,7 +216,7 @@ async fn main() {
     let output = __ZincChannel::<i64>::unbounded();
     input.send(4).await;
     input.close();
-    __zinc_spawn_handles.push(tokio::spawn({ let __zinc_spawn_arg_0 = input.clone(); let __zinc_spawn_arg_1 = output.clone(); async move { concurrency_channels_07_param_receive_send__bounce_Channel_Channel(__zinc_spawn_arg_0, __zinc_spawn_arg_1).await; } }));
+    __zinc_spawn_handles.push(tokio::spawn({ let __zinc_spawn_arg_0 = input.clone(); let __zinc_spawn_arg_1 = output.clone(); async move { concurrency_channels_07_param_receive_send__bounce_Channel_Channel(__zinc_spawn_arg_0.clone(), __zinc_spawn_arg_1.clone()).await; } }));
     println!("{}", output.recv().await);
     while let Some(__zinc_spawn_handle) = __zinc_spawn_handles.pop() {
         __zinc_spawn_handle.await.unwrap();

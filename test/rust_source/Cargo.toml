@@ -483,6 +483,10 @@ name = "functions"
 path = "src/functions.rs"
 
 [[bin]]
+name = "functions_01_named_defaults"
+path = "src/functions/01_named_defaults.rs"
+
+[[bin]]
 name = "if_else"
 path = "src/if_else.rs"
 

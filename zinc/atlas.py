@@ -203,6 +203,8 @@ class StructMethodInfo:
 
     name: str
     parameters: list[tuple[str, str | None, str | None]] = field(default_factory=list)
+    parameter_defaults: dict[int, ParserRuleContext] = field(default_factory=dict)
+    parameter_default_texts: dict[int, str] = field(default_factory=dict)
     is_static: bool = False
     self_mutability: str | None = None
     return_type: str | None = None

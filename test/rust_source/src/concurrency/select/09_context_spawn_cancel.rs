@@ -248,7 +248,7 @@ async fn main() {
         (__zinc_child_ctx.clone(), __ZincCallable_Unit_to_Unit::V0(__zinc_child_ctx))
     };
     let output = __ZincChannel::<i64>::unbounded();
-    __zinc_spawn_handles.push(tokio::spawn({ let __zinc_spawn_arg_1 = output.clone(); async move { concurrency_select_09_context_spawn_cancel__wait_for_cancel___ZincContext_Channel(child, __zinc_spawn_arg_1).await; } }));
+    __zinc_spawn_handles.push(tokio::spawn({ let __zinc_spawn_arg_1 = output.clone(); async move { concurrency_select_09_context_spawn_cancel__wait_for_cancel___ZincContext_Channel(child, __zinc_spawn_arg_1.clone()).await; } }));
     cancel.call();
     println!("{}", output.recv().await);
     while let Some(__zinc_spawn_handle) = __zinc_spawn_handles.pop() {

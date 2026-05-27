@@ -56,7 +56,7 @@ def test_if_expression_parses_in_assignment_argument_and_return_position() -> No
     assert errors == []
     block = tree.statement(0).functionDeclaration().block()
     assign_expr = block.statement(0).variableAssignment().expression()
-    arg_expr = block.statement(1).expressionStatement().expression().argumentList().expression(0)
+    arg_expr = block.statement(1).expressionStatement().expression().argumentList().argument(0).expression()
     return_expr = block.statement(2).returnStatement().expression()
     assert isinstance(assign_expr, zincParser.IfExprContext)
     assert isinstance(arg_expr, zincParser.IfExprContext)

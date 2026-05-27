@@ -248,7 +248,7 @@ async fn callables_18_channel_spawn_helper__worker_Channel_unknown_to_unknown(ou
 async fn main() {
     let mut __zinc_spawn_handles = Vec::new();
     let jobs = __ZincChannel::<__ZincCallable_i64_to_i64>::unbounded();
-    __zinc_spawn_handles.push(tokio::spawn({ let __zinc_spawn_arg_0 = jobs.clone(); async move { callables_18_channel_spawn_helper__worker_Channel_i64_to_i64(__zinc_spawn_arg_0).await; } }));
+    __zinc_spawn_handles.push(tokio::spawn({ let __zinc_spawn_arg_0 = jobs.clone(); async move { callables_18_channel_spawn_helper__worker_Channel_i64_to_i64(__zinc_spawn_arg_0.clone()).await; } }));
     let f = jobs.recv().await;
     println!("{}", f.call(5));
     while let Some(__zinc_spawn_handle) = __zinc_spawn_handles.pop() {

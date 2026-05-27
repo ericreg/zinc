@@ -217,8 +217,8 @@ async fn main() {
     let left = __ZincChannel::<String>::unbounded();
     let right = __ZincChannel::<String>::unbounded();
     let merged = __ZincChannel::<String>::unbounded();
-    __zinc_spawn_handles.push(tokio::spawn({ let __zinc_spawn_arg_0 = left.clone(); async move { concurrency_non_deterministic_10_patterns_fan_in_race__send_left_Channel(__zinc_spawn_arg_0).await; } }));
-    __zinc_spawn_handles.push(tokio::spawn({ let __zinc_spawn_arg_0 = right.clone(); async move { concurrency_non_deterministic_10_patterns_fan_in_race__send_right_Channel(__zinc_spawn_arg_0).await; } }));
+    __zinc_spawn_handles.push(tokio::spawn({ let __zinc_spawn_arg_0 = left.clone(); async move { concurrency_non_deterministic_10_patterns_fan_in_race__send_left_Channel(__zinc_spawn_arg_0.clone()).await; } }));
+    __zinc_spawn_handles.push(tokio::spawn({ let __zinc_spawn_arg_0 = right.clone(); async move { concurrency_non_deterministic_10_patterns_fan_in_race__send_right_Channel(__zinc_spawn_arg_0.clone()).await; } }));
     for i in 0..2 {
         tokio::select! {
             __zinc_select_value_1_0 = async { left.recv_option().await } => {

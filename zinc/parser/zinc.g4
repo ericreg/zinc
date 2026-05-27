@@ -122,7 +122,7 @@ parameterList
     ;
 
 parameter
-    : IDENTIFIER (':' typeAlternative)?
+    : IDENTIFIER (':' typeAlternative)? ('=' expression)?
     ;
 
 typeAlternative
@@ -424,7 +424,12 @@ fieldInit
     ;
 
 argumentList
-    : expression (',' expression)*
+    : argument (',' argument)*
+    ;
+
+argument
+    : IDENTIFIER '=' expression
+    | expression
     ;
 
 selectCase

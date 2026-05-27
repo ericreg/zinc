@@ -212,7 +212,7 @@ async fn main() {
     let mut __zinc_spawn_handles = Vec::new();
     let results = __ZincChannel::<i64>::unbounded();
     for i in 1..=4 {
-        __zinc_spawn_handles.push(tokio::spawn({ let __zinc_spawn_arg_0 = results.clone(); async move { concurrency_spawn_04_loop_collects_all__emit_Channel_i64(__zinc_spawn_arg_0, i).await; } }));
+        __zinc_spawn_handles.push(tokio::spawn({ let __zinc_spawn_arg_0 = results.clone(); async move { concurrency_spawn_04_loop_collects_all__emit_Channel_i64(__zinc_spawn_arg_0.clone(), i).await; } }));
     }
     let mut total = 0;
     for i in 0..4 {

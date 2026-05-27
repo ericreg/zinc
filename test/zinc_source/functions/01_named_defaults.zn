@@ -1,0 +1,58 @@
+fn add(x: i32 = 10, y: i32 = 20) {
+    return x + y
+}
+
+fn blend(x = 10, y: i32 = 5) {
+    return x + y
+}
+
+fn numeric_default(x: numeric = 10, y: numeric = 2.5) {
+    return x + y
+}
+
+fn inc(x: i64 = 1) {
+    return x + 1
+}
+
+fn send_value(out, value: i64 = 8) {
+    out <- value
+}
+
+struct Counter {
+    value: 0
+
+    fn add(amount = 1) {
+        self.value += amount
+    }
+
+    fn value_or(extra: i64 = 0) {
+        return self.value + extra
+    }
+}
+
+fn main() {
+    print(add())
+    print(add(y=3, x=2))
+    print(add(5, y=6))
+    print(blend())
+    print(numeric_default())
+
+    ch = chan()
+    spawn send_value(out=ch)
+    print(<-ch)
+
+    lambda = fn(x: i64 = 4) {
+        return x * 2
+    }
+    print(lambda())
+    print(lambda(x=6))
+
+    counter = Counter {}
+    counter.add()
+    counter.add(amount=4)
+    print(counter.value_or(extra=5))
+
+    f = inc
+    print(f(x=9))
+    print(f())
+}
