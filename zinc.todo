@@ -16,8 +16,8 @@ Implemented core pillars
 - [x] Closure support
 - [x] strict type annotations
 - [x] enums
-- [] metaprogramming model (seamless compile time)
-- [] component constraints ( basically generics-lite)
+- [x] metaprogramming model (seamless compile time)
+- [x] component constraints ( basically generics-lite)
 - [] return type annotations
 
 - [] decorators
@@ -26,7 +26,8 @@ Implemented core pillars
 - [] rust like numerical literals
 - [] type alternatives, i32 | f32, numeric is sugar for i32 | f32 | u8 | ...
 - [] default parameters
-
+- [] iterator stuff such as for i in (1..upper_bound).step_by(2)
+- [] math operators, +=, *=, -=, etc 
 out x = 
 
 Currently (possibly forever) unsupported

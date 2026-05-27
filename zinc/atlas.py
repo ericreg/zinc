@@ -34,6 +34,7 @@ from zinc.parser.zincParser import zincParser as ZincParser
 from zinc.string_literals import is_string_literal, to_rust_string_literal
 
 CompositionMode = str
+NUMERIC_TYPE_ALTERNATIVES = ("i8", "i16", "i32", "i64", "i128", "u8", "u16", "u32", "u64", "u128", "f32", "f64")
 
 
 @dataclass
@@ -101,6 +102,7 @@ class StructFieldInfo:
     option_info: OptionTypeInfo | None = None
     source_struct_qualified_name: str | None = None
     is_infer: bool = False
+    type_alternatives: tuple[str, ...] = ()
     line_num: int = 0
 
     def rust_type(self) -> str:
@@ -377,19 +379,21 @@ class Atlas:
         if not hasattr(ctx, "parameterList") or ctx.parameterList() is None:
             return exact_types
         for i, param_ctx in enumerate(ctx.parameterList().parameter()):
-            if param_ctx.type_() is None:
+            type_ctxs = list(param_ctx.typeAlternative().type_()) if param_ctx.typeAlternative() is not None else []
+            if len(type_ctxs) != 1 or type_ctxs[0].getText() == "numeric":
                 continue
-            annotated_exact_type = normalize_exact_type(param_ctx.type_().getText())
+            type_ctx = type_ctxs[0]
+            annotated_exact_type = normalize_exact_type(type_ctx.getText())
             if (
                 annotated_exact_type is not None
                 and exact_type_to_base(annotated_exact_type) == BaseType.UNKNOWN
                 and source_module_id is not None
-                and param_ctx.type_().qualifiedName() is not None
-                and param_ctx.type_().typeList() is None
+                and type_ctx.qualifiedName() is not None
+                and type_ctx.typeList() is None
             ):
                 resolved_enum = self.module_graph.resolve_enum_path(
                     source_module_id,
-                    param_ctx.type_().qualifiedName().getText().split("."),
+                    type_ctx.qualifiedName().getText().split("."),
                 )
                 if resolved_enum is not None:
                     annotated_exact_type = resolved_enum.qualified_name

@@ -369,8 +369,37 @@
     "types": {
       "patterns": [
         {
+          "name": "meta.type.annotation.parameter.alternative.zinc",
+          "begin": "(?<=[\\(,])\\s*([A-Za-z_][A-Za-z0-9_]*)(\\s*:\\s*)(?=[^,\\)\\n]*\\|)",
+          "beginCaptures": {
+            "1": { "name": "variable.parameter.zinc" },
+            "2": { "name": "punctuation.separator.type.zinc" }
+          },
+          "end": "(?=\\s*(?:[,\\)]))",
+          "patterns": [
+            { "include": "#builtin_types" },
+            { "include": "#type_atoms" },
+            { "include": "#type_alternative_separator" }
+          ]
+        },
+        {
+          "name": "meta.type.annotation.field.alternative.zinc",
+          "begin": "^\\s*(?:(const)\\s+)?([A-Za-z_][A-Za-z0-9_]*)(\\s*:\\s*)(?=[^\\n]*\\|)",
+          "beginCaptures": {
+            "1": { "name": "storage.modifier.const.zinc" },
+            "2": { "name": "variable.other.member.zinc" },
+            "3": { "name": "punctuation.separator.type.zinc" }
+          },
+          "end": "(?=\\s*(?://.*)?$)",
+          "patterns": [
+            { "include": "#builtin_types" },
+            { "include": "#type_atoms" },
+            { "include": "#type_alternative_separator" }
+          ]
+        },
+        {
           "name": "meta.type.annotation.parameter.zinc",
-          "match": "(?<=[\\(,])\\s*([A-Za-z_][A-Za-z0-9_]*)(\\s*:\\s*)(\\[[^\\n\\]]+\\]|\\([^\\n\\)]*\\)\\s*->\\s*[^,\\)\\n]+|\\([^\\n\\)]+\\)|[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*(?:\\s*<[^\\n{};=]+>)?)(?=\\s*(?:[,\\)|]))",
+          "match": "(?<=[\\(,])\\s*([A-Za-z_][A-Za-z0-9_]*)(\\s*:\\s*)(\\[[^\\n\\]]+\\]|\\([^\\n\\)]*\\)\\s*->\\s*[^,\\)\\n]+|\\([^\\n\\)]+\\)|[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*(?:\\s*<[^\\n{};=]+>)?)(?=\\s*(?:[,\\)]))",
           "captures": {
             "1": { "name": "variable.parameter.zinc" },
             "2": { "name": "punctuation.separator.type.zinc" },
@@ -379,7 +408,7 @@
         },
         {
           "name": "meta.type.annotation.field.zinc",
-          "match": "^\\s*(?:(const)\\s+)?([A-Za-z_][A-Za-z0-9_]*)(\\s*:\\s*)(\\[[^\\n\\]]+\\]|\\([^\\n\\)]*\\)\\s*->\\s*[^,\\)\\n]+|\\([^\\n\\)]+\\)|(?:i8|i16|i32|i64|i128|u8|u16|u32|u64|u128|f8|f16|f32|f64|f128|string|bool|Context|infer)\\b|[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*(?:\\s*<[^\\n{};=]+>)?)(?=\\s*(?://.*)?$)",
+          "match": "^\\s*(?:(const)\\s+)?([A-Za-z_][A-Za-z0-9_]*)(\\s*:\\s*)(\\[[^\\n\\]]+\\]|\\([^\\n\\)]*\\)\\s*->\\s*[^,\\)\\n]+|\\([^\\n\\)]+\\)|(?:i8|i16|i32|i64|i128|u8|u16|u32|u64|u128|f8|f16|f32|f64|f128|string|bool|Context|numeric|infer)\\b|[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*(?:\\s*<[^\\n{};=]+>)?)(?=\\s*(?://.*)?$)",
           "captures": {
             "1": { "name": "storage.modifier.const.zinc" },
             "2": { "name": "variable.other.member.zinc" },
@@ -389,11 +418,23 @@
         }
       ]
     },
+    "type_atoms": {
+      "patterns": [
+        {
+          "name": "entity.name.type.zinc",
+          "match": "\\[[^\\n\\]]+\\]|\\([^\\n\\)]*\\)\\s*->\\s*[^|,\\)\\n]+|\\([^\\n\\)]+\\)|\\b[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*(?:\\s*<[^\\n{};=|]+>)?\\b"
+        }
+      ]
+    },
+    "type_alternative_separator": {
+      "name": "punctuation.separator.type-alternative.zinc",
+      "match": "\\|"
+    },
     "builtin_types": {
       "patterns": [
         {
           "name": "support.type.builtin.zinc",
-          "match": "\\b(?:Context|Result|Option)\\b"
+          "match": "\\b(?:Context|Result|Option|numeric)\\b"
         }
       ]
     },

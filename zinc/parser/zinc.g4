@@ -92,7 +92,7 @@ structMember
     ;
 
 structField
-    : 'const'? IDENTIFIER ':' (type | expression)
+    : 'const'? IDENTIFIER ':' (typeAlternative | expression)
     ;
 
 enumBody
@@ -122,7 +122,11 @@ parameterList
     ;
 
 parameter
-    : IDENTIFIER (':' type)?
+    : IDENTIFIER (':' typeAlternative)?
+    ;
+
+typeAlternative
+    : type ('|' type)*
     ;
 
 type

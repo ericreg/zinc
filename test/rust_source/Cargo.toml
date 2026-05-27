@@ -31,6 +31,10 @@ name = "annotations_06_metadata_constraints"
 path = "src/annotations/06_metadata_constraints.rs"
 
 [[bin]]
+name = "annotations_07_type_alternatives"
+path = "src/annotations/07_type_alternatives.rs"
+
+[[bin]]
 name = "arithmetic"
 path = "src/arithmetic.rs"
 

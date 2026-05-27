@@ -1,0 +1,8 @@
+// expected-error: parameter 'x' expects a compatible 'i32\|f32' value
+fn keep_specific(x: i32 | f32) {
+    return x
+}
+
+fn main() {
+    print(keep_specific("nope"))
+}

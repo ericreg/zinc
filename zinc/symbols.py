@@ -36,6 +36,7 @@ from zinc.atlas import (
     EnumInstance,
     EnumVariantInfo,
     FunctionInstance,
+    NUMERIC_TYPE_ALTERNATIVES,
     StructFieldInfo,
     StructInstance,
     StructMethodInfo,
@@ -546,6 +547,63 @@ class SymbolTableVisitor(zincVisitor):
                 return type_ctx
         return None
 
+    def _type_alternative_ctxs(self, owner_ctx) -> list:
+        """Return the parsed type alternatives attached to a parameter or field."""
+        getter = getattr(owner_ctx, "typeAlternative", None)
+        if getter is not None:
+            alt_ctx = getter()
+            if alt_ctx is not None:
+                return list(alt_ctx.type_())
+        getter = getattr(owner_ctx, "type_", None)
+        if getter is not None:
+            type_ctx = getter()
+            if type_ctx is not None:
+                return [type_ctx]
+        return []
+
+    def _type_alternative_names(self, owner_ctx) -> tuple[str, ...]:
+        """Return canonical alternative type names, expanding numeric sugar."""
+        names: list[str] = []
+        for type_ctx in self._type_alternative_ctxs(owner_ctx):
+            text = type_ctx.getText()
+            if text == "numeric":
+                names.extend(NUMERIC_TYPE_ALTERNATIVES)
+            else:
+                names.append(text)
+        return tuple(names)
+
+    def _has_type_alternative_constraint(self, owner_ctx) -> bool:
+        """Return True when a parameter or field annotation desugars to an in-list constraint."""
+        ctxs = self._type_alternative_ctxs(owner_ctx)
+        return len(ctxs) > 1 or (len(ctxs) == 1 and ctxs[0].getText() == "numeric")
+
+    def _single_type_ctx(self, owner_ctx):
+        """Return a single concrete type annotation, excluding alternative-list sugar."""
+        if self._has_type_alternative_constraint(owner_ctx):
+            return None
+        ctxs = self._type_alternative_ctxs(owner_ctx)
+        return ctxs[0] if ctxs else None
+
+    def _type_meta_list_from_names(self, names: tuple[str, ...]) -> list[MetaValue]:
+        """Build a TypeMeta list from exact or named type spellings."""
+        values: list[MetaValue] = []
+        for name in names:
+            value = self._type_meta_from_path(name.split("."))
+            if value is None:
+                base_type = exact_type_to_base(name)
+                exact_type = self._exact_type_name_from_text(name)
+                value = self._type_meta_from_base(base_type, exact_type=exact_type)
+            values.append(value)
+        return values
+
+    def _type_satisfies_type_alternatives(self, owner_ctx, actual_type: BaseType, actual_exact_type: str | None, **metadata) -> bool:
+        """Check whether actual type metadata is contained in an alternative-list annotation."""
+        names = self._type_alternative_names(owner_ctx)
+        if not names:
+            return True
+        actual = self._type_meta_from_base(actual_type, exact_type=actual_exact_type, **metadata)
+        return actual in self._type_meta_list_from_names(names)
+
     def resolve(self) -> SymbolTable:
         """Main entry point - resolve types for all reachable code.
 
@@ -929,9 +987,12 @@ class SymbolTableVisitor(zincVisitor):
             option_info = None
             is_infer = False
 
+            type_ctx = self._single_type_ctx(field_ctx)
+            type_alternatives = self._type_alternative_names(field_ctx) if self._has_type_alternative_constraint(field_ctx) else ()
+
             # Field can have type annotation OR default value expression
-            if field_ctx.type_():
-                type_ann = field_ctx.type_().getText()
+            if type_ctx is not None:
+                type_ann = type_ctx.getText()
                 is_infer = type_ann == "infer"
                 if not is_infer:
                     (
@@ -945,7 +1006,9 @@ class SymbolTableVisitor(zincVisitor):
                         anonymous_struct_info,
                         result_info,
                         option_info,
-                    ) = self._type_metadata_from_type_ctx(field_ctx.type_())
+                    ) = self._type_metadata_from_type_ctx(type_ctx)
+            elif type_alternatives:
+                is_infer = True
             elif field_ctx.expression():
                 default_val = field_ctx.expression().getText()
                 # Try to infer type from literal
@@ -962,18 +1025,19 @@ class SymbolTableVisitor(zincVisitor):
                     is_private=name.startswith("_"),
                     is_const=is_const,
                     resolved_type=resolved_type,
-                    exact_type=(self._exact_type_name_from_type_ctx(field_ctx.type_()) if field_ctx.type_() and not is_infer else None),
-                    array_info=self._copy_array_info(array_info) if field_ctx.type_() else None,
-                    dict_info=self._copy_dict_info(dict_info) if field_ctx.type_() else None,
-                    set_info=self._copy_set_info(set_info) if field_ctx.type_() else None,
-                    tuple_info=self._copy_tuple_info(tuple_info) if field_ctx.type_() else None,
-                    callable_info=callable_info if field_ctx.type_() else None,
-                    struct_qualified_name=struct_qualified_name if field_ctx.type_() else None,
-                    anonymous_struct_info=anonymous_struct_info if field_ctx.type_() else None,
-                    result_info=self._copy_result_info(result_info) if field_ctx.type_() else None,
-                    option_info=self._copy_option_info(option_info) if field_ctx.type_() else None,
+                    exact_type=(self._exact_type_name_from_type_ctx(type_ctx) if type_ctx is not None and not is_infer else None),
+                    array_info=self._copy_array_info(array_info) if type_ctx is not None else None,
+                    dict_info=self._copy_dict_info(dict_info) if type_ctx is not None else None,
+                    set_info=self._copy_set_info(set_info) if type_ctx is not None else None,
+                    tuple_info=self._copy_tuple_info(tuple_info) if type_ctx is not None else None,
+                    callable_info=callable_info if type_ctx is not None else None,
+                    struct_qualified_name=struct_qualified_name if type_ctx is not None else None,
+                    anonymous_struct_info=anonymous_struct_info if type_ctx is not None else None,
+                    result_info=self._copy_result_info(result_info) if type_ctx is not None else None,
+                    option_info=self._copy_option_info(option_info) if type_ctx is not None else None,
                     source_struct_qualified_name=source_struct_qualified_name,
                     is_infer=is_infer,
+                    type_alternatives=type_alternatives,
                     line_num=field_ctx.start.line if field_ctx.start is not None else 0,
                 )
             )
@@ -1041,7 +1105,8 @@ class SymbolTableVisitor(zincVisitor):
         if ctx.parameterList():
             for param_ctx in ctx.parameterList().parameter():
                 param_name = param_ctx.IDENTIFIER().getText()
-                param_type = param_ctx.type_().getText() if param_ctx.type_() else None
+                type_ctx = self._single_type_ctx(param_ctx)
+                param_type = type_ctx.getText() if type_ctx is not None else None
                 parameters.append((param_name, param_type, None))
 
         # Track self usage in method body
@@ -3298,8 +3363,9 @@ class SymbolTableVisitor(zincVisitor):
         owner_meta: MetaValue,
     ) -> MetaValue:
         """Return FunctionParameterMeta for a top-level function parameter."""
-        param_type = self._type_meta_from_path(param_ctx.type_().getText().split(".")) if param_ctx.type_() else unknown_type_meta()
-        declared_type = param_type if param_ctx.type_() else unknown_type_meta()
+        type_ctx = self._single_type_ctx(param_ctx)
+        param_type = self._type_meta_from_path(type_ctx.getText().split(".")) if type_ctx is not None else unknown_type_meta()
+        declared_type = param_type if type_ctx is not None else unknown_type_meta()
         meta = MetaValue(
             struct_qualified_name=FUNCTION_PARAM_META_QNAME,
             fields={
@@ -3315,7 +3381,7 @@ class SymbolTableVisitor(zincVisitor):
                 "index": index,
                 "value_type": param_type,
                 "declared_type": declared_type,
-                "has_declared_type": param_ctx.type_() is not None,
+                "has_declared_type": type_ctx is not None,
             },
         )
         meta.methods = {"owner": lambda args: owner_meta}
@@ -3793,6 +3859,8 @@ class SymbolTableVisitor(zincVisitor):
                 name = expr_ctx.IDENTIFIER().getText()
                 if name in slots:
                     return slots[name]
+                if name == "numeric":
+                    return self._type_meta_list_from_names(NUMERIC_TYPE_ALTERNATIVES)
                 type_meta = self._type_meta_from_path([name])
                 if type_meta is not None:
                     return type_meta
@@ -5029,6 +5097,7 @@ class SymbolTableVisitor(zincVisitor):
                 else:
                     param_type = BaseType.UNKNOWN
                 param_exact_type = func.arg_exact_types[i] if i < len(func.arg_exact_types) else None
+                type_ctx = self._single_type_ctx(param_ctx)
                 annotated_type = BaseType.UNKNOWN
                 annotated_array_info = None
                 annotated_dict_info = None
@@ -5039,8 +5108,28 @@ class SymbolTableVisitor(zincVisitor):
                 annotated_anonymous_struct_info = None
                 annotated_result_info = None
                 annotated_option_info = None
-                declared_exact_type = self._exact_type_name_from_type_ctx(param_ctx.type_())
-                if param_ctx.type_():
+                declared_exact_type = self._exact_type_name_from_type_ctx(type_ctx)
+                if self._has_type_alternative_constraint(param_ctx):
+                    actual_struct_qualified_name = func.arg_struct_qualified_names.get(i)
+                    actual_anonymous_struct_info = func.arg_anonymous_struct_infos.get(i)
+                    if not self._type_satisfies_type_alternatives(
+                        param_ctx,
+                        param_type,
+                        param_exact_type,
+                        array_info=func.arg_array_infos.get(i),
+                        dict_info=func.arg_dict_infos.get(i),
+                        set_info=func.arg_set_infos.get(i),
+                        tuple_info=func.arg_tuple_infos.get(i),
+                        callable_info=func.arg_callable_infos.get(i),
+                        struct_qualified_name=actual_struct_qualified_name,
+                        anonymous_struct_info=actual_anonymous_struct_info,
+                        result_info=func.arg_result_infos.get(i),
+                        option_info=func.arg_option_infos.get(i),
+                    ):
+                        raise ZincTypeError(
+                            f"parameter '{param_name}' expects a compatible '{param_ctx.typeAlternative().getText()}' value"
+                        )
+                elif type_ctx is not None:
                     (
                         annotated_type,
                         annotated_array_info,
@@ -5052,13 +5141,13 @@ class SymbolTableVisitor(zincVisitor):
                         annotated_anonymous_struct_info,
                         annotated_result_info,
                         annotated_option_info,
-                    ) = self._type_metadata_from_type_ctx(param_ctx.type_())
+                    ) = self._type_metadata_from_type_ctx(type_ctx)
                     actual_struct_qualified_name = func.arg_struct_qualified_names.get(i)
                     actual_anonymous_struct_info = func.arg_anonymous_struct_infos.get(i)
                     if not self._assignment_metadata_compatible(
                         annotated_type,
                         param_type,
-                        expected_exact_type=self._exact_type_name_from_type_ctx(param_ctx.type_()),
+                        expected_exact_type=self._exact_type_name_from_type_ctx(type_ctx),
                         actual_exact_type=param_exact_type,
                         expected_array=annotated_array_info,
                         actual_array=func.arg_array_infos.get(i),
@@ -5079,7 +5168,7 @@ class SymbolTableVisitor(zincVisitor):
                         expected_option=annotated_option_info,
                         actual_option=func.arg_option_infos.get(i),
                     ):
-                        raise ZincTypeError(f"parameter '{param_name}' expects a compatible '{param_ctx.type_().getText()}' value")
+                        raise ZincTypeError(f"parameter '{param_name}' expects a compatible '{type_ctx.getText()}' value")
                     if declared_exact_type is not None:
                         param_exact_type = declared_exact_type
                 param_symbol = self.symbols.define(
@@ -5089,7 +5178,7 @@ class SymbolTableVisitor(zincVisitor):
                     interval=param_ctx.getSourceInterval(),
                     exact_type=param_exact_type,
                     declared_exact_type=declared_exact_type,
-                    has_declared_type=param_ctx.type_() is not None,
+                    has_declared_type=type_ctx is not None,
                     line_num=param_ctx.start.line if param_ctx.start is not None else 0,
                 )
                 # Track channel parameters for element type inference
@@ -5122,7 +5211,7 @@ class SymbolTableVisitor(zincVisitor):
                         self._struct_symbol_bindings[param_symbol.unique_name] = func.arg_struct_qualified_names[i]
                     if i in func.arg_anonymous_struct_infos:
                         param_symbol.anonymous_struct_info = self._copy_anonymous_struct_info(func.arg_anonymous_struct_infos[i])
-                if param_ctx.type_():
+                if type_ctx is not None:
                     if annotated_type == BaseType.ARRAY:
                         self._apply_array_info_to_symbol(param_symbol, annotated_array_info or func.arg_array_infos.get(i))
                     if annotated_type == BaseType.CALLABLE and annotated_callable_info is not None:
@@ -5479,7 +5568,8 @@ class SymbolTableVisitor(zincVisitor):
         param_option_infos: dict[int, OptionTypeInfo] = {}
         if hasattr(ctx, "parameterList") and ctx.parameterList():
             for i, param_ctx in enumerate(ctx.parameterList().parameter()):
-                if param_ctx.type_():
+                type_ctx = self._single_type_ctx(param_ctx)
+                if type_ctx is not None:
                     (
                         param_type,
                         param_array,
@@ -5491,7 +5581,7 @@ class SymbolTableVisitor(zincVisitor):
                         param_anonymous_struct_info,
                         param_result_info,
                         param_option_info,
-                    ) = self._type_metadata_from_type_ctx(param_ctx.type_())
+                    ) = self._type_metadata_from_type_ctx(type_ctx)
                 else:
                     param_type = BaseType.UNKNOWN
                     param_array = None
@@ -5504,7 +5594,7 @@ class SymbolTableVisitor(zincVisitor):
                     param_result_info = None
                     param_option_info = None
                 param_types.append(param_type)
-                param_exact_types.append(self._exact_type_name_from_type_ctx(param_ctx.type_()))
+                param_exact_types.append(self._exact_type_name_from_type_ctx(type_ctx))
                 if param_array is not None:
                     param_array_infos[i] = param_array
                 if param_dict is not None:
@@ -5998,7 +6088,8 @@ class SymbolTableVisitor(zincVisitor):
             return
 
         for i, param_ctx in enumerate(ctx.parameterList().parameter()):
-            if param_ctx.type_() is None or i >= len(arg_types):
+            type_ctx = self._single_type_ctx(param_ctx)
+            if not self._type_alternative_ctxs(param_ctx) or i >= len(arg_types):
                 continue
             actual_type = arg_types[i]
             if actual_type == BaseType.UNKNOWN:
@@ -6017,7 +6108,7 @@ class SymbolTableVisitor(zincVisitor):
                 expected_anonymous_struct_info,
                 expected_result_info,
                 expected_option_info,
-            ) = self._type_metadata_from_type_ctx(param_ctx.type_())
+            ) = self._type_metadata_from_type_ctx(type_ctx)
 
             actual_struct_qualified_name, actual_anonymous_struct_info = self._struct_metadata_for_symbol(actual_symbol)
             actual_array_info = self._array_info_from_symbol(actual_symbol) or arg_array_infos.get(i)
@@ -6044,10 +6135,30 @@ class SymbolTableVisitor(zincVisitor):
             if actual_anonymous_struct_info is None:
                 actual_anonymous_struct_info = self._copy_anonymous_struct_info(arg_anonymous_struct_infos.get(i))
 
+            if self._has_type_alternative_constraint(param_ctx):
+                if not self._type_satisfies_type_alternatives(
+                    param_ctx,
+                    actual_type,
+                    actual_symbol.exact_type if actual_symbol else arg_exact_types[i],
+                    array_info=actual_array_info,
+                    dict_info=actual_dict_info,
+                    set_info=actual_set_info,
+                    tuple_info=actual_tuple_info,
+                    callable_info=actual_callable_info,
+                    struct_qualified_name=actual_struct_qualified_name,
+                    anonymous_struct_info=actual_anonymous_struct_info,
+                    result_info=actual_result_info,
+                    option_info=actual_option_info,
+                ):
+                    raise ZincTypeError(
+                        f"parameter '{param_ctx.IDENTIFIER().getText()}' expects a compatible '{param_ctx.typeAlternative().getText()}' value"
+                    )
+                continue
+
             if not self._assignment_metadata_compatible(
                 expected_type,
                 actual_type,
-                expected_exact_type=self._exact_type_name_from_type_ctx(param_ctx.type_()),
+                expected_exact_type=self._exact_type_name_from_type_ctx(type_ctx),
                 actual_exact_type=actual_symbol.exact_type if actual_symbol else arg_exact_types[i],
                 actual_constant_value=self._literal_constant_value_for_expr(actual_expr, actual_symbol),
                 expected_array=expected_array_info,
@@ -6070,7 +6181,7 @@ class SymbolTableVisitor(zincVisitor):
                 actual_option=actual_option_info,
             ):
                 raise ZincTypeError(
-                    f"parameter '{param_ctx.IDENTIFIER().getText()}' expects a compatible '{param_ctx.type_().getText()}' value"
+                    f"parameter '{param_ctx.IDENTIFIER().getText()}' expects a compatible '{type_ctx.getText()}' value"
                 )
 
     def _current_function_ctx(self):
@@ -8544,6 +8655,11 @@ class SymbolTableVisitor(zincVisitor):
                 )
             if any(field.is_infer for field in struct_info.fields):
                 concrete_anonymous_struct_info = AnonymousStructTypeInfo(fields=concrete_fields)
+            for field in struct_info.fields:
+                if field.type_alternatives and constraint_slots.get(field.name) not in self._type_meta_list_from_names(field.type_alternatives):
+                    raise ZincTypeError(
+                        f"struct field '{struct_info.name}.{field.name}' expects a compatible '{'|'.join(field.type_alternatives)}' value"
+                    )
             self._validate_constraints(
                 struct_info.ctx,
                 constraint_slots,
