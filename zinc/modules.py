@@ -12,7 +12,7 @@ from zinc.exceptions import ZincModuleError
 from zinc.parser.zincLexer import zincLexer as ZincLexer
 from zinc.parser.zincParser import zincParser as ZincParser
 
-RESERVED_ERROR_NAMES = frozenset({"ok", "err", "some", "none"})
+RESERVED_ERROR_NAMES = frozenset({"Ok", "Err", "Some", "None"})
 
 TopLevelKind = Literal["function", "struct", "enum", "const"]
 CompositionMode = Literal["orthogonal", "merge"]

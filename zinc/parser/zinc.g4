@@ -213,10 +213,10 @@ pattern
     ;
 
 resultOptionPattern
-    : 'ok' '(' pattern ')'
-    | 'err' '(' pattern ')'
-    | 'some' '(' pattern ')'
-    | 'none'
+    : 'Ok' '(' pattern ')'
+    | 'Err' '(' pattern ')'
+    | 'Some' '(' pattern ')'
+    | 'None'
     ;
 
 enumVariantPattern
@@ -335,10 +335,10 @@ typeQueryType
     ;
 
 builtinResultOptionConstructor
-    : 'ok' '(' expression ')'
-    | 'err' '(' expression ')'
-    | 'some' '(' expression ')'
-    | 'none'
+    : 'Ok' '(' expression ')'
+    | 'Err' '(' expression ')'
+    | 'Some' '(' expression ')'
+    | 'None'
     ;
 
 memberAccess
@@ -463,10 +463,10 @@ SPAWN       : 'spawn';
 TYPE_KW     : 'type';
 TRY         : 'try';
 FAIL        : 'fail';
-OK          : 'ok';
-ERR         : 'err';
-SOME        : 'some';
-NONE        : 'none';
+OK          : 'Ok';
+ERR         : 'Err';
+SOME        : 'Some';
+NONE        : 'None';
 
 // --- Literals ---
 INTEGER

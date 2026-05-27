@@ -34,10 +34,10 @@ null
 'type'
 'try'
 'fail'
-'ok'
-'err'
-'some'
-'none'
+'Ok'
+'Err'
+'Some'
+'None'
 null
 null
 null

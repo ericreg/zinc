@@ -73,7 +73,7 @@ from zinc.parser.zincLexer import zincLexer as ZincLexer
 from zinc.parser.zincParser import zincParser as ZincParser
 from zinc.parser.zincVisitor import zincVisitor
 
-RESERVED_ERROR_NAMES = frozenset({"ok", "err", "some", "none"})
+RESERVED_ERROR_NAMES = frozenset({"Ok", "Err", "Some", "None"})
 
 
 class SymbolKind(Enum):
@@ -6257,7 +6257,7 @@ class SymbolTableVisitor(zincVisitor):
             result_expected, option_expected = self._expected_container_from_parent(ctx)
             if ctor.NONE():
                 if option_expected is None:
-                    raise ZincTypeError("none requires an expected Option<T> context")
+                    raise ZincTypeError("None requires an expected Option<T> context")
                 temp = self.symbols.define_temp(
                     resolved_type=BaseType.OPTION,
                     interval=ctx.getSourceInterval(),
@@ -6285,7 +6285,7 @@ class SymbolTableVisitor(zincVisitor):
 
             if ctor.OK():
                 if result_expected is None:
-                    raise ZincTypeError("ok(...) requires an expected Result<T, E> context")
+                    raise ZincTypeError("Ok(...) requires an expected Result<T, E> context")
                 temp = self.symbols.define_temp(resolved_type=BaseType.RESULT, interval=ctx.getSourceInterval())
                 temp.result_info = ResultTypeInfo(
                     ok_type=inner_info,
@@ -6294,7 +6294,7 @@ class SymbolTableVisitor(zincVisitor):
                 return BaseType.RESULT
             if ctor.ERR():
                 if result_expected is None:
-                    raise ZincTypeError("err(...) requires an expected Result<T, E> context")
+                    raise ZincTypeError("Err(...) requires an expected Result<T, E> context")
                 temp = self.symbols.define_temp(resolved_type=BaseType.RESULT, interval=ctx.getSourceInterval())
                 temp.result_info = ResultTypeInfo(
                     ok_type=self._copy_result_info(result_expected).ok_type,
@@ -9364,7 +9364,7 @@ class SymbolTableVisitor(zincVisitor):
                 else:
                     result_pattern = pattern_ctx.resultOptionPattern()
                     if result_pattern is None or result_pattern.SOME() or result_pattern.NONE():
-                        raise ZincTypeError("Result match arms must use ok(...), err(...), or '_'")
+                        raise ZincTypeError("Result match arms must use Ok(...), Err(...), or '_'")
                     variant_name = "ok" if result_pattern.OK() else "err"
                     if variant_name in covered_variants:
                         raise ZincTypeError(f"duplicate match arm for {variant_name}(...)")
@@ -9410,7 +9410,7 @@ class SymbolTableVisitor(zincVisitor):
                 else:
                     option_pattern = pattern_ctx.resultOptionPattern()
                     if option_pattern is None or option_pattern.OK() or option_pattern.ERR():
-                        raise ZincTypeError("Option match arms must use some(...), none, or '_'")
+                        raise ZincTypeError("Option match arms must use Some(...), None, or '_'")
                     variant_name = "some" if option_pattern.SOME() else "none"
                     if variant_name in covered_variants:
                         raise ZincTypeError(f"duplicate match arm for {variant_name}")
