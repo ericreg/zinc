@@ -7,13 +7,12 @@ from pathlib import Path
 
 import click
 import pytest
-
-from zinc.struct_logging import configure_logging, get_logger
 from zinc.atlas import AtlasBuilder
-from zinc.exceptions import ZincModuleError, ZincTypeError
-from zinc.symbols import SymbolTableVisitor
 from zinc.codegen import CodeGenVisitor
+from zinc.exceptions import ZincModuleError, ZincTypeError
 from zinc.modules import build_module_graph
+from zinc.struct_logging import configure_logging, get_logger
+from zinc.symbols import SymbolTableVisitor
 
 TEST_DIR = Path(__file__).parent
 ZINC_SOURCE_DIR = TEST_DIR / "zinc_source"
@@ -76,7 +75,7 @@ def read_expected_error(source_path: Path) -> str:
     for line in source_path.read_text().splitlines():
         stripped = line.strip()
         if stripped.startswith(prefix):
-            return stripped[len(prefix):].strip()
+            return stripped[len(prefix) :].strip()
     raise AssertionError(f"Missing {prefix} comment in {source_path}")
 
 
@@ -87,36 +86,40 @@ def generate_cargo_toml(test_paths: list[str]) -> str:
         test_paths: Relative paths without extension, e.g., "arithmetic" or "structs/01_basic_fields"
     """
     lines = [
-        '[package]',
+        "[package]",
         'name = "zinc_tests"',
         'version = "0.1.0"',
         'edition = "2021"',
-        '',
-        '[dependencies]',
+        "",
+        "[dependencies]",
         'tokio = { version = "1", features = ["full"] }',
-        '',
+        "",
     ]
 
     for test_path in sorted(test_paths):
         # Binary name uses underscores for path separators (e.g., "structs_01_basic_fields")
         bin_name = test_path.replace("/", "_")
-        lines.extend([
-            '[[bin]]',
-            f'name = "{bin_name}"',
-            f'path = "src/{test_path}.rs"',
-            '',
-        ])
+        lines.extend(
+            [
+                "[[bin]]",
+                f'name = "{bin_name}"',
+                f'path = "src/{test_path}.rs"',
+                "",
+            ]
+        )
 
     # Add run_all binary for main.rs if it exists
     if (RUST_SRC_DIR / "main.rs").exists():
-        lines.extend([
-            '[[bin]]',
-            'name = "run_all"',
-            'path = "src/main.rs"',
-            '',
-        ])
+        lines.extend(
+            [
+                "[[bin]]",
+                'name = "run_all"',
+                'path = "src/main.rs"',
+                "",
+            ]
+        )
 
-    return '\n'.join(lines)
+    return "\n".join(lines)
 
 
 def compile_zinc(source_path: Path) -> str:
@@ -173,13 +176,9 @@ def format_multiset_diff(expected: str, observed: str) -> str:
         for line, count in sorted(extra.items()):
             lines.append(f"  {repr(line)} x{count}")
 
-    lines.extend([
-        "",
-        f"Expected ({len(expected.splitlines())} lines):",
-        expected,
-        f"Observed ({len(observed.splitlines())} lines):",
-        observed
-    ])
+    lines.extend(
+        ["", f"Expected ({len(expected.splitlines())} lines):", expected, f"Observed ({len(observed.splitlines())} lines):", observed]
+    )
     return "\n".join(lines)
 
 
@@ -200,9 +199,7 @@ def run_cargo_bin(test_path: str) -> str:
             cwd=RUST_SOURCE_DIR,
         )
         if build_result.returncode != 0:
-            raise RuntimeError(
-                f"Cargo build failed for {bin_name}:\n{build_result.stderr}"
-            )
+            raise RuntimeError(f"Cargo build failed for {bin_name}:\n{build_result.stderr}")
     with tempfile.NamedTemporaryFile(mode="w+", encoding="utf-8") as stdout_file:
         result = subprocess.run(
             [str(binary_path)],
@@ -214,9 +211,7 @@ def run_cargo_bin(test_path: str) -> str:
         stdout_file.seek(0)
         stdout = stdout_file.read()
     if result.returncode != 0:
-        raise RuntimeError(
-            f"Cargo run failed for {bin_name}:\n{result.stderr}"
-        )
+        raise RuntimeError(f"Cargo run failed for {bin_name}:\n{result.stderr}")
     return stdout
 
 
@@ -255,11 +250,13 @@ def test_missing_pkg_toml(tmp_path: Path) -> None:
     """A Zinc entry file must live under a package root."""
     entry = tmp_path / "main.zn"
     entry.write_text(
-        "\n".join([
-            "fn main() {",
-            "    print(1)",
-            "}",
-        ])
+        "\n".join(
+            [
+                "fn main() {",
+                "    print(1)",
+                "}",
+            ]
+        )
     )
 
     with pytest.raises(ZincModuleError, match=r"missing pkg\.toml"):
@@ -283,9 +280,7 @@ def test_compile(test_path: str) -> None:
     observed_rust_code = compile_zinc(zinc_file)
 
     assert observed_rust_code == rust_code, (
-        f"Compilation output mismatch for {test_path}\n"
-        f"Expected:\n{rust_code}\n"
-        f"Observed:\n{observed_rust_code}"
+        f"Compilation output mismatch for {test_path}\nExpected:\n{rust_code}\nObserved:\n{observed_rust_code}"
     )
 
     # Run the binary using cargo
@@ -296,15 +291,10 @@ def test_compile(test_path: str) -> None:
 
     if is_nondeterministic_test(test_path):
         assert compare_outputs_as_multisets(expected_output, output), (
-            f"Execution output mismatch for {test_path} (non-deterministic comparison)\n"
-            f"{format_multiset_diff(expected_output, output)}"
+            f"Execution output mismatch for {test_path} (non-deterministic comparison)\n{format_multiset_diff(expected_output, output)}"
         )
     else:
-        assert output == expected_output, (
-            f"Execution output mismatch for {test_path}\n"
-            f"Expected:\n{expected_output}\n"
-            f"Observed:\n{output}"
-        )
+        assert output == expected_output, f"Execution output mismatch for {test_path}\nExpected:\n{expected_output}\nObserved:\n{output}"
 
 
 @click.command()
@@ -317,7 +307,6 @@ def test_compile(test_path: str) -> None:
 )
 def main(update_output: bool) -> None:
     """Main entry point for running tests."""
-
     configure_logging("INFO")
     logger = get_logger()
 

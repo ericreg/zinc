@@ -2,7 +2,6 @@
 
 from antlr4 import CommonTokenStream, InputStream
 from antlr4.error.ErrorListener import ErrorListener
-
 from zinc.parser.zincLexer import zincLexer
 from zinc.parser.zincParser import zincParser
 
@@ -92,4 +91,3 @@ def test_super_assignment_requires_bare_identifier_target() -> None:
     )
 
     assert errors
-

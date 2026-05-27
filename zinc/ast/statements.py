@@ -51,6 +51,7 @@ class VariableAssignment(Statement):
 
             # Special case for empty Vec needing type annotation
             from .expressions import ArrayLiteralExpr
+
             if isinstance(self.value, ArrayLiteralExpr):
                 if self.value.array_info and self.value.array_info.is_vector:
                     if not self.value.elements:
@@ -257,7 +258,6 @@ class ChannelDeclaration(Statement):
     channel_info: Optional["ChannelTypeInfo"] = None  # Reference to shared channel info
 
     def render(self) -> str:
-        from .types import ChannelTypeInfo
         elem_type = self.channel_info.element_type if self.channel_info else BaseType.UNKNOWN
         elem = type_to_rust(elem_type)
 

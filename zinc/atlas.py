@@ -7,7 +7,6 @@ from dataclasses import dataclass, field
 
 from antlr4 import ParserRuleContext
 from sortedcontainers import SortedDict, SortedSet
-
 from zinc.ast.types import (
     AnonymousStructTypeInfo,
     ArrayTypeInfo,
@@ -300,22 +299,14 @@ class Atlas:
                 arg_types=list(arg_types),
                 arg_exact_types=list(effective_arg_exact_types),
                 is_async=isinstance(ctx, ZincParser.AsyncFunctionDeclarationContext),
-                arg_channel_infos={
-                    index: [info]
-                    for index, info in (arg_channel_infos or {}).items()
-                },
+                arg_channel_infos={index: [info] for index, info in (arg_channel_infos or {}).items()},
                 arg_array_infos=arg_array_infos or {},
                 arg_dict_infos=arg_dict_infos or {},
                 arg_set_infos=arg_set_infos or {},
                 arg_tuple_infos=arg_tuple_infos or {},
-                arg_callable_infos={
-                    index: info.copy() for index, info in (arg_callable_infos or {}).items()
-                },
+                arg_callable_infos={index: info.copy() for index, info in (arg_callable_infos or {}).items()},
                 arg_struct_qualified_names=dict(arg_struct_qualified_names or {}),
-                arg_anonymous_struct_infos={
-                    index: info.copy()
-                    for index, info in (arg_anonymous_struct_infos or {}).items()
-                },
+                arg_anonymous_struct_infos={index: info.copy() for index, info in (arg_anonymous_struct_infos or {}).items()},
             )
             self.calls[mangled] = SortedSet()
             instance = self.functions[mangled]
@@ -330,10 +321,9 @@ class Atlas:
                     try:
                         instance.arg_callable_infos[index] = existing.merge_targets_from(info)
                     except ValueError:
+
                         def specificity(callable_info: CallableTypeInfo) -> int:
-                            unknowns = sum(
-                                1 for base_type in callable_info.param_types if base_type == BaseType.UNKNOWN
-                            )
+                            unknowns = sum(1 for base_type in callable_info.param_types if base_type == BaseType.UNKNOWN)
                             if callable_info.return_type == BaseType.UNKNOWN:
                                 unknowns += 1
                             return unknowns
@@ -470,9 +460,7 @@ class AtlasBuilder:
 
     def __init__(self, module_graph: ModuleGraph):
         self.module_graph = module_graph
-        self._function_defs: SortedDict[str, ParserRuleContext] = SortedDict(
-            self.module_graph.top_level_functions()
-        )
+        self._function_defs: SortedDict[str, ParserRuleContext] = SortedDict(self.module_graph.top_level_functions())
         self._struct_defs: SortedDict[str, StructInstance] = SortedDict()
         self._enum_defs: SortedDict[str, EnumInstance] = SortedDict()
         self._const_defs: SortedDict[str, ConstInstance] = SortedDict()
@@ -547,11 +535,7 @@ class AtlasBuilder:
                 continue
 
             module_id, _ = ModuleGraph.split_qualified_name(qualified_name)
-            caller_key = (
-                atlas.main.mangled_name
-                if qualified_name == atlas.main.qualified_name
-                else qualified_name
-            )
+            caller_key = atlas.main.mangled_name if qualified_name == atlas.main.qualified_name else qualified_name
             self._current_function = caller_key
             self._current_module = module_id
             self._calls[caller_key] = SortedSet()
@@ -580,9 +564,7 @@ class AtlasBuilder:
             return
 
         if isinstance(ctx, ZincParser.PrimaryExpressionContext) and ctx.IDENTIFIER():
-            symbol = self.module_graph.resolve_const_path(
-                self._current_module, [ctx.IDENTIFIER().getText()]
-            )
+            symbol = self.module_graph.resolve_const_path(self._current_module, [ctx.IDENTIFIER().getText()])
             if symbol:
                 self._add_const_usage(symbol.qualified_name)
 
@@ -605,9 +587,7 @@ class AtlasBuilder:
                 if enum_variant:
                     enum_symbol, _variant_name = enum_variant
                     self._add_enum_usage(enum_symbol.qualified_name, None)
-                static_target = self.module_graph.resolve_static_method_target(
-                    self._current_module, path
-                )
+                static_target = self.module_graph.resolve_static_method_target(self._current_module, path)
                 if static_target:
                     type_symbol, method_name = static_target
                     self._add_type_usage(type_symbol.qualified_name, method_name)
@@ -619,9 +599,7 @@ class AtlasBuilder:
                 if func_symbol and func_symbol.name not in self.BUILTIN_FUNCTIONS:
                     self._calls[self._current_function].add(func_symbol.qualified_name)
                 else:
-                    static_target = self.module_graph.resolve_static_method_target(
-                        self._current_module, path
-                    )
+                    static_target = self.module_graph.resolve_static_method_target(self._current_module, path)
                     if static_target:
                         type_symbol, method_name = static_target
                         self._add_type_usage(type_symbol.qualified_name, method_name)
@@ -634,16 +612,12 @@ class AtlasBuilder:
                     self._calls[self._current_function].add(func_symbol.qualified_name)
 
         if isinstance(ctx, ZincParser.StructInstantiationContext):
-            struct_symbol = self.module_graph.resolve_struct_path(
-                self._current_module, struct_path_from_ctx(ctx)
-            )
+            struct_symbol = self.module_graph.resolve_struct_path(self._current_module, struct_path_from_ctx(ctx))
             if struct_symbol:
                 self._add_struct_usage(struct_symbol.qualified_name, None)
 
         if isinstance(ctx, ZincParser.EnumVariantConstructionContext):
-            variant_target = self.module_graph.resolve_enum_variant_path(
-                self._current_module, enum_variant_path_from_ctx(ctx)
-            )
+            variant_target = self.module_graph.resolve_enum_variant_path(self._current_module, enum_variant_path_from_ctx(ctx))
             if variant_target:
                 enum_symbol, _variant_name = variant_target
                 self._add_enum_usage(enum_symbol.qualified_name, None)

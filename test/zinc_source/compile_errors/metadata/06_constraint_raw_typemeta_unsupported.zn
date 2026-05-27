@@ -1,0 +1,11 @@
+// expected-error: unsupported constraint call 'TypeMeta\(\)'
+
+#[ type(a) in [TypeMeta()] ]
+struct Bad {
+    a: infer
+}
+
+fn main() {
+    bad = Bad { a: 1 }
+    print(type(bad).name)
+}

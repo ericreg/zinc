@@ -1,0 +1,80 @@
+struct Shape {
+    name: string
+}
+
+struct Shape2D [Shape] {
+    fn area() {
+        return 0
+    }
+}
+
+struct Circle [Shape2D] {
+    radius: i64
+
+    fn area() {
+        return self.radius * self.radius
+    }
+}
+
+struct Square [Shape2D] {
+    side: i64
+
+    fn area() {
+        return self.side * self.side
+    }
+}
+
+struct Rectangle {
+    name: string
+    width: i64
+
+    fn area() {
+        return self.width
+    }
+}
+
+#[
+    a in [i64],
+    type(b) in [type(string)],
+    type(c) == type(bool),
+]
+struct Triple {
+    a: infer
+    b: infer
+    c: infer
+}
+
+#[has_component(shape, Shape2D)]
+fn accept_nominal(shape) {
+    print(meta(shape))
+    print(type(shape))
+    print(shape.area())
+}
+
+#[implements(shape, Shape2D)]
+fn accept_structural(shape) {
+    print(meta(shape))
+    print(type(shape))
+    print(shape.area())
+}
+
+fn main() {
+    triple = Triple { a: 9, b: "ok", c: true }
+    circle = Circle { name: "circle", radius: 4 }
+    square = Square { name: "square", side: 3 }
+    rect = Rectangle { name: "rect", width: 5 }
+
+    print(line())
+    print(meta(Triple))
+    print(type(triple))
+    print(has_component(Circle, Shape2D))
+    print(has_component(Rectangle, Shape2D))
+    print(implements(Circle, Shape2D))
+    print(implements(Rectangle, Shape2D))
+    print(implements(Triple, Shape2D))
+    accept_nominal(circle)
+    accept_nominal(square)
+    accept_structural(rect)
+    print(type(Circle).recursive_components(ComponentOrder.depth_first))
+    print(type(Circle).recursive_components(ComponentOrder.topological))
+}

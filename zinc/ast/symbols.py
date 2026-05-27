@@ -2,7 +2,7 @@
 
 from typing import NamedTuple, Optional
 
-from .types import BaseType, TypeInfo
+from .types import TypeInfo
 
 
 class Symbol(NamedTuple):

@@ -379,10 +379,7 @@ class AnonymousStructTypeInfo:
         """Return a Rust-safe suffix describing this anonymous struct shape."""
         if not self.fields:
             return "AnonStruct_empty"
-        parts = [
-            f"{_sanitize_type_fragment(field.name)}_{field.rust_type_suffix()}"
-            for field in self.canonical_fields()
-        ]
+        parts = [f"{_sanitize_type_fragment(field.name)}_{field.rust_type_suffix()}" for field in self.canonical_fields()]
         return "AnonStruct_" + "_".join(parts)
 
     def rust_type_name(self) -> str:
@@ -451,9 +448,7 @@ class ChannelTypeInfo:
             element_tuple_info=self.element_tuple_info.copy() if self.element_tuple_info else None,
             element_callable_info=self.element_callable_info.copy() if self.element_callable_info else None,
             element_struct_qualified_name=self.element_struct_qualified_name,
-            element_anonymous_struct_info=self.element_anonymous_struct_info.copy()
-            if self.element_anonymous_struct_info
-            else None,
+            element_anonymous_struct_info=self.element_anonymous_struct_info.copy() if self.element_anonymous_struct_info else None,
             is_bounded=self.is_bounded,
         )
 
@@ -517,9 +512,7 @@ class ArrayTypeInfo:
             element_tuple_info=self.element_tuple_info.copy() if self.element_tuple_info else None,
             element_callable_info=self.element_callable_info.copy() if self.element_callable_info else None,
             element_struct_qualified_name=self.element_struct_qualified_name,
-            element_anonymous_struct_info=self.element_anonymous_struct_info.copy()
-            if self.element_anonymous_struct_info
-            else None,
+            element_anonymous_struct_info=self.element_anonymous_struct_info.copy() if self.element_anonymous_struct_info else None,
             is_mutated=self.is_mutated,
         )
 
@@ -608,9 +601,7 @@ class DictTypeInfo:
             key_struct_qualified_name=self.key_struct_qualified_name,
             value_struct_qualified_name=self.value_struct_qualified_name,
             key_anonymous_struct_info=self.key_anonymous_struct_info.copy() if self.key_anonymous_struct_info else None,
-            value_anonymous_struct_info=self.value_anonymous_struct_info.copy()
-            if self.value_anonymous_struct_info
-            else None,
+            value_anonymous_struct_info=self.value_anonymous_struct_info.copy() if self.value_anonymous_struct_info else None,
             kind=self.kind,
             is_mutated=self.is_mutated,
         )
@@ -665,9 +656,7 @@ class SetTypeInfo:
             element_type=self.element_type,
             element_exact_type=self.element_exact_type,
             element_struct_qualified_name=self.element_struct_qualified_name,
-            element_anonymous_struct_info=self.element_anonymous_struct_info.copy()
-            if self.element_anonymous_struct_info
-            else None,
+            element_anonymous_struct_info=self.element_anonymous_struct_info.copy() if self.element_anonymous_struct_info else None,
             kind=self.kind,
             is_mutated=self.is_mutated,
         )
@@ -725,28 +714,17 @@ class TupleTypeInfo:
         """Generate type suffix for mangled names."""
         if not self.element_types:
             return "Tuple_empty"
-        return "Tuple_" + "_".join(
-            self.element_type_suffix(i) for i in range(len(self.element_types))
-        )
+        return "Tuple_" + "_".join(self.element_type_suffix(i) for i in range(len(self.element_types)))
 
     def copy(self) -> TupleTypeInfo:
         """Deep-copy tuple metadata."""
         return TupleTypeInfo(
             element_types=list(self.element_types),
             element_exact_types=list(self.element_exact_types),
-            element_tuple_infos={
-                index: info.copy()
-                for index, info in self.element_tuple_infos.items()
-            },
-            element_callable_infos={
-                index: info.copy()
-                for index, info in self.element_callable_infos.items()
-            },
+            element_tuple_infos={index: info.copy() for index, info in self.element_tuple_infos.items()},
+            element_callable_infos={index: info.copy() for index, info in self.element_callable_infos.items()},
             element_struct_qualified_names=dict(self.element_struct_qualified_names),
-            element_anonymous_struct_infos={
-                index: info.copy()
-                for index, info in self.element_anonymous_struct_infos.items()
-            },
+            element_anonymous_struct_infos={index: info.copy() for index, info in self.element_anonymous_struct_infos.items()},
         )
 
 
@@ -794,44 +772,21 @@ class CallableTypeInfo:
         return CallableTypeInfo(
             param_types=list(self.param_types),
             param_exact_types=list(self.param_exact_types),
-            param_array_infos={
-                index: info.copy()
-                for index, info in self.param_array_infos.items()
-            },
-            param_dict_infos={
-                index: info.copy()
-                for index, info in self.param_dict_infos.items()
-            },
-            param_set_infos={
-                index: info.copy()
-                for index, info in self.param_set_infos.items()
-            },
-            param_tuple_infos={
-                index: info.copy()
-                for index, info in self.param_tuple_infos.items()
-            },
-            param_callable_infos={
-                index: info.copy()
-                for index, info in self.param_callable_infos.items()
-                if info is not None
-            },
+            param_array_infos={index: info.copy() for index, info in self.param_array_infos.items()},
+            param_dict_infos={index: info.copy() for index, info in self.param_dict_infos.items()},
+            param_set_infos={index: info.copy() for index, info in self.param_set_infos.items()},
+            param_tuple_infos={index: info.copy() for index, info in self.param_tuple_infos.items()},
+            param_callable_infos={index: info.copy() for index, info in self.param_callable_infos.items() if info is not None},
             param_struct_qualified_names=dict(self.param_struct_qualified_names),
-            param_anonymous_struct_infos={
-                index: info.copy()
-                for index, info in self.param_anonymous_struct_infos.items()
-            },
+            param_anonymous_struct_infos={index: info.copy() for index, info in self.param_anonymous_struct_infos.items()},
             return_type=self.return_type,
             return_exact_type=self.return_exact_type,
             return_dict_info=self.return_dict_info.copy() if self.return_dict_info else None,
             return_set_info=self.return_set_info.copy() if self.return_set_info else None,
             return_tuple_info=self.return_tuple_info.copy() if self.return_tuple_info else None,
-            return_callable_info=self.return_callable_info.copy()
-            if self.return_callable_info
-            else None,
+            return_callable_info=self.return_callable_info.copy() if self.return_callable_info else None,
             return_struct_qualified_name=self.return_struct_qualified_name,
-            return_anonymous_struct_info=self.return_anonymous_struct_info.copy()
-            if self.return_anonymous_struct_info
-            else None,
+            return_anonymous_struct_info=self.return_anonymous_struct_info.copy() if self.return_anonymous_struct_info else None,
             targets=tuple(self.targets),
         )
 

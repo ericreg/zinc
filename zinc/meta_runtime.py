@@ -6,10 +6,10 @@ from dataclasses import dataclass, field
 
 from zinc.ast.types import AnonymousStructTypeInfo, BaseType
 
-
 META_NAMESPACE = "__zinc_meta"
 
 TYPE_META_QNAME = f"{META_NAMESPACE}::TypeMeta"
+CHANNEL_META_QNAME = f"{META_NAMESPACE}::ChannelMeta"
 STRUCT_META_QNAME = f"{META_NAMESPACE}::StructMeta"
 ENUM_META_QNAME = f"{META_NAMESPACE}::EnumMeta"
 VARIANT_META_QNAME = f"{META_NAMESPACE}::VariantMeta"
@@ -25,6 +25,7 @@ COMPONENT_ORDER_QNAME = f"{META_NAMESPACE}::ComponentOrder"
 
 META_STRUCT_QNAMES = {
     TYPE_META_QNAME,
+    CHANNEL_META_QNAME,
     STRUCT_META_QNAME,
     ENUM_META_QNAME,
     VARIANT_META_QNAME,
@@ -50,10 +51,16 @@ def is_meta_struct_qname(qualified_name: str | None) -> bool:
     return qualified_name in META_STRUCT_QNAMES
 
 
+def is_type_meta_qname(qualified_name: str | None) -> bool:
+    """Return True when a metadata object is a TypeMeta-family value."""
+    return qualified_name in {TYPE_META_QNAME, CHANNEL_META_QNAME}
+
+
 def meta_struct_rust_name(qualified_name: str | None) -> str:
     """Return the generated Rust type name for a metadata struct."""
     mapping = {
         TYPE_META_QNAME: "__ZincTypeMeta",
+        CHANNEL_META_QNAME: "__ZincTypeMeta",
         STRUCT_META_QNAME: "__ZincStructMeta",
         ENUM_META_QNAME: "__ZincEnumMeta",
         VARIANT_META_QNAME: "__ZincVariantMeta",
@@ -114,10 +121,7 @@ class MetaValue:
         """Compare metadata values by visible identity and fields, not helper closures."""
         if not isinstance(other, MetaValue):
             return NotImplemented
-        return (
-            self.struct_qualified_name == other.struct_qualified_name
-            and self.fields == other.fields
-        )
+        return self.struct_qualified_name == other.struct_qualified_name and self.fields == other.fields
 
 
 def unknown_type_meta(name: str = "unknown") -> MetaValue:
@@ -136,6 +140,7 @@ def unknown_type_meta(name: str = "unknown") -> MetaValue:
                 element_struct_qualified_name=TYPE_META_QNAME,
             ),
             "is_named": False,
+            "is_bounded": False,
             "infer_slots": MetaListValue(
                 items=[],
                 element_base_type=BaseType.STRING,
@@ -160,194 +165,218 @@ def component_order_value(name: str) -> MetaValue:
 def metadata_runtime_definitions() -> list[str]:
     """Return Rust helper definitions for Zinc metadata values."""
     return [
-        "\n".join([
-            "#[derive(Clone, Debug, Default, PartialEq)]",
-            "struct __ZincTypeMeta {",
-            "    pub kind: String,",
-            "    pub name: String,",
-            "    pub fqn: String,",
-            "    pub family_name: String,",
-            "    pub family_fqn: String,",
-            "    pub args: Vec<__ZincTypeMeta>,",
-            "    pub is_named: bool,",
-            "    pub infer_slots: Vec<String>,",
-            "}",
-        ]),
-        "\n".join([
-            "#[derive(Clone, Debug, Default, PartialEq)]",
-            "struct __ZincStructMeta {",
-            "    pub kind: String,",
-            "    pub name: String,",
-            "    pub fqn: String,",
-            "    pub module_fqn: String,",
-            "    pub file: String,",
-            "    pub line_num: u32,",
-            "    pub is_public: bool,",
-            "    pub type_info: __ZincTypeMeta,",
-            "}",
-        ]),
-        "\n".join([
-            "#[derive(Clone, Debug, Default, PartialEq)]",
-            "struct __ZincEnumMeta {",
-            "    pub kind: String,",
-            "    pub name: String,",
-            "    pub fqn: String,",
-            "    pub module_fqn: String,",
-            "    pub file: String,",
-            "    pub line_num: u32,",
-            "    pub is_public: bool,",
-            "    pub type_info: __ZincTypeMeta,",
-            "}",
-        ]),
-        "\n".join([
-            "#[derive(Clone, Debug, Default, PartialEq)]",
-            "struct __ZincVariantMeta {",
-            "    pub kind: String,",
-            "    pub name: String,",
-            "    pub fqn: String,",
-            "    pub module_fqn: String,",
-            "    pub file: String,",
-            "    pub line_num: u32,",
-            "    pub is_public: bool,",
-            "    pub index: u32,",
-            "}",
-        ]),
-        "\n".join([
-            "#[derive(Clone, Debug, Default, PartialEq)]",
-            "struct __ZincFieldMeta {",
-            "    pub kind: String,",
-            "    pub name: String,",
-            "    pub fqn: String,",
-            "    pub module_fqn: String,",
-            "    pub file: String,",
-            "    pub line_num: u32,",
-            "    pub is_public: bool,",
-            "    pub value_type: __ZincTypeMeta,",
-            "    pub index: u32,",
-            "    pub is_const: bool,",
-            "    pub has_default: bool,",
-            "    pub is_declared: bool,",
-            "    pub source_component_fqn: String,",
-            "}",
-        ]),
-        "\n".join([
-            "#[derive(Clone, Debug, Default, PartialEq)]",
-            "struct __ZincFunctionParameterMeta {",
-            "    pub kind: String,",
-            "    pub name: String,",
-            "    pub fqn: String,",
-            "    pub module_fqn: String,",
-            "    pub file: String,",
-            "    pub line_num: u32,",
-            "    pub is_public: bool,",
-            "    pub index: u32,",
-            "    pub value_type: __ZincTypeMeta,",
-            "    pub declared_type: __ZincTypeMeta,",
-            "    pub has_declared_type: bool,",
-            "}",
-        ]),
-        "\n".join([
-            "#[derive(Clone, Debug, Default, PartialEq)]",
-            "struct __ZincMethodParameterMeta {",
-            "    pub kind: String,",
-            "    pub name: String,",
-            "    pub fqn: String,",
-            "    pub module_fqn: String,",
-            "    pub file: String,",
-            "    pub line_num: u32,",
-            "    pub is_public: bool,",
-            "    pub index: u32,",
-            "    pub value_type: __ZincTypeMeta,",
-            "    pub declared_type: __ZincTypeMeta,",
-            "    pub has_declared_type: bool,",
-            "}",
-        ]),
-        "\n".join([
-            "#[derive(Clone, Debug, Default, PartialEq)]",
-            "struct __ZincFunctionMeta {",
-            "    pub kind: String,",
-            "    pub name: String,",
-            "    pub fqn: String,",
-            "    pub module_fqn: String,",
-            "    pub file: String,",
-            "    pub line_num: u32,",
-            "    pub is_public: bool,",
-            "    pub params: Vec<__ZincFunctionParameterMeta>,",
-            "    pub return_type: __ZincTypeMeta,",
-            "    pub is_async: bool,",
-            "    pub is_generator: bool,",
-            "}",
-        ]),
-        "\n".join([
-            "#[derive(Clone, Debug, Default, PartialEq)]",
-            "struct __ZincBuiltinMeta {",
-            "    pub kind: String,",
-            "    pub name: String,",
-            "    pub fqn: String,",
-            "    pub module_fqn: String,",
-            "    pub file: String,",
-            "    pub line_num: u32,",
-            "    pub is_public: bool,",
-            "    pub params: Vec<__ZincFunctionParameterMeta>,",
-            "    pub return_type: __ZincTypeMeta,",
-            "    pub is_async: bool,",
-            "    pub is_generator: bool,",
-            "}",
-        ]),
-        "\n".join([
-            "#[derive(Clone, Debug, Default, PartialEq)]",
-            "struct __ZincMethodMeta {",
-            "    pub kind: String,",
-            "    pub name: String,",
-            "    pub fqn: String,",
-            "    pub module_fqn: String,",
-            "    pub file: String,",
-            "    pub line_num: u32,",
-            "    pub is_public: bool,",
-            "    pub params: Vec<__ZincMethodParameterMeta>,",
-            "    pub return_type: __ZincTypeMeta,",
-            "    pub is_async: bool,",
-            "    pub is_generator: bool,",
-            "    pub is_static: bool,",
-            "    pub is_declared: bool,",
-            "}",
-        ]),
-        "\n".join([
-            "#[derive(Clone, Debug, Default, PartialEq)]",
-            "struct __ZincVariableMeta {",
-            "    pub kind: String,",
-            "    pub name: String,",
-            "    pub fqn: String,",
-            "    pub module_fqn: String,",
-            "    pub file: String,",
-            "    pub line_num: u32,",
-            "    pub is_public: bool,",
-            "    pub value_type: __ZincTypeMeta,",
-            "    pub has_declared_type: bool,",
-            "    pub is_mutated: bool,",
-            "    pub is_shadow: bool,",
-            "}",
-        ]),
-        "\n".join([
-            "#[derive(Clone, Debug, Default, PartialEq)]",
-            "struct __ZincConstMeta {",
-            "    pub kind: String,",
-            "    pub name: String,",
-            "    pub fqn: String,",
-            "    pub module_fqn: String,",
-            "    pub file: String,",
-            "    pub line_num: u32,",
-            "    pub is_public: bool,",
-            "    pub value_type: __ZincTypeMeta,",
-            "    pub value_text: String,",
-            "}",
-        ]),
-        "\n".join([
-            "#[derive(Clone, Debug, PartialEq)]",
-            "enum __ZincComponentOrder {",
-            "    DepthFirst,",
-            "    BreadthFirst,",
-            "    Topological,",
-            "}",
-        ]),
+        "\n".join(
+            [
+                "#[derive(Clone, Debug, Default, PartialEq)]",
+                "struct __ZincTypeMeta {",
+                "    pub kind: String,",
+                "    pub name: String,",
+                "    pub fqn: String,",
+                "    pub family_name: String,",
+                "    pub family_fqn: String,",
+                "    pub args: Vec<__ZincTypeMeta>,",
+                "    pub is_named: bool,",
+                "    pub is_bounded: bool,",
+                "    pub infer_slots: Vec<String>,",
+                "}",
+            ]
+        ),
+        "\n".join(
+            [
+                "#[derive(Clone, Debug, Default, PartialEq)]",
+                "struct __ZincStructMeta {",
+                "    pub kind: String,",
+                "    pub name: String,",
+                "    pub fqn: String,",
+                "    pub module_fqn: String,",
+                "    pub file: String,",
+                "    pub line_num: u32,",
+                "    pub is_public: bool,",
+                "    pub type_info: __ZincTypeMeta,",
+                "}",
+            ]
+        ),
+        "\n".join(
+            [
+                "#[derive(Clone, Debug, Default, PartialEq)]",
+                "struct __ZincEnumMeta {",
+                "    pub kind: String,",
+                "    pub name: String,",
+                "    pub fqn: String,",
+                "    pub module_fqn: String,",
+                "    pub file: String,",
+                "    pub line_num: u32,",
+                "    pub is_public: bool,",
+                "    pub type_info: __ZincTypeMeta,",
+                "}",
+            ]
+        ),
+        "\n".join(
+            [
+                "#[derive(Clone, Debug, Default, PartialEq)]",
+                "struct __ZincVariantMeta {",
+                "    pub kind: String,",
+                "    pub name: String,",
+                "    pub fqn: String,",
+                "    pub module_fqn: String,",
+                "    pub file: String,",
+                "    pub line_num: u32,",
+                "    pub is_public: bool,",
+                "    pub index: u32,",
+                "}",
+            ]
+        ),
+        "\n".join(
+            [
+                "#[derive(Clone, Debug, Default, PartialEq)]",
+                "struct __ZincFieldMeta {",
+                "    pub kind: String,",
+                "    pub name: String,",
+                "    pub fqn: String,",
+                "    pub module_fqn: String,",
+                "    pub file: String,",
+                "    pub line_num: u32,",
+                "    pub is_public: bool,",
+                "    pub value_type: __ZincTypeMeta,",
+                "    pub index: u32,",
+                "    pub is_const: bool,",
+                "    pub has_default: bool,",
+                "    pub is_declared: bool,",
+                "    pub source_component_fqn: String,",
+                "}",
+            ]
+        ),
+        "\n".join(
+            [
+                "#[derive(Clone, Debug, Default, PartialEq)]",
+                "struct __ZincFunctionParameterMeta {",
+                "    pub kind: String,",
+                "    pub name: String,",
+                "    pub fqn: String,",
+                "    pub module_fqn: String,",
+                "    pub file: String,",
+                "    pub line_num: u32,",
+                "    pub is_public: bool,",
+                "    pub index: u32,",
+                "    pub value_type: __ZincTypeMeta,",
+                "    pub declared_type: __ZincTypeMeta,",
+                "    pub has_declared_type: bool,",
+                "}",
+            ]
+        ),
+        "\n".join(
+            [
+                "#[derive(Clone, Debug, Default, PartialEq)]",
+                "struct __ZincMethodParameterMeta {",
+                "    pub kind: String,",
+                "    pub name: String,",
+                "    pub fqn: String,",
+                "    pub module_fqn: String,",
+                "    pub file: String,",
+                "    pub line_num: u32,",
+                "    pub is_public: bool,",
+                "    pub index: u32,",
+                "    pub value_type: __ZincTypeMeta,",
+                "    pub declared_type: __ZincTypeMeta,",
+                "    pub has_declared_type: bool,",
+                "}",
+            ]
+        ),
+        "\n".join(
+            [
+                "#[derive(Clone, Debug, Default, PartialEq)]",
+                "struct __ZincFunctionMeta {",
+                "    pub kind: String,",
+                "    pub name: String,",
+                "    pub fqn: String,",
+                "    pub module_fqn: String,",
+                "    pub file: String,",
+                "    pub line_num: u32,",
+                "    pub is_public: bool,",
+                "    pub params: Vec<__ZincFunctionParameterMeta>,",
+                "    pub return_type: __ZincTypeMeta,",
+                "    pub is_async: bool,",
+                "}",
+            ]
+        ),
+        "\n".join(
+            [
+                "#[derive(Clone, Debug, Default, PartialEq)]",
+                "struct __ZincBuiltinMeta {",
+                "    pub kind: String,",
+                "    pub name: String,",
+                "    pub fqn: String,",
+                "    pub module_fqn: String,",
+                "    pub file: String,",
+                "    pub line_num: u32,",
+                "    pub is_public: bool,",
+                "    pub params: Vec<__ZincFunctionParameterMeta>,",
+                "    pub return_type: __ZincTypeMeta,",
+                "    pub is_async: bool,",
+                "}",
+            ]
+        ),
+        "\n".join(
+            [
+                "#[derive(Clone, Debug, Default, PartialEq)]",
+                "struct __ZincMethodMeta {",
+                "    pub kind: String,",
+                "    pub name: String,",
+                "    pub fqn: String,",
+                "    pub module_fqn: String,",
+                "    pub file: String,",
+                "    pub line_num: u32,",
+                "    pub is_public: bool,",
+                "    pub params: Vec<__ZincMethodParameterMeta>,",
+                "    pub return_type: __ZincTypeMeta,",
+                "    pub is_async: bool,",
+                "    pub is_static: bool,",
+                "    pub is_declared: bool,",
+                "}",
+            ]
+        ),
+        "\n".join(
+            [
+                "#[derive(Clone, Debug, Default, PartialEq)]",
+                "struct __ZincVariableMeta {",
+                "    pub kind: String,",
+                "    pub name: String,",
+                "    pub fqn: String,",
+                "    pub module_fqn: String,",
+                "    pub file: String,",
+                "    pub line_num: u32,",
+                "    pub is_public: bool,",
+                "    pub value_type: __ZincTypeMeta,",
+                "    pub has_declared_type: bool,",
+                "    pub is_mutated: bool,",
+                "    pub is_shadow: bool,",
+                "}",
+            ]
+        ),
+        "\n".join(
+            [
+                "#[derive(Clone, Debug, Default, PartialEq)]",
+                "struct __ZincConstMeta {",
+                "    pub kind: String,",
+                "    pub name: String,",
+                "    pub fqn: String,",
+                "    pub module_fqn: String,",
+                "    pub file: String,",
+                "    pub line_num: u32,",
+                "    pub is_public: bool,",
+                "    pub value_type: __ZincTypeMeta,",
+                "    pub value_text: String,",
+                "}",
+            ]
+        ),
+        "\n".join(
+            [
+                "#[derive(Clone, Debug, PartialEq)]",
+                "enum __ZincComponentOrder {",
+                "    DepthFirst,",
+                "    BreadthFirst,",
+                "    Topological,",
+                "}",
+            ]
+        ),
     ]

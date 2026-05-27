@@ -1,0 +1,95 @@
+enum Mode {
+    Auto
+    Manual { level: i64 }
+
+    fn static_note() {
+        return "mode"
+    }
+}
+
+struct Base {
+    const version: 1
+    name: string
+}
+
+struct Detail {
+    level: i64
+
+    fn scale(multiplier: i64) {
+        return self.level * multiplier
+    }
+}
+
+struct Node [ Base | Detail ] {
+    enabled: bool
+}
+
+#[
+    x in [i64],
+    type(y) in [string],
+]
+struct Pair {
+    x: infer
+    y: infer
+}
+
+fn choose(value: i64) {
+    return value
+}
+
+fn main() {
+    pair = Pair { x: 7, y: "seven" }
+    node = Node { name: "root", level: 2, enabled: true }
+    arr = [1, 2, 3]
+    tup = (1, "two", true)
+    scores = {"a": 1, "b": 2}
+    values = {1, 2, 3}
+    ch = chan()
+    ch <- 1
+    got = <- ch
+    buffered = chan(2)
+    buffered <- "ready"
+    buffered_value = <- buffered
+
+    print(type(i64))
+    print(type(1))
+    print(type(true))
+    print(type(arr))
+    print(type(scores))
+    print(type(values))
+    print(type(tup))
+    print(type(choose).kind)
+    print(type(ch))
+    print(type(ch).args[0].name)
+    print(type(ch).is_bounded)
+    print(type(type(ch)).name)
+    print(type(buffered))
+    print(type(buffered).args[0].name)
+    print(type(buffered).is_bounded)
+    print(type(type(buffered)).name)
+    print(type(got).name)
+    print(type(buffered_value).name)
+    print(type(ComponentOrder.topological).name)
+
+    print(type(pair))
+    print(type(pair).args)
+    print(type(pair).infer_slots)
+    print(type(Node))
+    print(type(node))
+    print(type(node).fields())
+    print(type(node).fields()[0])
+    print(type(node).fields()[0].owner().name)
+    print(type(node).methods())
+    print(type(node).methods()[0])
+    print(type(node).methods()[0].owner().name)
+    print(type(node).components())
+    print(type(node).recursive_components())
+    print(type(node).recursive_components(ComponentOrder.breadth_first))
+    print(type(Mode))
+    print(type(Mode).fields())
+    print(type(Mode).methods())
+    print(type(Mode).variants())
+    print(type(1).fields())
+    print(type(tup).methods())
+    print(type(scores).components())
+}

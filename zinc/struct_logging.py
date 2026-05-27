@@ -5,7 +5,6 @@ from pathlib import Path
 
 import structlog
 from colorama import Back, Fore, Style
-
 from zinc.exceptions import ZincLogLevelError
 
 
@@ -48,13 +47,11 @@ def _json_render(_, level, event_dict):
 def configure_logging(
     level: str | int | None = "info",
 ) -> None:
-    """
-    Configure structured JSON logging using structlog.
+    """Configure structured JSON logging using structlog.
 
     Args:
         level: The log level to use. Defaults to INFO.
     """
-
     levels_to_name = {
         logging.DEBUG: "debug",
         logging.INFO: "info",
@@ -68,16 +65,11 @@ def configure_logging(
     if isinstance(level, str):
         level = name_to_levels.get(level.lower())
         if level is None:
-            raise ZincLogLevelError(
-                f"Invalid log level: {level}. Must be one of {list(name_to_levels.keys())}"
-            )
+            raise ZincLogLevelError(f"Invalid log level: {level}. Must be one of {list(name_to_levels.keys())}")
 
     elif isinstance(level, int):
         if level not in levels_to_name:
-            raise ZincLogLevelError(
-                f"Invalid log level: {level}. Must be one of {list(levels_to_name.keys())}"
-            )
-
+            raise ZincLogLevelError(f"Invalid log level: {level}. Must be one of {list(levels_to_name.keys())}")
 
     processors = [
         structlog.processors.TimeStamper(fmt="iso"),  # Adds timestamp

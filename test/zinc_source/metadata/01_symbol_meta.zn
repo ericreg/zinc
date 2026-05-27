@@ -1,0 +1,78 @@
+const APP_NAME = "zinc"
+
+enum Status {
+    Ready
+    Busy
+
+    fn banner(prefix: string) {
+        return "{prefix}:status"
+    }
+}
+
+struct Profile {
+    const version: 1
+    name: string
+
+    fn label(prefix: string) {
+        return "{prefix}:{self.name}:{APP_NAME}"
+    }
+
+    fn build_tag(suffix: string) {
+        return "{suffix}:build"
+    }
+}
+
+async ping() {
+    print("pong")
+}
+
+fn inspect(count: i64) {
+    local = count
+    typed: string = APP_NAME
+    print(line())
+    print(meta(count))
+    print(meta(count).owner().name)
+    print(meta(count).declared_type.name)
+    print(meta(local))
+    print(meta(local).owner().name)
+    print(meta(local).value_type.name)
+    print(meta(typed).has_declared_type)
+    print(meta(APP_NAME))
+    print(meta(inspect))
+    print(meta(inspect).params[0])
+    print(meta(inspect).params[0].owner().name)
+    print(meta(inspect).return_type)
+    print(meta(ping))
+    print(meta(print))
+    return count
+}
+
+fn main() {
+    profile = Profile { name: "Ada" }
+    queue = chan(1)
+    queue <- 11
+
+    print(meta(Profile))
+    print(meta(Profile).type_info)
+    print(meta(Profile).type_info.fields())
+    print(meta(Status))
+    print(meta(Status).type_info)
+    print(meta(Status).type_info.variants())
+    print(meta(Status.Ready))
+    print(meta(Status.Ready).owner().name)
+    print(meta(Profile.build_tag))
+    print(meta(Profile.build_tag).params[0])
+    print(meta(profile.name))
+    print(meta(profile.name).owner().name)
+    print(meta(profile.label))
+    print(meta(profile.label).owner().name)
+    print(meta(queue))
+    print(meta(queue).value_type)
+    print(meta(queue).value_type.args[0].name)
+    print(meta(queue).value_type.is_bounded)
+    print(meta(type).fqn)
+    print(inspect(5))
+    print(profile.label("hi"))
+    print(Profile.build_tag("prod"))
+    print(Status.banner(APP_NAME))
+}

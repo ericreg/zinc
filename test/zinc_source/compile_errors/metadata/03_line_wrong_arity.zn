@@ -1,0 +1,5 @@
+// expected-error: line\(\) does not accept arguments
+
+fn main() {
+    print(line(1))
+}

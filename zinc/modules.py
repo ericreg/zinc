@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
+import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
-import tomllib
 
 from antlr4 import CommonTokenStream, InputStream, ParserRuleContext
-
 from zinc.exceptions import ZincModuleError
 from zinc.parser.zincLexer import zincLexer as ZincLexer
 from zinc.parser.zincParser import zincParser as ZincParser
-
 
 TopLevelKind = Literal["function", "struct", "enum", "const"]
 CompositionMode = Literal["orthogonal", "merge"]
@@ -192,11 +190,7 @@ class ModuleGraph:
 
     def top_level_functions(self) -> dict[str, ParserRuleContext]:
         """Return all top-level function definitions keyed by qualified id."""
-        return {
-            symbol.qualified_name: symbol.ctx
-            for symbol in self.top_level_symbols.values()
-            if symbol.kind == "function"
-        }
+        return {symbol.qualified_name: symbol.ctx for symbol in self.top_level_symbols.values() if symbol.kind == "function"}
 
 
 def find_package_root(entry_file: Path) -> Path:
@@ -239,11 +233,7 @@ def build_module_graph(entry_file: Path) -> ModuleGraph:
             tree = _parse_program(module_file)
             imports = _collect_imports(tree)
             symbols = _collect_top_level_symbols(tree, module_id)
-            exports = {
-                name: symbol
-                for name, symbol in symbols.items()
-                if symbol.is_public
-            }
+            exports = {name: symbol for name, symbol in symbols.items() if symbol.is_public}
             module = LoadedModule(
                 module_id=module_id,
                 path=module_file.resolve(),
@@ -334,10 +324,7 @@ def struct_composition_from_ctx(
         return None
 
     if composition.orthogonalComposition():
-        sources = tuple(
-            tuple(qualified_name_path(qualified))
-            for qualified in composition.orthogonalComposition().qualifiedName()
-        )
+        sources = tuple(tuple(qualified_name_path(qualified)) for qualified in composition.orthogonalComposition().qualifiedName())
         return StructCompositionSpec(
             mode="merge" if len(sources) == 1 else "orthogonal",
             source_paths=sources,
@@ -346,10 +333,7 @@ def struct_composition_from_ctx(
     if composition.mergeComposition():
         return StructCompositionSpec(
             mode="merge",
-            source_paths=tuple(
-                tuple(qualified_name_path(qualified))
-                for qualified in composition.mergeComposition().qualifiedName()
-            ),
+            source_paths=tuple(tuple(qualified_name_path(qualified)) for qualified in composition.mergeComposition().qualifiedName()),
         )
 
     return None
@@ -412,9 +396,7 @@ def _parse_program(module_file: Path) -> ZincParser.ProgramContext:
     parser = ZincParser(stream)
     tree = parser.program()
     if parser.getNumberOfSyntaxErrors() > 0:
-        raise ZincModuleError(
-            f"found {parser.getNumberOfSyntaxErrors()} syntax error(s) while parsing {module_file}"
-        )
+        raise ZincModuleError(f"found {parser.getNumberOfSyntaxErrors()} syntax error(s) while parsing {module_file}")
     return tree
 
 
@@ -500,9 +482,7 @@ def _collect_top_level_symbols(tree: ZincParser.ProgramContext, module_id: str) 
         if symbol is None:
             continue
         if symbol.name in symbols:
-            raise ZincModuleError(
-                f"duplicate top-level declaration '{symbol.name}' in module '{module_id}'"
-            )
+            raise ZincModuleError(f"duplicate top-level declaration '{symbol.name}' in module '{module_id}'")
         symbols[symbol.name] = symbol
 
     return symbols
@@ -520,13 +500,9 @@ def _resolve_module_import_scope(graph: ModuleGraph, module: LoadedModule) -> No
         if import_spec.alias:
             alias = import_spec.alias
             if alias in aliases:
-                raise ZincModuleError(
-                    f"duplicate import alias '{alias}' in module '{module.module_id}'"
-                )
+                raise ZincModuleError(f"duplicate import alias '{alias}' in module '{module.module_id}'")
             if alias in injected or alias in local_names:
-                raise ZincModuleError(
-                    f"alias '{alias}' conflicts with an existing name in module '{module.module_id}'"
-                )
+                raise ZincModuleError(f"alias '{alias}' conflicts with an existing name in module '{module.module_id}'")
             aliases[alias] = target.module_id
             continue
 
@@ -534,17 +510,11 @@ def _resolve_module_import_scope(graph: ModuleGraph, module: LoadedModule) -> No
         for name in import_names:
             export = target.exports.get(name)
             if export is None:
-                raise ZincModuleError(
-                    f"module '{target.module_id}' does not export '{name}'"
-                )
+                raise ZincModuleError(f"module '{target.module_id}' does not export '{name}'")
             if name in local_names:
-                raise ZincModuleError(
-                    f"imported name '{name}' conflicts with a local declaration in module '{module.module_id}'"
-                )
+                raise ZincModuleError(f"imported name '{name}' conflicts with a local declaration in module '{module.module_id}'")
             if name in injected and injected[name] != export.qualified_name:
-                raise ZincModuleError(
-                    f"duplicate imported name '{name}' in module '{module.module_id}'"
-                )
+                raise ZincModuleError(f"duplicate imported name '{name}' in module '{module.module_id}'")
             injected[name] = export.qualified_name
 
     module.injected_symbols = injected

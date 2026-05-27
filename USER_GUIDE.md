@@ -971,6 +971,207 @@ fn main() {
 }
 ```
 
+## Enums
+
+Enums support unit variants, payload variants, and methods:
+
+```zinc
+enum Status {
+    Ready
+    Busy { worker: string }
+
+    fn label() {
+        return "status"
+    }
+}
+
+fn main() {
+    ready = Status.Ready
+    busy = Status.Busy { worker: "a" }
+
+    match busy {
+        Status.Ready => {
+            print("ready")
+        }
+        Status.Busy { worker } => {
+            print(worker)
+        }
+    }
+
+    print(Status.label())
+}
+```
+
+Enum methods follow the same rule as struct methods: touching `self` makes them
+instance methods, otherwise they are static methods.
+
+## Compile-Time Metadata
+
+Zinc exposes compiler-known metadata as compile-time values:
+
+- `meta(x)` returns symbol/declaration metadata
+- `type(x)` returns concrete type metadata
+- `line()` returns the current call-site line number
+- `has_component(item, Component)` checks nominal recursive composition
+- `implements(item, InterfaceLike)` checks the public instance API structurally
+
+`meta(...)` only accepts named program entities such as variables, fields,
+methods, functions, structs, enums, enum variants, consts, parameters, and
+builtins. `meta(123)` is a compile-time error.
+
+```zinc
+const APP = "zinc"
+
+struct Profile {
+    name: string
+}
+
+fn main() {
+    profile = Profile { name: "Ada" }
+
+    print(meta(Profile).name)
+    print(meta(profile.name).owner().name)
+    print(meta(APP).value_type.name)
+    print(line())
+}
+```
+
+`type(...)` works on both value expressions and type symbols:
+
+```zinc
+fn main() {
+    pair = (1, "two")
+
+    print(type(i64).name)
+    print(type(pair).kind)
+    print(type(pair).args[1].name)
+}
+```
+
+Channels expose a channel-specific type metadata shape. `type(channel_value)`
+returns `ChannelMeta`, which behaves like `TypeMeta` with one extra public
+field:
+
+- `is_bounded: bool`
+
+The channel payload type is stored in `args[0]`:
+
+```zinc
+fn main() {
+    open = chan()
+    open <- 1
+
+    bounded = chan(2)
+    bounded <- "hi"
+
+    print(type(open).args[0].name)      // i64
+    print(type(open).is_bounded)        // false
+    print(type(bounded).args[0].name)   // String
+    print(type(bounded).is_bounded)     // true
+    print(type(type(open)).name)        // ChannelMeta
+}
+```
+
+Struct and enum metadata also expose effective members:
+
+```zinc
+enum Color {
+    Red
+    Blue
+}
+
+struct Base {
+    name: string
+}
+
+struct Detail {
+    level: i64
+}
+
+struct Node [ Base | Detail ] {
+    enabled: bool
+}
+
+fn main() {
+    print(type(Node).fields())
+    print(type(Node).methods())
+    print(type(Node).components())
+    print(type(Node).recursive_components())
+    print(type(Color).variants())
+}
+```
+
+## Compile-Time Constraints
+
+`#[ ... ]` is reserved for compile-time constraint attributes. In v1, constraints
+apply to untyped function parameters and `infer` struct fields.
+
+Structs can infer field types at instantiation time:
+
+```zinc
+struct Point {
+    x: infer
+    y: infer
+}
+
+fn main() {
+    p = Point { x: 1, y: 2 }
+    print(type(p).name) // Point<i64, i64>
+}
+```
+
+Constraints can restrict inferred types:
+
+```zinc
+#[
+    x in [i64],
+    type(y) in [type(string)],
+]
+struct Pair {
+    x: infer
+    y: infer
+}
+```
+
+The short form:
+
+```zinc
+#[ x in [i64, f64] ]
+```
+
+desugars to:
+
+```zinc
+#[ type(x) in [type(i64), type(f64)] ]
+```
+
+Untyped parameters can use nominal or structural constraints:
+
+```zinc
+struct Shape {
+    name: string
+}
+
+struct Shape2D [Shape] {
+    fn area() {
+        return 0
+    }
+}
+
+#[has_component(shape, Shape2D)]
+fn area_nominal(shape) {
+    print(shape.area())
+}
+
+#[implements(shape, Shape2D)]
+fn area_structural(shape) {
+    print(shape.area())
+}
+```
+
+`#[...]` is intentionally separate from future decorator syntax. Zinc reserves
+`@decorator` and `@decorator(...)` for declaration decorators later.
+
 ## Channels And Spawn
 
 Channels are created with `chan()` or `chan(capacity)`:

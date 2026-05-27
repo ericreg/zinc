@@ -2,7 +2,6 @@
 
 from antlr4 import CommonTokenStream, InputStream
 from antlr4.error.ErrorListener import ErrorListener
-
 from zinc.parser.zincLexer import zincLexer
 from zinc.parser.zincParser import zincParser
 

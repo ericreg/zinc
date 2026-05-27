@@ -1,27 +1,27 @@
 """AST module for the Zinc compiler."""
 
-from .types import BaseType, TypeInfo, parse_literal
 from .expressions import (
-    Expression,
-    LiteralExpr,
-    IdentifierExpr,
     BinaryExpr,
-    UnaryExpr,
-    ParenExpr,
     CallExpr,
+    Expression,
+    IdentifierExpr,
+    LiteralExpr,
+    ParenExpr,
+    UnaryExpr,
 )
 from .statements import (
-    Statement,
     AssignmentKind,
-    VariableAssignment,
-    PrintStatement,
+    FunctionDeclaration,
     IfBranch,
     IfStatement,
     Parameter,
-    FunctionDeclaration,
+    PrintStatement,
     ReturnStatement,
+    Statement,
+    VariableAssignment,
 )
-from .symbols import Symbol, Scope
+from .symbols import Scope, Symbol
+from .types import BaseType, TypeInfo, parse_literal
 
 __all__ = [
     # Types

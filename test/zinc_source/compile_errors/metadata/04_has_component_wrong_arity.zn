@@ -1,0 +1,8 @@
+// expected-error: has_component\(\) expects exactly two arguments
+
+struct A {
+}
+
+fn main() {
+    print(has_component(A))
+}

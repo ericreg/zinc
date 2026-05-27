@@ -12,11 +12,13 @@ def resolve_source(tmp_path: Path, source: str) -> SymbolTableVisitor:
     pkg_dir = tmp_path / "pkg"
     pkg_dir.mkdir()
     (pkg_dir / "pkg.toml").write_text(
-        "\n".join([
-            "[package]",
-            'name = "tmp"',
-            'version = "0.1.0"',
-        ])
+        "\n".join(
+            [
+                "[package]",
+                'name = "tmp"',
+                'version = "0.1.0"',
+            ]
+        )
     )
     entry = pkg_dir / "main.zn"
     entry.write_text(source)
@@ -114,4 +116,3 @@ def test_closure_transport_rejects_captured_bound_method(tmp_path: Path) -> None
     closure = next(iter(visitor.lexical_functions.values()))
     callable_info = visitor._callable_info_from_lexical_function(closure)
     assert not visitor._callable_is_transport_safe(callable_info)
-

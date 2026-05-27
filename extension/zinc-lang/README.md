@@ -4,7 +4,7 @@ Basic VS Code language support for Zinc `.zn` files.
 
 ## Features
 
-- Syntax highlighting for comments, strings, string interpolation, numbers, keywords, declarations, function calls, types, operators, and punctuation.
+- Syntax highlighting for comments, attributes, strings, string interpolation, numbers, enums, structs, imports, metadata builtins, type annotations, operators, and punctuation.
 - Bracket matching and auto-closing pairs for braces, brackets, parentheses, and quotes.
 - Line and block comment configuration.
 

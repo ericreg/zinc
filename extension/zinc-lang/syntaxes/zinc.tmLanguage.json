@@ -5,6 +5,7 @@
   "fileTypes": ["zn"],
   "patterns": [
     { "include": "#comments" },
+    { "include": "#attributes" },
     { "include": "#strings" },
     { "include": "#numbers" },
     { "include": "#imports" },
@@ -24,6 +25,32 @@
     { "include": "#punctuation" }
   ],
   "repository": {
+    "attributes": {
+      "patterns": [
+        {
+          "name": "meta.attribute.zinc",
+          "begin": "#\\[",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.attribute.begin.zinc" }
+          },
+          "end": "\\]",
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.attribute.end.zinc" }
+          },
+          "patterns": [
+            { "include": "#comments" },
+            { "include": "#strings" },
+            { "include": "#numbers" },
+            { "include": "#types" },
+            { "include": "#keywords" },
+            { "include": "#builtins" },
+            { "include": "#operators" },
+            { "include": "#punctuation" },
+            { "include": "#identifiers" }
+          ]
+        }
+      ]
+    },
     "comments": {
       "patterns": [
         {
@@ -159,6 +186,14 @@
           "captures": {
             "1": { "name": "keyword.declaration.struct.zinc" },
             "2": { "name": "entity.name.type.struct.zinc" }
+          }
+        },
+        {
+          "name": "meta.enum.zinc",
+          "match": "\\b(enum)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+          "captures": {
+            "1": { "name": "keyword.declaration.enum.zinc" },
+            "2": { "name": "entity.name.type.enum.zinc" }
           }
         },
         {
@@ -337,7 +372,7 @@
         },
         {
           "name": "meta.type.annotation.field.zinc",
-          "match": "^\\s*(?:(const)\\s+)?([A-Za-z_][A-Za-z0-9_]*)(\\s*:\\s*)(\\[[^\\n\\]]+\\]|\\([^\\n\\)]*\\)\\s*->\\s*[^,\\)\\n]+|\\([^\\n\\)]+\\)|(?:i8|i16|i32|i64|i128|u8|u16|u32|u64|u128|f8|f16|f32|f64|f128|string|bool)\\b|[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*(?:\\s*<[^\\n{};=]+>)?)(?=\\s*(?://.*)?$)",
+          "match": "^\\s*(?:(const)\\s+)?([A-Za-z_][A-Za-z0-9_]*)(\\s*:\\s*)(\\[[^\\n\\]]+\\]|\\([^\\n\\)]*\\)\\s*->\\s*[^,\\)\\n]+|\\([^\\n\\)]+\\)|(?:i8|i16|i32|i64|i128|u8|u16|u32|u64|u128|f8|f16|f32|f64|f128|string|bool|Context|infer)\\b|[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*(?:\\s*<[^\\n{};=]+>)?)(?=\\s*(?://.*)?$)",
           "captures": {
             "1": { "name": "storage.modifier.const.zinc" },
             "2": { "name": "variable.other.member.zinc" },
@@ -349,7 +384,7 @@
     },
     "module_paths": {
       "name": "entity.name.namespace.zinc",
-      "match": "\\b[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)+\\b"
+      "match": "\\b[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)+\\b"
     },
     "struct_instantiations": {
       "name": "entity.name.type.struct.zinc",
@@ -387,7 +422,7 @@
         },
         {
           "name": "keyword.other.concurrency.zinc",
-          "match": "\\b(?:spawn|select|case|await)\\b"
+          "match": "\\b(?:spawn|select|case|default|await)\\b"
         },
         {
           "name": "keyword.operator.word.zinc",
@@ -395,7 +430,11 @@
         },
         {
           "name": "keyword.declaration.zinc",
-          "match": "\\b(?:fn|async|struct|const|import|as)\\b"
+          "match": "\\b(?:fn|async|struct|enum|const|import|as)\\b"
+        },
+        {
+          "name": "storage.type.special.zinc",
+          "match": "\\b(?:infer|Context)\\b"
         }
       ]
     },
@@ -403,7 +442,7 @@
       "patterns": [
         {
           "name": "support.function.builtin.zinc",
-          "match": "\\b(?:print|chan|dict|set|sort_dict|sort_set)\\s*(?=\\()"
+          "match": "\\b(?:print|chan|close|dict|set|sort_dict|sort_set|meta|type|line|has_component|implements)\\s*(?=\\()"
         }
       ]
     },
@@ -419,6 +458,10 @@
         {
           "name": "keyword.operator.channel.zinc",
           "match": "<-"
+        },
+        {
+          "name": "keyword.operator.super-assign.zinc",
+          "match": "<<-"
         },
         {
           "name": "keyword.operator.range.zinc",

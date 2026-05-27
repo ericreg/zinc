@@ -2,7 +2,6 @@
 
 from antlr4 import CommonTokenStream, InputStream
 from antlr4.error.ErrorListener import ErrorListener
-
 from zinc.parser.zincLexer import zincLexer
 from zinc.parser.zincParser import zincParser
 
@@ -43,16 +42,7 @@ line ``2
     )
 
     assert errors == []
-    literal = (
-        tree.statement(0)
-        .functionDeclaration()
-        .block()
-        .statement(0)
-        .variableAssignment()
-        .expression()
-        .primaryExpression()
-        .literal()
-    )
+    literal = tree.statement(0).functionDeclaration().block().statement(0).variableAssignment().expression().primaryExpression().literal()
     assert literal.getText() == "`line 1\nline ``2\n{literal}`"
 
 

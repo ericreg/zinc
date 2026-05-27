@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Optional
 
-from .types import BaseType, TypeInfo, ChannelTypeInfo, ArrayTypeInfo, type_to_rust
+from .types import ArrayTypeInfo, BaseType, ChannelTypeInfo, TypeInfo, type_to_rust
 
 
 class Expression(ABC):
@@ -29,6 +29,7 @@ class LiteralExpr(Expression):
         # Handle format string interpolation like "{self.a}" or "{var}"
         if self.type_info and self.type_info.base == BaseType.STRING:
             import re
+
             interpolations = re.findall(r"\{([^}]+)\}", self.value)
             if interpolations:
                 # Convert to format!() macro
@@ -40,6 +41,7 @@ class LiteralExpr(Expression):
     def render_rust_as_string(self) -> str:
         """Render as an owned String (for struct fields expecting String type)."""
         import re
+
         # Check for format string interpolation
         interpolations = re.findall(r"\{([^}]+)\}", self.value)
         if interpolations:

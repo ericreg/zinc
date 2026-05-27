@@ -1,0 +1,5 @@
+// expected-error: meta\(\) expects exactly one argument
+
+fn main() {
+    print(meta().name)
+}

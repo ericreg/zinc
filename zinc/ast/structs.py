@@ -1,12 +1,11 @@
 """Struct AST nodes for the Zinc compiler."""
 
-import re
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Optional, TYPE_CHECKING
+from typing import Optional
 
 from .expressions import Expression
-from .statements import Statement, Parameter
+from .statements import Parameter, Statement
 from .types import BaseType, TypeInfo, type_to_rust
 
 
@@ -155,10 +154,12 @@ class StructInstantiationExpr(Expression):
                 if f.name in self.field_inits:
                     field_value = self.field_inits[f.name]
                     # Convert string literals to String::from() for String fields
-                    if (f.rust_type() == "String" and
-                        isinstance(field_value, LiteralExpr) and
-                        field_value.type_info and
-                        field_value.type_info.base == BaseType.STRING):
+                    if (
+                        f.rust_type() == "String"
+                        and isinstance(field_value, LiteralExpr)
+                        and field_value.type_info
+                        and field_value.type_info.base == BaseType.STRING
+                    ):
                         value = field_value.render_rust_as_string()
                     else:
                         value = field_value.render_rust()
@@ -217,10 +218,7 @@ class StaticMethodCallExpr(Expression):
                 if method and i < len(method.parameters):
                     param = method.parameters[i]
                     param_type = param.resolved_type or param.type_annotation
-                    if (param_type == "String" and
-                        isinstance(arg, LiteralExpr) and
-                        arg.type_info and
-                        arg.type_info.base == BaseType.STRING):
+                    if param_type == "String" and isinstance(arg, LiteralExpr) and arg.type_info and arg.type_info.base == BaseType.STRING:
                         args_rendered.append(arg.render_rust_as_string())
                         continue
             args_rendered.append(arg.render_rust())

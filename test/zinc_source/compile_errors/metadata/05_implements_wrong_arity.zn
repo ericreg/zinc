@@ -1,0 +1,8 @@
+// expected-error: implements\(\) expects exactly two arguments
+
+struct A {
+}
+
+fn main() {
+    print(implements(A))
+}

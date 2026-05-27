@@ -1,11 +1,12 @@
 import json
-import click
 from pathlib import Path
-from zinc.struct_logging import configure_logging, get_logger
+
+import click
 from zinc.atlas import AtlasBuilder
-from zinc.symbols import SymbolTableVisitor
 from zinc.codegen import CodeGenVisitor
 from zinc.modules import build_module_graph
+from zinc.struct_logging import configure_logging, get_logger
+from zinc.symbols import SymbolTableVisitor
 
 configure_logging()
 logger = get_logger()
@@ -36,9 +37,7 @@ def _compile_pipeline(file: Path):
 
 @main.command()
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
-@click.option(
-    "-o", "--output", type=click.Path(path_type=Path), help="Output file path"
-)
+@click.option("-o", "--output", type=click.Path(path_type=Path), help="Output file path")
 def compile(file: Path, output: Path | None):
     """Compile a Zinc source file to Rust."""
     _, _, _, codegen = _compile_pipeline(file)
