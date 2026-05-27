@@ -396,6 +396,7 @@ Zinc uses a 3-pass compiler:
 - [x] While loops
 - [x] Maps
 - [x] Sets
+- [x] Enums
 
 - [x] Modules and imports
 - [ ] A ton of tests

@@ -25,6 +25,7 @@ CARGO_TOML = RUST_SOURCE_DIR / "Cargo.toml"
 NON_DETERMINISTIC_FOLDER = "non_deterministic"
 COMPILE_ERROR_GROUPS = (
     "annotations",
+    "metadata",
     "collections",
     "tuples",
     "iterations",

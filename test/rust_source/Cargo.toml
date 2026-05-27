@@ -587,6 +587,18 @@ name = "iterations_22_break_in_nested_for"
 path = "src/iterations/22_break_in_nested_for.rs"
 
 [[bin]]
+name = "metadata_01_symbol_meta"
+path = "src/metadata/01_symbol_meta.rs"
+
+[[bin]]
+name = "metadata_02_type_meta"
+path = "src/metadata/02_type_meta.rs"
+
+[[bin]]
+name = "metadata_03_constraints_and_orders"
+path = "src/metadata/03_constraints_and_orders.rs"
+
+[[bin]]
 name = "modules_01_bare_import"
 path = "src/modules/01_bare_import.rs"
 

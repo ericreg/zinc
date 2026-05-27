@@ -336,7 +336,7 @@ fn main() {
     println!("{}", String::from("TaggedCircle"));
     println!("{}", String::from("TaggedCircle"));
     println!("{}", false);
-    println!("{}", false);
+    println!("{}", true);
     println!("{}", false);
     println!("{}", true);
     annotations_06_metadata_constraints__print_shape_Struct_annotations_06_metadata_constraints_Rectangle(annotations_06_metadata_constraints__Rectangle { name: String::from("box"), width: 9 });

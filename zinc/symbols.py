@@ -2134,6 +2134,17 @@ class SymbolTableVisitor(zincVisitor):
             return ""
         return qualified_name.replace("::", "/")
 
+    def _qualified_name_from_public_fqn(self, public_fqn: str | None) -> str | None:
+        """Convert a public slash-separated FQN back into an internal qualified name."""
+        if not public_fqn:
+            return None
+        if "/" not in public_fqn:
+            return public_fqn
+        module_id, _, symbol_path = public_fqn.rpartition("/")
+        if not module_id or not symbol_path:
+            return public_fqn
+        return f"{module_id}::{symbol_path.replace('/', '::')}"
+
     def _qualified_name_tail(self, qualified_name: str | None) -> str:
         """Return the unqualified tail name for a canonical symbol id."""
         if not qualified_name:
@@ -2209,6 +2220,71 @@ class SymbolTableVisitor(zincVisitor):
             element_base_type=BaseType.STRUCT,
             element_struct_qualified_name=TYPE_META_QNAME,
         )
+
+    def _empty_type_meta_methods(self) -> dict[str, object]:
+        """Return the default no-op method set shared by non-composite TypeMeta values."""
+        return {
+            "fields": self._metadata_list([], FIELD_META_QNAME),
+            "methods": self._metadata_list([], METHOD_META_QNAME),
+            "components": self._type_meta_list([]),
+            "recursive_components": lambda args: self._type_meta_list([]),
+        }
+
+    def _resolved_function_return_meta(self, qualified_name: str) -> MetaValue:
+        """Return a best-effort concrete return TypeMeta for a top-level function symbol."""
+        matches = [
+            func
+            for func in self.atlas.functions.values()
+            if func.qualified_name == qualified_name
+        ]
+        if not matches:
+            return unknown_type_meta()
+        first = matches[0]
+        for func in matches[1:]:
+            if (
+                func.return_type != first.return_type
+                or func.return_exact_type != first.return_exact_type
+                or func.return_struct_qualified_name != first.return_struct_qualified_name
+                or (
+                    func.return_anonymous_struct_info.structural_key()
+                    if func.return_anonymous_struct_info is not None
+                    else None
+                )
+                != (
+                    first.return_anonymous_struct_info.structural_key()
+                    if first.return_anonymous_struct_info is not None
+                    else None
+                )
+            ):
+                return unknown_type_meta()
+        return self._type_meta_from_base(
+            first.return_type,
+            exact_type=first.return_exact_type,
+            dict_info=first.return_dict_info,
+            set_info=first.return_set_info,
+            tuple_info=first.return_tuple_info,
+            callable_info=first.return_callable_info,
+            struct_qualified_name=first.return_struct_qualified_name,
+            anonymous_struct_info=first.return_anonymous_struct_info,
+        )
+
+    def _builtin_return_meta(self, name: str) -> MetaValue:
+        """Return coarse return TypeMeta information for a built-in function."""
+        builtin_returns = {
+            "print": self._type_meta_from_base(BaseType.VOID),
+            "chan": self._type_meta_from_base(BaseType.CHANNEL),
+            "close": self._type_meta_from_base(BaseType.VOID),
+            "dict": self._type_meta_from_base(BaseType.DICT),
+            "sort_dict": self._type_meta_from_base(BaseType.DICT),
+            "set": self._type_meta_from_base(BaseType.SET),
+            "sort_set": self._type_meta_from_base(BaseType.SET),
+            "meta": self._type_meta_from_base(BaseType.STRUCT, struct_qualified_name=STRUCT_META_QNAME),
+            "type": self._type_meta_from_base(BaseType.STRUCT, struct_qualified_name=TYPE_META_QNAME),
+            "line": self._type_meta_from_base(BaseType.INTEGER, exact_type="u32"),
+            "has_component": self._type_meta_from_base(BaseType.BOOLEAN, exact_type="bool"),
+            "implements": self._type_meta_from_base(BaseType.BOOLEAN, exact_type="bool"),
+        }
+        return builtin_returns.get(name, unknown_type_meta())
 
     def _string_meta_list(self, items: list[str]) -> MetaListValue:
         """Return a typed metadata list of strings."""
@@ -2439,6 +2515,7 @@ class SymbolTableVisitor(zincVisitor):
                 },
             )
             type_meta.methods = {
+                "fields": self._metadata_list([], FIELD_META_QNAME),
                 "methods": self._metadata_list(method_metas, METHOD_META_QNAME),
                 "components": self._type_meta_list([]),
                 "recursive_components": lambda args: self._type_meta_list([]),
@@ -2505,6 +2582,7 @@ class SymbolTableVisitor(zincVisitor):
                     "is_named": False,
                     "infer_slots": self._string_meta_list([]),
                 },
+                methods=self._empty_type_meta_methods(),
             )
         if base_type == BaseType.SET:
             args = [
@@ -2528,6 +2606,7 @@ class SymbolTableVisitor(zincVisitor):
                     "is_named": False,
                     "infer_slots": self._string_meta_list([]),
                 },
+                methods=self._empty_type_meta_methods(),
             )
         if base_type == BaseType.TUPLE:
             args = []
@@ -2558,6 +2637,7 @@ class SymbolTableVisitor(zincVisitor):
                     "is_named": False,
                     "infer_slots": self._string_meta_list([]),
                 },
+                methods=self._empty_type_meta_methods(),
             )
         if base_type == BaseType.CHANNEL:
             args = []
@@ -2575,6 +2655,7 @@ class SymbolTableVisitor(zincVisitor):
                     "is_named": False,
                     "infer_slots": self._string_meta_list([]),
                 },
+                methods=self._empty_type_meta_methods(),
             )
         if base_type == BaseType.CALLABLE:
             return MetaValue(
@@ -2589,6 +2670,7 @@ class SymbolTableVisitor(zincVisitor):
                     "is_named": False,
                     "infer_slots": self._string_meta_list([]),
                 },
+                methods=self._empty_type_meta_methods(),
             )
         exact = exact_type or default_exact_type(base_type) or type_to_rust(base_type)
         return MetaValue(
@@ -2603,6 +2685,7 @@ class SymbolTableVisitor(zincVisitor):
                 "is_named": True,
                 "infer_slots": self._string_meta_list([]),
             },
+            methods=self._empty_type_meta_methods(),
         )
 
     def _type_meta_from_value_info(self, info: ResolvedValueInfo) -> MetaValue:
@@ -2878,7 +2961,7 @@ class SymbolTableVisitor(zincVisitor):
                     is_public=symbol.is_public,
                 ),
                 "params": self._metadata_list([], FUNCTION_PARAM_META_QNAME),
-                "return_type": unknown_type_meta(),
+                "return_type": self._resolved_function_return_meta(qualified_name),
                 "is_async": isinstance(symbol.ctx, ZincParser.AsyncFunctionDeclarationContext),
                 "is_generator": False,
             },
@@ -2988,7 +3071,7 @@ class SymbolTableVisitor(zincVisitor):
                     is_public=True,
                 ),
                 "params": self._metadata_list([], FUNCTION_PARAM_META_QNAME),
-                "return_type": unknown_type_meta(),
+                "return_type": self._builtin_return_meta(name),
                 "is_async": False,
                 "is_generator": False,
             },
@@ -3171,8 +3254,8 @@ class SymbolTableVisitor(zincVisitor):
     def _has_component_from_types(self, actual: MetaValue, expected: MetaValue) -> bool:
         """Return True when actual recursively composes expected."""
         return self._has_component_named(
-            str(actual.fields.get("family_fqn", "")).replace("/", "::"),
-            str(expected.fields.get("family_fqn", "")).replace("/", "::"),
+            self._qualified_name_from_public_fqn(str(actual.fields.get("family_fqn", ""))),
+            self._qualified_name_from_public_fqn(str(expected.fields.get("family_fqn", ""))),
         )
 
     def _implements_from_types(self, actual: MetaValue, expected: MetaValue) -> bool:

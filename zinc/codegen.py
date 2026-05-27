@@ -988,9 +988,21 @@ class CodeGenVisitor(zincVisitor):
             return f'String::from("{escaped}")'
         return repr(value)
 
+    def _meta_list_element_rust_type(self, value: MetaListValue) -> str:
+        """Return the Rust element type for a compile-time metadata list."""
+        if is_meta_struct_qname(value.element_struct_qualified_name):
+            return meta_struct_rust_name(value.element_struct_qualified_name)
+        if value.element_struct_qualified_name == COMPONENT_ORDER_QNAME:
+            return meta_struct_rust_name(value.element_struct_qualified_name)
+        if value.element_exact_type is not None:
+            return value.element_exact_type
+        return type_to_rust(value.element_base_type)
+
     def _render_meta_list(self, value: MetaListValue) -> str:
         """Render a compile-time metadata list into a Rust Vec literal."""
         self._needs_metadata_runtime = True
+        if not value.items:
+            return f"Vec::<{self._meta_list_element_rust_type(value)}>::new()"
         return f"vec![{', '.join(self._render_constant_value(item) for item in value.items)}]"
 
     def _render_meta_value(self, value: MetaValue) -> str:
