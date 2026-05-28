@@ -22,18 +22,14 @@ Implemented core pillars
 - [x] type alternatives, i32 | f32, numeric is sugar for i32 | f32 | u8 | ...
 - [x] rust like numerical literals
 - [x] math operators, +=, *=, -=, etc 
-- [] default parameters
-- [] arg matching
-- [] multiple assignment, x, y, z = 1
+- [x] default parameters
+- [x] arg matching
+- [x] multiple assignment, x, y, z = 1
 
 - [] decorators
 - [] support for lambda expressions
-
-
 - [] iterator stuff such as for i in (1..upper_bound).step_by(2)
-
-- [] bitwise operations
-out x = 
+- [x] bitwise operations
 
 Currently (possibly forever) unsupported
 ------------------------------------------
@@ -47,10 +43,6 @@ Currently (possibly forever) unsupported
 
 Highest-priority language gaps
 ------------------------------
-- [ ] Error handling story
-      Today many runtime failure paths still lower to Rust `unwrap()`/panic.
-      Need a real Zinc-level model for recoverable errors.
-- [] context managers and cleanup
 - [ ] Zinc stdlib
       The language has a solid core, but it still needs a standard library layer
       to make code generation and user programs feel simpler and more "Python-like".

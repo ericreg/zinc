@@ -18,6 +18,7 @@ from zinc.ast.types import (
     TupleTypeInfo,
     ValueTypeSpec,
     exact_type_to_rust,
+    normalize_exact_type,
     type_to_rust,
 )
 from zinc.atlas import (
@@ -43,6 +44,8 @@ from zinc.parser.zincParser import zincParser as ZincParser
 from zinc.parser.zincVisitor import zincVisitor
 from zinc.string_literals import is_interpolated_string_literal, is_string_literal, to_rust_string_literal
 from zinc.symbols import BoundArgument, BoundStructField, LexicalFunctionInfo, SymbolKind, SymbolTable
+
+BITWISE_VALUE_ASSIGNMENT_OPERATORS = frozenset({"&=", "|=", "^="})
 
 
 @dataclass
@@ -2696,6 +2699,35 @@ class CodeGenVisitor(zincVisitor):
 
         return f"({left} {op} {right})"
 
+    def _render_bitwise_binary_expr(self, ctx) -> str:
+        """Render integer bitwise AND, OR, and XOR."""
+        left = self.visit(ctx.expression(0))
+        op = ctx.getChild(1).getText()
+        right = self.visit(ctx.expression(1))
+        result_exact_type = self._get_expr_exact_type(ctx)
+        left = self._coerce_bitwise_operand(left, ctx.expression(0), result_exact_type)
+        right = self._coerce_bitwise_operand(right, ctx.expression(1), result_exact_type)
+        return f"({left} {op} {right})"
+
+    def visitBitwiseAndExpr(self, ctx: ZincParser.BitwiseAndExprContext) -> str:
+        """Visit integer bitwise AND."""
+        return self._render_bitwise_binary_expr(ctx)
+
+    def visitBitwiseXorExpr(self, ctx: ZincParser.BitwiseXorExprContext) -> str:
+        """Visit integer bitwise XOR."""
+        return self._render_bitwise_binary_expr(ctx)
+
+    def visitBitwiseOrExpr(self, ctx: ZincParser.BitwiseOrExprContext) -> str:
+        """Visit integer bitwise OR."""
+        return self._render_bitwise_binary_expr(ctx)
+
+    def visitShiftExpr(self, ctx: ZincParser.ShiftExprContext) -> str:
+        """Visit integer shift expression."""
+        left = self.visit(ctx.expression(0))
+        op = ctx.getChild(1).getText()
+        right = self.visit(ctx.expression(1))
+        return f"({left} {op} {right})"
+
     def visitMultiplicativeExpr(self, ctx: ZincParser.MultiplicativeExprContext) -> str:
         """Visit multiplication/division expression."""
         left = self.visit(ctx.expression(0))
@@ -2762,6 +2794,16 @@ class CodeGenVisitor(zincVisitor):
         if target_type == BaseType.FLOAT and value_type == BaseType.INTEGER:
             float_exact = exact_type_to_rust(target_exact_type, BaseType.FLOAT)
             return f"({value} as {float_exact})"
+        return value
+
+    def _coerce_bitwise_operand(self, value: str, value_ctx, target_exact_type: str | None) -> str:
+        """Cast compile-time integer literals to the resolved bitwise exact type."""
+        target_exact = normalize_exact_type(target_exact_type)
+        value_exact = normalize_exact_type(self._get_expr_exact_type(value_ctx))
+        if target_exact is None or value_exact == target_exact:
+            return value
+        if self._get_expr_type(value_ctx) == BaseType.INTEGER and self._is_compile_time_literal_expr(value_ctx):
+            return f"({value} as {target_exact})"
         return value
 
     def _render_power_expr(self, left: str, left_ctx, right: str, right_ctx, result_ctx) -> str:
@@ -3728,8 +3770,18 @@ class CodeGenVisitor(zincVisitor):
                     return var_name in self._literal_vars
             return False
 
-        # Binary expressions (additive, multiplicative)
-        if isinstance(ctx, (ZincParser.AdditiveExprContext, ZincParser.MultiplicativeExprContext)):
+        # Binary expressions made only of compile-time literals.
+        if isinstance(
+            ctx,
+            (
+                ZincParser.AdditiveExprContext,
+                ZincParser.MultiplicativeExprContext,
+                ZincParser.ShiftExprContext,
+                ZincParser.BitwiseAndExprContext,
+                ZincParser.BitwiseXorExprContext,
+                ZincParser.BitwiseOrExprContext,
+            ),
+        ):
             left = ctx.expression(0)
             right = ctx.expression(1)
             return self._is_compile_time_literal_expr(left) and self._is_compile_time_literal_expr(right)
@@ -4154,7 +4206,9 @@ class CodeGenVisitor(zincVisitor):
             temp_name = self._staged_temp_name("captured_write", ctx)
             return f"let {temp_name} = {value};\n*{self._rust_binding_name(storage_name)}.lock().unwrap() = {temp_name};"
 
-        if assignment_op != "**=":
+        if assignment_op in BITWISE_VALUE_ASSIGNMENT_OPERATORS:
+            value = self._coerce_bitwise_operand(value, expr, symbol.exact_type)
+        elif assignment_op not in {"**=", "<<=", ">>="}:
             value = self._coerce_numeric_rhs_for_target(value, expr, symbol.resolved_type, symbol.exact_type)
         rust_target = self._rust_binding_name(storage_name)
         value_temp = self._staged_temp_name("captured_compound", expr)
@@ -4330,8 +4384,7 @@ class CodeGenVisitor(zincVisitor):
                 return self._render_broadcast_assignment(ctx, target_ctx.tupleAssignmentTarget(), expr, value)
             names = self._binding_names(target_ctx.tupleAssignmentTarget())
             target_symbols = [
-                self._symbol_for_binding_token(token)
-                for token in target_ctx.tupleAssignmentTarget().getTokens(ZincParser.IDENTIFIER)
+                self._symbol_for_binding_token(token) for token in target_ctx.tupleAssignmentTarget().getTokens(ZincParser.IDENTIFIER)
             ]
             needs_declaration = any(symbol is None or symbol.is_shadow or symbol.id not in self._declared_vars for symbol in target_symbols)
             pattern_names = []
@@ -4440,7 +4493,9 @@ class CodeGenVisitor(zincVisitor):
             expected_type=target_type if target_type != BaseType.UNKNOWN else None,
             coerce_scalar=False,
         )
-        if assignment_op != "**=":
+        if assignment_op in BITWISE_VALUE_ASSIGNMENT_OPERATORS:
+            value = self._coerce_bitwise_operand(value, expr, target_exact_type)
+        elif assignment_op not in {"**=", "<<=", ">>="}:
             value = self._coerce_numeric_rhs_for_target(value, expr, target_type, target_exact_type)
 
         if target_ctx.IDENTIFIER() and target_symbol is not None and self._symbol_is_captured_cell(target_symbol):

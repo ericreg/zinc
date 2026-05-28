@@ -168,6 +168,11 @@ assignmentOperator
     | '/='
     | '%='
     | '**='
+    | '&='
+    | '|='
+    | '^='
+    | '<<='
+    | '>>='
     ;
 
 outAssignment
@@ -308,6 +313,10 @@ expression
     | <assoc=right> expression '**' expression                  # powerExpr
     | expression ('*' | '/' | '%') expression                   # multiplicativeExpr
     | expression ('+' | '-') expression                         # additiveExpr
+    | expression ('<<' | '>>') expression                       # shiftExpr
+    | expression '&' expression                                 # bitwiseAndExpr
+    | expression '^' expression                                 # bitwiseXorExpr
+    | expression '|' expression                                 # bitwiseOrExpr
     | expression ('..' | '..=') expression                      # rangeExpr
     | expression ('<' | '<=' | '>' | '>=') expression           # relationalExpr
     | expression 'in' expression                                # membershipExpr
@@ -584,6 +593,13 @@ STAR        : '*';
 SLASH       : '/';
 PERCENT     : '%';
 REMOVED_SUPER_ASSIGN: '<<-';
+SHLEQ       : '<<=';
+SHREQ       : '>>=';
+AMPEQ       : '&=';
+PIPEEQ      : '|=';
+CARETEQ     : '^=';
+SHL         : '<<';
+SHR         : '>>';
 EQ          : '=';
 EQEQ        : '==';
 NEQ         : '!=';
@@ -594,7 +610,9 @@ GT          : '>';
 GE          : '>=';
 AMPAMP      : '&&';
 PIPEPIPE    : '||';
+AMP         : '&';
 BANG        : '!';
+CARET       : '^';
 DOTDOT      : '..';
 DOTDOTEQ    : '..=';
 ARROW       : '=>';

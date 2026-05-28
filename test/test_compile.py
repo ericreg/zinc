@@ -36,6 +36,7 @@ COMPILE_ERROR_GROUPS = (
     "callables",
     "control_flow",
     "functions",
+    "operators",
 )
 
 

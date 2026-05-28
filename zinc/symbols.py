@@ -76,6 +76,8 @@ from zinc.parser.zincParser import zincParser as ZincParser
 from zinc.parser.zincVisitor import zincVisitor
 
 RESERVED_ERROR_NAMES = frozenset({"Ok", "Err", "Some", "None"})
+BITWISE_ASSIGNMENT_OPERATORS = frozenset({"&=", "|=", "^=", "<<=", ">>="})
+SHIFT_ASSIGNMENT_OPERATORS = frozenset({"<<=", ">>="})
 
 
 class SymbolKind(Enum):
@@ -1745,7 +1747,17 @@ class SymbolTableVisitor(zincVisitor):
             return self._is_compile_time_literal_expr(expr_ctx.expression())
         if isinstance(expr_ctx, ZincParser.UnaryExprContext):
             return self._is_compile_time_literal_expr(expr_ctx.expression())
-        if isinstance(expr_ctx, (ZincParser.AdditiveExprContext, ZincParser.MultiplicativeExprContext)):
+        if isinstance(
+            expr_ctx,
+            (
+                ZincParser.AdditiveExprContext,
+                ZincParser.MultiplicativeExprContext,
+                ZincParser.ShiftExprContext,
+                ZincParser.BitwiseAndExprContext,
+                ZincParser.BitwiseXorExprContext,
+                ZincParser.BitwiseOrExprContext,
+            ),
+        ):
             return all(self._is_compile_time_literal_expr(expr_ctx.expression(i)) for i in range(2))
         return False
 
@@ -1856,6 +1868,35 @@ class SymbolTableVisitor(zincVisitor):
         if expr_symbol is None or not self._is_compile_time_literal_expr(expr_ctx):
             return None
         return expr_symbol.constant_value
+
+    def _integer_constant_value(self, symbol: Symbol | None) -> int | None:
+        """Return an integer constant, excluding bool's int subclass behavior."""
+        if symbol is None or symbol.constant_value is None:
+            return None
+        if isinstance(symbol.constant_value, bool) or not isinstance(symbol.constant_value, int):
+            return None
+        return symbol.constant_value
+
+    def _bitwise_result_exact_type(self, left_ctx, right_ctx, operator: str) -> str:
+        """Resolve exact integer type for non-shift bitwise operations."""
+        left_symbol = self._expr_symbol(left_ctx)
+        right_symbol = self._expr_symbol(right_ctx)
+        left_exact = normalize_exact_type(left_symbol.exact_type if left_symbol else None) or default_exact_type(BaseType.INTEGER)
+        right_exact = normalize_exact_type(right_symbol.exact_type if right_symbol else None) or default_exact_type(BaseType.INTEGER)
+        if left_exact == right_exact:
+            return left_exact
+
+        right_constant = self._literal_constant_value_for_expr(right_ctx, right_symbol)
+        if isinstance(right_constant, int) and not isinstance(right_constant, bool):
+            if self._integer_value_fits_exact_type(right_constant, left_exact):
+                return left_exact
+
+        left_constant = self._literal_constant_value_for_expr(left_ctx, left_symbol)
+        if isinstance(left_constant, int) and not isinstance(left_constant, bool):
+            if self._integer_value_fits_exact_type(left_constant, right_exact):
+                return right_exact
+
+        raise ZincTypeError(f"operator '{operator}' requires compatible integer operands")
 
     def _type_metadata_from_type_ctx(
         self,
@@ -5491,7 +5532,9 @@ class SymbolTableVisitor(zincVisitor):
                     if info.struct_qualified_name is not None:
                         arg_struct_qualified_names[i] = info.struct_qualified_name
                     if info.anonymous_struct_info is not None:
-                        arg_anonymous_struct_infos[i] = self._copy_anonymous_struct_info(info.anonymous_struct_info) or AnonymousStructTypeInfo()
+                        arg_anonymous_struct_infos[i] = (
+                            self._copy_anonymous_struct_info(info.anonymous_struct_info) or AnonymousStructTypeInfo()
+                        )
                 continue
 
             arg_expr = bound_arg.expression
@@ -7436,6 +7479,75 @@ class SymbolTableVisitor(zincVisitor):
         )
         return result_type
 
+    def _visit_bitwise_binary_expr(self, ctx) -> BaseType:
+        """Handle integer bitwise AND, OR, and XOR."""
+        left_info = self._value_info_for_value_context(ctx.expression(0))
+        right_info = self._value_info_for_value_context(ctx.expression(1))
+        op = ctx.getChild(1).getText()
+        if left_info.base_type != BaseType.INTEGER or right_info.base_type != BaseType.INTEGER:
+            raise ZincTypeError(f"operator '{op}' requires integer operands")
+
+        left_symbol = self._expr_symbol(ctx.expression(0))
+        right_symbol = self._expr_symbol(ctx.expression(1))
+        result_exact_type = self._bitwise_result_exact_type(ctx.expression(0), ctx.expression(1), op)
+        constant_value = None
+        left_constant = self._integer_constant_value(left_symbol)
+        right_constant = self._integer_constant_value(right_symbol)
+        if left_constant is not None and right_constant is not None:
+            if op == "&":
+                constant_value = left_constant & right_constant
+            elif op == "|":
+                constant_value = left_constant | right_constant
+            elif op == "^":
+                constant_value = left_constant ^ right_constant
+
+        self.symbols.define_temp(
+            resolved_type=BaseType.INTEGER,
+            interval=ctx.getSourceInterval(),
+            exact_type=result_exact_type,
+            constant_value=constant_value,
+        )
+        return BaseType.INTEGER
+
+    def visitBitwiseAndExpr(self, ctx: ZincParser.BitwiseAndExprContext) -> BaseType:
+        """Handle integer bitwise AND."""
+        return self._visit_bitwise_binary_expr(ctx)
+
+    def visitBitwiseXorExpr(self, ctx: ZincParser.BitwiseXorExprContext) -> BaseType:
+        """Handle integer bitwise XOR."""
+        return self._visit_bitwise_binary_expr(ctx)
+
+    def visitBitwiseOrExpr(self, ctx: ZincParser.BitwiseOrExprContext) -> BaseType:
+        """Handle integer bitwise OR."""
+        return self._visit_bitwise_binary_expr(ctx)
+
+    def visitShiftExpr(self, ctx: ZincParser.ShiftExprContext) -> BaseType:
+        """Handle integer shift expressions."""
+        left_info = self._value_info_for_value_context(ctx.expression(0))
+        right_info = self._value_info_for_value_context(ctx.expression(1))
+        op = ctx.getChild(1).getText()
+        if left_info.base_type != BaseType.INTEGER or right_info.base_type != BaseType.INTEGER:
+            raise ZincTypeError(f"operator '{op}' requires integer operands")
+
+        left_symbol = self._expr_symbol(ctx.expression(0))
+        right_symbol = self._expr_symbol(ctx.expression(1))
+        left_constant = self._integer_constant_value(left_symbol)
+        right_constant = self._integer_constant_value(right_symbol)
+        constant_value = None
+        if left_constant is not None and right_constant is not None and right_constant >= 0:
+            if op == "<<":
+                constant_value = left_constant << right_constant
+            else:
+                constant_value = left_constant >> right_constant
+
+        self.symbols.define_temp(
+            resolved_type=BaseType.INTEGER,
+            interval=ctx.getSourceInterval(),
+            exact_type=normalize_exact_type(left_symbol.exact_type if left_symbol else None) or default_exact_type(BaseType.INTEGER),
+            constant_value=constant_value,
+        )
+        return BaseType.INTEGER
+
     def visitMultiplicativeExpr(self, ctx: ZincParser.MultiplicativeExprContext) -> BaseType:
         """Handle multiplication, division, modulo."""
         left_info = self._value_info_for_value_context(ctx.expression(0))
@@ -7498,22 +7610,38 @@ class SymbolTableVisitor(zincVisitor):
         operator = ctx.getChild(0).getText()
 
         if operator == "-":
+            if operand_type not in {BaseType.INTEGER, BaseType.FLOAT}:
+                raise ZincTypeError("operator '-' requires a numeric operand")
             result_type = operand_type
-        else:
+        elif operator == "not":
+            if operand_type != BaseType.BOOLEAN:
+                raise ZincTypeError("operator 'not' requires a boolean operand")
             result_type = BaseType.BOOLEAN
+        elif operand_type == BaseType.BOOLEAN:
+            result_type = BaseType.BOOLEAN
+        elif operand_type == BaseType.INTEGER:
+            result_type = BaseType.INTEGER
+        else:
+            raise ZincTypeError("operator '!' requires a boolean or integer operand")
 
         operand_symbol = self._expr_symbol(ctx.expression())
         constant_value = None
         if operand_symbol and operand_symbol.constant_value is not None:
             if operator == "-":
                 constant_value = -operand_symbol.constant_value
-            elif operator in {"!", "not"}:
+            elif operator == "not" or operand_type == BaseType.BOOLEAN:
                 constant_value = not operand_symbol.constant_value
+            elif operator == "!":
+                constant_value = ~operand_symbol.constant_value
 
         self.symbols.define_temp(
             resolved_type=result_type,
             interval=ctx.getSourceInterval(),
-            exact_type=operand_symbol.exact_type if operand_symbol else default_exact_type(result_type),
+            exact_type="bool"
+            if result_type == BaseType.BOOLEAN
+            else operand_symbol.exact_type
+            if operand_symbol
+            else default_exact_type(result_type),
             constant_value=constant_value,
         )
         return result_type
@@ -9485,19 +9613,27 @@ class SymbolTableVisitor(zincVisitor):
         if existing is not None and existing.is_captured_ref:
             self._require_writable_capture(existing, var_name)
 
-        if existing is not None and existing.is_captured_binding and not self._binding_accepts_value_info(
-            existing,
-            expr_info,
-            expr_ctx,
-            expr_symbol,
+        if (
+            existing is not None
+            and existing.is_captured_binding
+            and not self._binding_accepts_value_info(
+                existing,
+                expr_info,
+                expr_ctx,
+                expr_symbol,
+            )
         ):
             raise ZincTypeError(f"captured outer variable '{var_name}' cannot change type after capture")
 
-        if existing is not None and existing.has_declared_type and not self._binding_accepts_value_info(
-            existing,
-            expr_info,
-            expr_ctx,
-            expr_symbol,
+        if (
+            existing is not None
+            and existing.has_declared_type
+            and not self._binding_accepts_value_info(
+                existing,
+                expr_info,
+                expr_ctx,
+                expr_symbol,
+            )
         ):
             expected_label = existing.declared_exact_type or type_to_rust(existing.resolved_type)
             raise ZincTypeError(f"variable '{var_name}' expects a compatible '{expected_label}' value")
@@ -10393,11 +10529,16 @@ class SymbolTableVisitor(zincVisitor):
             )
 
     def _visit_compound_assignment(self, ctx: ZincParser.VariableAssignmentContext, expr_type: BaseType, assignment_op: str) -> None:
-        """Resolve numeric compound assignment without creating shadow bindings."""
+        """Resolve compound assignment without creating shadow bindings."""
         target = ctx.assignmentTarget()
         if target.tupleAssignmentTarget():
             raise ZincTypeError(f"operator '{assignment_op}' cannot be used with tuple destructuring")
-        if expr_type not in {BaseType.INTEGER, BaseType.FLOAT}:
+        is_bitwise = assignment_op in BITWISE_ASSIGNMENT_OPERATORS
+        is_shift = assignment_op in SHIFT_ASSIGNMENT_OPERATORS
+        if is_bitwise:
+            if expr_type != BaseType.INTEGER:
+                raise ZincTypeError(f"operator '{assignment_op}' requires an integer value")
+        elif expr_type not in {BaseType.INTEGER, BaseType.FLOAT}:
             raise ZincTypeError(f"operator '{assignment_op}' requires a numeric value")
 
         if target.IDENTIFIER():
@@ -10406,20 +10547,30 @@ class SymbolTableVisitor(zincVisitor):
             if existing is None:
                 raise ZincTypeError(f"operator '{assignment_op}' requires existing variable '{var_name}'")
             self._require_writable_capture(existing, var_name)
-            if existing.resolved_type not in {BaseType.INTEGER, BaseType.FLOAT}:
-                raise ZincTypeError(f"operator '{assignment_op}' requires a numeric target")
-            if existing.resolved_type == BaseType.INTEGER and expr_type == BaseType.FLOAT:
-                raise ZincTypeError(f"operator '{assignment_op}' cannot assign a float value to integer variable '{var_name}'")
+            if is_bitwise:
+                if existing.resolved_type != BaseType.INTEGER:
+                    raise ZincTypeError(f"operator '{assignment_op}' requires an integer target")
+            else:
+                if existing.resolved_type not in {BaseType.INTEGER, BaseType.FLOAT}:
+                    raise ZincTypeError(f"operator '{assignment_op}' requires a numeric target")
+                if existing.resolved_type == BaseType.INTEGER and expr_type == BaseType.FLOAT:
+                    raise ZincTypeError(f"operator '{assignment_op}' cannot assign a float value to integer variable '{var_name}'")
 
             expr_symbol = self._expr_symbol(ctx.expression())
             can_cast_integer_to_float = existing.resolved_type == BaseType.FLOAT and expr_type == BaseType.INTEGER
-            if not can_cast_integer_to_float and not self._assignment_metadata_compatible(
-                existing.resolved_type,
-                expr_type,
-                expected_exact_type=existing.declared_exact_type or existing.exact_type,
-                actual_exact_type=expr_symbol.exact_type if expr_symbol else None,
-                actual_constant_value=self._literal_constant_value_for_expr(ctx.expression(), expr_symbol),
-            ):
+            if is_shift:
+                metadata_compatible = True
+            else:
+                metadata_compatible = self._assignment_metadata_compatible(
+                    existing.resolved_type,
+                    expr_type,
+                    expected_exact_type=existing.declared_exact_type or existing.exact_type,
+                    actual_exact_type=expr_symbol.exact_type if expr_symbol else None,
+                    actual_constant_value=self._literal_constant_value_for_expr(ctx.expression(), expr_symbol),
+                )
+            if not is_bitwise and can_cast_integer_to_float:
+                metadata_compatible = True
+            if not metadata_compatible:
                 expected_label = existing.declared_exact_type or existing.exact_type or type_to_rust(existing.resolved_type)
                 raise ZincTypeError(f"variable '{var_name}' expects a compatible '{expected_label}' value")
 
@@ -11111,22 +11262,36 @@ class SymbolTableVisitor(zincVisitor):
         expr_type = self.visit(ctx.expression())
         assignment_op = ctx.assignmentOperator().getText()
         if assignment_op != "=":
-            if expr_type not in {BaseType.INTEGER, BaseType.FLOAT}:
-                raise ZincTypeError(f"operator '{assignment_op}' requires a numeric value")
-            if symbol.resolved_type not in {BaseType.INTEGER, BaseType.FLOAT}:
-                raise ZincTypeError(f"operator '{assignment_op}' requires a numeric target")
-            if symbol.resolved_type == BaseType.INTEGER and expr_type == BaseType.FLOAT:
-                raise ZincTypeError(f"operator '{assignment_op}' cannot assign a float value to integer variable '{name}'")
+            is_bitwise = assignment_op in BITWISE_ASSIGNMENT_OPERATORS
+            is_shift = assignment_op in SHIFT_ASSIGNMENT_OPERATORS
+            if is_bitwise:
+                if expr_type != BaseType.INTEGER:
+                    raise ZincTypeError(f"operator '{assignment_op}' requires an integer value")
+                if symbol.resolved_type != BaseType.INTEGER:
+                    raise ZincTypeError(f"operator '{assignment_op}' requires an integer target")
+            else:
+                if expr_type not in {BaseType.INTEGER, BaseType.FLOAT}:
+                    raise ZincTypeError(f"operator '{assignment_op}' requires a numeric value")
+                if symbol.resolved_type not in {BaseType.INTEGER, BaseType.FLOAT}:
+                    raise ZincTypeError(f"operator '{assignment_op}' requires a numeric target")
+                if symbol.resolved_type == BaseType.INTEGER and expr_type == BaseType.FLOAT:
+                    raise ZincTypeError(f"operator '{assignment_op}' cannot assign a float value to integer variable '{name}'")
 
             expr_symbol = self._expr_symbol(ctx.expression())
             can_cast_integer_to_float = symbol.resolved_type == BaseType.FLOAT and expr_type == BaseType.INTEGER
-            if not can_cast_integer_to_float and not self._assignment_metadata_compatible(
-                symbol.resolved_type,
-                expr_type,
-                expected_exact_type=symbol.declared_exact_type or symbol.exact_type,
-                actual_exact_type=expr_symbol.exact_type if expr_symbol else None,
-                actual_constant_value=self._literal_constant_value_for_expr(ctx.expression(), expr_symbol),
-            ):
+            if is_shift:
+                metadata_compatible = True
+            else:
+                metadata_compatible = self._assignment_metadata_compatible(
+                    symbol.resolved_type,
+                    expr_type,
+                    expected_exact_type=symbol.declared_exact_type or symbol.exact_type,
+                    actual_exact_type=expr_symbol.exact_type if expr_symbol else None,
+                    actual_constant_value=self._literal_constant_value_for_expr(ctx.expression(), expr_symbol),
+                )
+            if not is_bitwise and can_cast_integer_to_float:
+                metadata_compatible = True
+            if not metadata_compatible:
                 expected_label = symbol.declared_exact_type or symbol.exact_type or type_to_rust(symbol.resolved_type)
                 raise ZincTypeError(f"variable '{name}' expects a compatible '{expected_label}' value")
 

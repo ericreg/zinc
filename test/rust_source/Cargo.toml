@@ -735,6 +735,10 @@ name = "operators_01_math_shorthand"
 path = "src/operators/01_math_shorthand.rs"
 
 [[bin]]
+name = "operators_02_bitwise"
+path = "src/operators/02_bitwise.rs"
+
+[[bin]]
 name = "reassign_type"
 path = "src/reassign_type.rs"
 

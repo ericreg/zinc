@@ -1,0 +1,28 @@
+fn main() {
+    a: u8 = 0b1010
+    b: u8 = 0b1100
+
+    anded = a & b
+    ored = a | b
+    xored = a ^ b
+    inverted = !a
+    shifted_left = a << 1
+    shifted_right = b >> 2
+    precedence = 1 << 2 | 1
+
+    c: u8 = 0b1111
+    c &= 0b1010
+    c |= 0b0101
+    c ^= 0b0011
+    c <<= 1
+    c >>= 2
+
+    print("and: {anded}")
+    print("or: {ored}")
+    print("xor: {xored}")
+    print("not: {inverted}")
+    print("left: {shifted_left}")
+    print("right: {shifted_right}")
+    print("precedence: {precedence}")
+    print("compound: {c}")
+}

@@ -1,0 +1,5 @@
+// expected-error: operator 'not' requires a boolean operand
+
+fn main() {
+    bad = not 1
+}

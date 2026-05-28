@@ -304,8 +304,13 @@ class zincVisitor(ParseTreeVisitor):
         return self.visitChildren(ctx)
 
 
-    # Visit a parse tree produced by zincParser#logicalAndExpr.
-    def visitLogicalAndExpr(self, ctx:zincParser.LogicalAndExprContext):
+    # Visit a parse tree produced by zincParser#bitwiseOrExpr.
+    def visitBitwiseOrExpr(self, ctx:zincParser.BitwiseOrExprContext):
+        return self.visitChildren(ctx)
+
+
+    # Visit a parse tree produced by zincParser#bitwiseAndExpr.
+    def visitBitwiseAndExpr(self, ctx:zincParser.BitwiseAndExprContext):
         return self.visitChildren(ctx)
 
 
@@ -314,23 +319,8 @@ class zincVisitor(ParseTreeVisitor):
         return self.visitChildren(ctx)
 
 
-    # Visit a parse tree produced by zincParser#awaitExpr.
-    def visitAwaitExpr(self, ctx:zincParser.AwaitExprContext):
-        return self.visitChildren(ctx)
-
-
-    # Visit a parse tree produced by zincParser#relationalExpr.
-    def visitRelationalExpr(self, ctx:zincParser.RelationalExprContext):
-        return self.visitChildren(ctx)
-
-
     # Visit a parse tree produced by zincParser#parenExpr.
     def visitParenExpr(self, ctx:zincParser.ParenExprContext):
-        return self.visitChildren(ctx)
-
-
-    # Visit a parse tree produced by zincParser#logicalOrExpr.
-    def visitLogicalOrExpr(self, ctx:zincParser.LogicalOrExprContext):
         return self.visitChildren(ctx)
 
 
@@ -341,11 +331,6 @@ class zincVisitor(ParseTreeVisitor):
 
     # Visit a parse tree produced by zincParser#primaryExpr.
     def visitPrimaryExpr(self, ctx:zincParser.PrimaryExprContext):
-        return self.visitChildren(ctx)
-
-
-    # Visit a parse tree produced by zincParser#tryExpr.
-    def visitTryExpr(self, ctx:zincParser.TryExprContext):
         return self.visitChildren(ctx)
 
 
@@ -381,6 +366,41 @@ class zincVisitor(ParseTreeVisitor):
 
     # Visit a parse tree produced by zincParser#blockExpr.
     def visitBlockExpr(self, ctx:zincParser.BlockExprContext):
+        return self.visitChildren(ctx)
+
+
+    # Visit a parse tree produced by zincParser#bitwiseXorExpr.
+    def visitBitwiseXorExpr(self, ctx:zincParser.BitwiseXorExprContext):
+        return self.visitChildren(ctx)
+
+
+    # Visit a parse tree produced by zincParser#logicalAndExpr.
+    def visitLogicalAndExpr(self, ctx:zincParser.LogicalAndExprContext):
+        return self.visitChildren(ctx)
+
+
+    # Visit a parse tree produced by zincParser#awaitExpr.
+    def visitAwaitExpr(self, ctx:zincParser.AwaitExprContext):
+        return self.visitChildren(ctx)
+
+
+    # Visit a parse tree produced by zincParser#relationalExpr.
+    def visitRelationalExpr(self, ctx:zincParser.RelationalExprContext):
+        return self.visitChildren(ctx)
+
+
+    # Visit a parse tree produced by zincParser#shiftExpr.
+    def visitShiftExpr(self, ctx:zincParser.ShiftExprContext):
+        return self.visitChildren(ctx)
+
+
+    # Visit a parse tree produced by zincParser#logicalOrExpr.
+    def visitLogicalOrExpr(self, ctx:zincParser.LogicalOrExprContext):
+        return self.visitChildren(ctx)
+
+
+    # Visit a parse tree produced by zincParser#tryExpr.
+    def visitTryExpr(self, ctx:zincParser.TryExprContext):
         return self.visitChildren(ctx)
 
 

@@ -559,16 +559,20 @@
           "match": "=>|->"
         },
         {
-          "name": "keyword.operator.comparison.zinc",
-          "match": "==|!=|<=|>=|<|>"
+          "name": "keyword.operator.assignment.zinc",
+          "match": "\\+=|-=|\\*=|/=|%=|\\*\\*=|&=|\\|=|\\^=|<<=|>>=|(?<![=!<>])=(?!=)"
         },
         {
           "name": "keyword.operator.logical.zinc",
           "match": "&&|\\|\\||!"
         },
         {
-          "name": "keyword.operator.assignment.zinc",
-          "match": "(?<![=!<>])=(?!=)"
+          "name": "keyword.operator.bitwise.zinc",
+          "match": "<<|>>|&|\\||\\^"
+        },
+        {
+          "name": "keyword.operator.comparison.zinc",
+          "match": "==|!=|<=|>=|<|>"
         },
         {
           "name": "keyword.operator.arithmetic.zinc",

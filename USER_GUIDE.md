@@ -235,6 +235,25 @@ fn main() {
 }
 ```
 
+Integer bitwise operations use Rust-like spelling:
+
+```zinc
+fn main() {
+    mask: u8 = 0b1010
+    flags: u8 = 0b1100
+
+    print(mask & flags)
+    print(mask | flags)
+    print(mask ^ flags)
+    print(!mask)
+    print(mask << 1)
+    print(flags >> 2)
+}
+```
+
+`&`, `|`, `^`, `<<`, and `>>` are integer-only. Use `and`, `or`, `&&`,
+`||`, `not`, or `!` for boolean logic.
+
 Mixed integer and float arithmetic promotes to float:
 
 ```zinc
