@@ -198,6 +198,7 @@ class RawCallArgument:
     name: str | None
     expression: ParserRuleContext
     ctx: ParserRuleContext
+    is_spread: bool = False
 
 
 @dataclass
@@ -220,6 +221,20 @@ class BoundArgument:
     parameter_ctx: ParserRuleContext | None = None
     is_default: bool = False
     owner_module_id: str | None = None
+    value_info: ResolvedValueInfo | None = None
+    spread_source_expr: ParserRuleContext | None = None
+    spread_field_name: str | None = None
+
+
+@dataclass
+class BoundStructField:
+    """One final struct-literal field after spread/field last-wins binding."""
+
+    name: str
+    expression: ParserRuleContext
+    value_info: ResolvedValueInfo
+    spread_source_expr: ParserRuleContext | None = None
+    spread_field_name: str | None = None
 
 
 class SymbolTable:
@@ -410,6 +425,7 @@ class SymbolTableVisitor(zincVisitor):
         # Scoped by caller function to handle different specializations of the same generic
         self.specialization_map: dict[tuple[str | None, tuple[int, int]], str] = {}
         self.bound_call_args: dict[tuple[str | None, tuple[int, int]], list[BoundArgument]] = {}
+        self.bound_struct_fields: dict[tuple[str | None, tuple[int, int]], list[BoundStructField]] = {}
         # Track channel variables and their type info (var_name -> ChannelTypeInfo)
         self._channel_infos: dict[str, ChannelTypeInfo] = {}
         # Track all caller channel infos for function parameters (param_name -> list of ChannelTypeInfos)
@@ -1300,7 +1316,10 @@ class SymbolTableVisitor(zincVisitor):
                         primary = expr.primaryExpression()
                         if primary and primary.structInstantiation():
                             inst = primary.structInstantiation()
-                            for field_init in inst.fieldInit():
+                            for entry in inst.structFieldEntry():
+                                field_init = entry.fieldInit()
+                                if field_init is None:
+                                    continue
                                 field_name = field_init.IDENTIFIER().getText()
                                 field_value = field_init.expression().getText()
                                 # If field value is a parameter name
@@ -2553,6 +2572,83 @@ class SymbolTableVisitor(zincVisitor):
     def _value_info_for_value_context(self, expr_ctx) -> ResolvedValueInfo:
         """Visit an expression in a value position, auto-propagating try values when needed."""
         return self._unwrap_try_value(expr_ctx, self._value_info_from_expression(expr_ctx))
+
+    def _value_info_from_struct_field(
+        self,
+        field: StructFieldInfo,
+        concrete_field: AnonymousStructFieldInfo | None = None,
+    ) -> ResolvedValueInfo:
+        """Build value metadata for a named struct field, applying inferred concrete metadata when present."""
+        source = concrete_field if field.is_infer and concrete_field is not None else field
+        return ResolvedValueInfo(
+            base_type=source.resolved_type,
+            exact_type=source.exact_type,
+            array_info=self._copy_array_info(source.array_info),
+            dict_info=self._copy_dict_info(source.dict_info),
+            set_info=self._copy_set_info(source.set_info),
+            tuple_info=self._copy_tuple_info(source.tuple_info),
+            callable_info=self._copy_callable_info(source.callable_info),
+            struct_qualified_name=source.struct_qualified_name,
+            anonymous_struct_info=self._copy_anonymous_struct_info(source.anonymous_struct_info),
+            result_info=self._copy_result_info(source.result_info),
+            option_info=self._copy_option_info(source.option_info),
+        )
+
+    def _value_info_from_anonymous_field(self, field: AnonymousStructFieldInfo) -> ResolvedValueInfo:
+        """Build value metadata for an anonymous struct field."""
+        return ResolvedValueInfo(
+            base_type=field.resolved_type,
+            exact_type=field.exact_type,
+            array_info=self._copy_array_info(field.array_info),
+            dict_info=self._copy_dict_info(field.dict_info),
+            set_info=self._copy_set_info(field.set_info),
+            tuple_info=self._copy_tuple_info(field.tuple_info),
+            callable_info=self._copy_callable_info(field.callable_info),
+            struct_qualified_name=field.struct_qualified_name,
+            anonymous_struct_info=self._copy_anonymous_struct_info(field.anonymous_struct_info),
+            result_info=self._copy_result_info(field.result_info),
+            option_info=self._copy_option_info(field.option_info),
+        )
+
+    def _type_meta_from_value_info(self, info: ResolvedValueInfo) -> MetaValue:
+        """Build TypeMeta from rich value metadata."""
+        return self._type_meta_from_base(
+            info.base_type,
+            exact_type=info.exact_type,
+            array_info=info.array_info,
+            channel_info=info.channel_info,
+            dict_info=info.dict_info,
+            set_info=info.set_info,
+            tuple_info=info.tuple_info,
+            callable_info=info.callable_info,
+            struct_qualified_name=info.struct_qualified_name,
+            anonymous_struct_info=info.anonymous_struct_info,
+            result_info=info.result_info,
+            option_info=info.option_info,
+        )
+
+    def _spread_field_infos(self, expr_ctx, label: str) -> dict[str, ResolvedValueInfo]:
+        """Return field metadata contributed by a struct spread expression."""
+        spread_info = self._value_info_for_value_context(expr_ctx)
+        if spread_info.base_type != BaseType.STRUCT:
+            raise ZincTypeError(f"{label} spread expects a struct value")
+
+        fields: dict[str, ResolvedValueInfo] = {}
+        if spread_info.struct_qualified_name is not None:
+            struct = self.atlas.structs.get(spread_info.struct_qualified_name)
+            if struct is None:
+                raise ZincTypeError(f"{label} spread expects a struct value with known fields")
+            concrete_map = spread_info.anonymous_struct_info.field_map() if spread_info.anonymous_struct_info else {}
+            for field in struct.fields:
+                fields[field.name] = self._value_info_from_struct_field(field, concrete_map.get(field.name))
+            return fields
+
+        if spread_info.anonymous_struct_info is not None:
+            for field in spread_info.anonymous_struct_info.fields:
+                fields[field.name] = self._value_info_from_anonymous_field(field)
+            return fields
+
+        raise ZincTypeError(f"{label} spread expects a struct value with known fields")
 
     def _record_value_info(self, interval: tuple[int, int], info: ResolvedValueInfo) -> Symbol:
         """Materialize a temporary symbol from rich value metadata."""
@@ -5191,6 +5287,7 @@ class SymbolTableVisitor(zincVisitor):
                 name=arg_ctx.IDENTIFIER().getText() if arg_ctx.IDENTIFIER() and arg_ctx.EQ() else None,
                 expression=arg_ctx.expression(),
                 ctx=arg_ctx,
+                is_spread=bool(arg_ctx.DOTDOT()),
             )
             for arg_ctx in argument_list_ctx.argument()
         ]
@@ -5200,8 +5297,8 @@ class SymbolTableVisitor(zincVisitor):
         return [arg.expression for arg in self._raw_call_arguments(ctx.argumentList())]
 
     def _require_positional_arguments(self, raw_args: list[RawCallArgument], label: str) -> None:
-        """Reject named arguments for builtins and builtin collection methods."""
-        if any(arg.name is not None for arg in raw_args):
+        """Reject named/spread arguments for builtins and builtin collection methods."""
+        if any(arg.name is not None or arg.is_spread for arg in raw_args):
             raise ZincTypeError(f"{label} does not accept named arguments")
 
     def _parameter_specs_from_ctx(self, ctx, owner_module_id: str | None) -> list[ParameterSpec]:
@@ -5247,15 +5344,32 @@ class SymbolTableVisitor(zincVisitor):
         specs: list[ParameterSpec],
         label: str,
     ) -> list[BoundArgument]:
-        """Bind positional/named/default call arguments into declaration order."""
+        """Bind positional/named/spread/default call arguments into declaration order."""
         raw_args = self._raw_call_arguments(ctx.argumentList())
         name_to_index = {spec.name: index for index, spec in enumerate(specs)}
         bound: list[BoundArgument | None] = [None] * len(specs)
-        used_indexes: set[int] = set()
         positional_index = 0
         saw_named = False
 
         for raw in raw_args:
+            if raw.is_spread:
+                saw_named = True
+                for field_name, value_info in self._spread_field_infos(raw.expression, label).items():
+                    if field_name not in name_to_index:
+                        continue
+                    index = name_to_index[field_name]
+                    bound[index] = BoundArgument(
+                        expression=raw.expression,
+                        parameter_name=specs[index].name,
+                        parameter_index=index,
+                        parameter_ctx=specs[index].ctx,
+                        owner_module_id=specs[index].owner_module_id,
+                        value_info=value_info,
+                        spread_source_expr=raw.expression,
+                        spread_field_name=field_name,
+                    )
+                continue
+
             if raw.name is not None:
                 saw_named = True
                 if raw.name not in name_to_index:
@@ -5269,9 +5383,6 @@ class SymbolTableVisitor(zincVisitor):
                 index = positional_index
                 positional_index += 1
 
-            if index in used_indexes:
-                raise ZincTypeError(f"{label} got multiple values for argument '{specs[index].name}'")
-            used_indexes.add(index)
             bound[index] = BoundArgument(
                 expression=raw.expression,
                 parameter_name=specs[index].name,
@@ -5315,6 +5426,9 @@ class SymbolTableVisitor(zincVisitor):
 
     def _visit_bound_argument(self, bound_arg: BoundArgument) -> BaseType:
         """Visit a bound call argument, evaluating defaults in declaration module."""
+        if bound_arg.value_info is not None:
+            return bound_arg.value_info.base_type
+
         previous_module = self._current_module
         if bound_arg.is_default and bound_arg.owner_module_id is not None:
             self._current_module = bound_arg.owner_module_id
@@ -5347,6 +5461,34 @@ class SymbolTableVisitor(zincVisitor):
         arg_anonymous_struct_infos: dict[int, AnonymousStructTypeInfo] = {}
 
         for i, bound_arg in enumerate(bound_args):
+            if bound_arg.value_info is not None:
+                info = bound_arg.value_info
+                arg_exprs.append(None)
+                arg_types.append(info.base_type)
+                arg_exact_types.append(info.exact_type or self._resolved_exact_type(info.base_type, None))
+                if info.base_type == BaseType.ARRAY and info.array_info is not None:
+                    arg_array_infos[i] = self._copy_array_info(info.array_info) or ArrayTypeInfo()
+                elif info.base_type == BaseType.CHANNEL and info.channel_info is not None:
+                    arg_channel_infos[i] = self._copy_channel_info(info.channel_info) or ChannelTypeInfo()
+                elif info.base_type == BaseType.DICT and info.dict_info is not None:
+                    arg_dict_infos[i] = self._copy_dict_info(info.dict_info) or DictTypeInfo()
+                elif info.base_type == BaseType.SET and info.set_info is not None:
+                    arg_set_infos[i] = self._copy_set_info(info.set_info) or SetTypeInfo()
+                elif info.base_type == BaseType.TUPLE and info.tuple_info is not None:
+                    arg_tuple_infos[i] = self._copy_tuple_info(info.tuple_info) or TupleTypeInfo()
+                elif info.base_type == BaseType.CALLABLE and info.callable_info is not None:
+                    arg_callable_infos[i] = self._copy_callable_info(info.callable_info) or CallableTypeInfo()
+                elif info.base_type == BaseType.RESULT and info.result_info is not None:
+                    arg_result_infos[i] = self._copy_result_info(info.result_info) or ResultTypeInfo()
+                elif info.base_type == BaseType.OPTION and info.option_info is not None:
+                    arg_option_infos[i] = self._copy_option_info(info.option_info) or OptionTypeInfo()
+                elif info.base_type == BaseType.STRUCT:
+                    if info.struct_qualified_name is not None:
+                        arg_struct_qualified_names[i] = info.struct_qualified_name
+                    if info.anonymous_struct_info is not None:
+                        arg_anonymous_struct_infos[i] = self._copy_anonymous_struct_info(info.anonymous_struct_info) or AnonymousStructTypeInfo()
+                continue
+
             arg_expr = bound_arg.expression
             arg_exprs.append(arg_expr)
             arg_type = self._visit_bound_argument(bound_arg)
@@ -9437,57 +9579,104 @@ class SymbolTableVisitor(zincVisitor):
                     if symbol:
                         symbol.is_mutated = True
 
-    def visitStructInstantiation(self, ctx: ZincParser.StructInstantiationContext) -> BaseType:
-        """Visit struct literal."""
-        provided_exprs: dict[str, tuple[BaseType, Symbol | None, ParserRuleContext]] = {}
-        for field_ctx in ctx.fieldInit():
+    def _bind_struct_literal_fields(
+        self,
+        ctx,
+        *,
+        allowed_names: set[str] | None,
+        label: str,
+    ) -> list[BoundStructField]:
+        """Bind struct literal fields/spreads with left-to-right last-wins behavior."""
+        bound_by_name: dict[str, BoundStructField] = {}
+        order: list[str] = []
+        for entry_ctx in ctx.structFieldEntry():
+            spread_ctx = entry_ctx.fieldSpread()
+            if spread_ctx is not None:
+                source_expr = spread_ctx.expression()
+                for field_name, value_info in self._spread_field_infos(source_expr, label).items():
+                    if allowed_names is not None and field_name not in allowed_names:
+                        continue
+                    if field_name not in bound_by_name:
+                        order.append(field_name)
+                    bound_by_name[field_name] = BoundStructField(
+                        name=field_name,
+                        expression=source_expr,
+                        value_info=value_info,
+                        spread_source_expr=source_expr,
+                        spread_field_name=field_name,
+                    )
+                continue
+
+            field_ctx = entry_ctx.fieldInit()
             field_name = field_ctx.IDENTIFIER().getText()
-            if field_name in provided_exprs:
-                raise ZincTypeError(f"struct literal has duplicate field '{field_name}'")
-            field_type = self.visit(field_ctx.expression())
-            provided_exprs[field_name] = (
-                field_type,
-                self._expr_symbol(field_ctx.expression()),
-                field_ctx.expression(),
+            if allowed_names is not None and field_name not in allowed_names:
+                raise ZincTypeError(f"{label} has no field '{field_name}'")
+            if field_name not in bound_by_name:
+                order.append(field_name)
+            value_info = self._value_info_for_value_context(field_ctx.expression())
+            bound_by_name[field_name] = BoundStructField(
+                name=field_name,
+                expression=field_ctx.expression(),
+                value_info=value_info,
             )
 
+        result = [bound_by_name[name] for name in order]
+        self.bound_struct_fields[self._call_key(ctx)] = result
+        return result
+
+    def visitStructInstantiation(self, ctx: ZincParser.StructInstantiationContext) -> BaseType:
+        """Visit struct literal."""
         resolved_struct = None
         if self._current_module is not None:
             resolved_struct = self.module_graph.resolve_struct_path(self._current_module, struct_path_from_ctx(ctx))
             if resolved_struct is None:
+                has_spread = any(entry.fieldSpread() is not None for entry in ctx.structFieldEntry())
+                if has_spread and self.module_graph.resolve_enum_variant_path(self._current_module, struct_path_from_ctx(ctx)) is not None:
+                    raise ZincTypeError("enum variant payloads do not accept spread")
                 raise ZincTypeError(f"unknown struct '{ctx.qualifiedName().getText()}'")
         struct_info = self.atlas.structs.get(resolved_struct.qualified_name) if resolved_struct else None
         concrete_anonymous_struct_info = None
+        bound_fields = self._bind_struct_literal_fields(
+            ctx,
+            allowed_names={field.name for field in struct_info.fields} if struct_info is not None else None,
+            label=f"struct '{struct_info.name}'" if struct_info is not None else "struct literal",
+        )
+        provided_exprs = {field.name: field for field in bound_fields}
         if struct_info is not None:
             field_map = {field.name: field for field in struct_info.fields}
-            for field_name, (actual_type, actual_symbol, actual_expr_ctx) in provided_exprs.items():
+            for field_name, bound_field in provided_exprs.items():
                 expected_field = field_map.get(field_name)
                 if expected_field is None:
                     raise ZincTypeError(f"struct '{struct_info.name}' has no field '{field_name}'")
                 if expected_field.is_infer:
                     continue
-                actual_struct_qualified_name, actual_anonymous_struct_info = self._struct_metadata_for_symbol(actual_symbol)
-                actual_array_info = self._array_info_from_symbol(actual_symbol)
+                actual_info = bound_field.value_info
+                actual_expr_ctx = None if bound_field.spread_source_expr is not None else bound_field.expression
+                actual_symbol = self._expr_symbol(actual_expr_ctx) if actual_expr_ctx is not None else None
                 if not self._assignment_metadata_compatible(
                     expected_field.resolved_type,
-                    actual_type,
+                    actual_info.base_type,
                     expected_exact_type=expected_field.exact_type or self._exact_type_name_from_text(expected_field.type_annotation),
-                    actual_exact_type=actual_symbol.exact_type if actual_symbol else None,
+                    actual_exact_type=actual_info.exact_type,
                     actual_constant_value=self._literal_constant_value_for_expr(actual_expr_ctx, actual_symbol),
                     expected_array=expected_field.array_info,
-                    actual_array=actual_array_info,
+                    actual_array=actual_info.array_info,
                     expected_dict=expected_field.dict_info,
-                    actual_dict=self._copy_dict_info(actual_symbol.dict_info) if actual_symbol else None,
+                    actual_dict=actual_info.dict_info,
                     expected_set=expected_field.set_info,
-                    actual_set=self._copy_set_info(actual_symbol.set_info) if actual_symbol else None,
+                    actual_set=actual_info.set_info,
                     expected_tuple=expected_field.tuple_info,
-                    actual_tuple=self._copy_tuple_info(actual_symbol.tuple_info) if actual_symbol else None,
+                    actual_tuple=actual_info.tuple_info,
                     expected_callable=expected_field.callable_info,
-                    actual_callable=self._copy_callable_info(actual_symbol.callable_info) if actual_symbol else None,
+                    actual_callable=actual_info.callable_info,
                     expected_struct_qualified_name=expected_field.struct_qualified_name,
-                    actual_struct_qualified_name=actual_struct_qualified_name,
+                    actual_struct_qualified_name=actual_info.struct_qualified_name,
                     expected_anonymous_struct_info=expected_field.anonymous_struct_info,
-                    actual_anonymous_struct_info=actual_anonymous_struct_info,
+                    actual_anonymous_struct_info=actual_info.anonymous_struct_info,
+                    expected_result=expected_field.result_info,
+                    actual_result=actual_info.result_info,
+                    expected_option=expected_field.option_info,
+                    actual_option=actual_info.option_info,
                 ):
                     raise ZincTypeError(
                         f"struct field '{struct_info.name}.{field_name}' expects a compatible '{expected_field.rust_type()}' value"
@@ -9499,23 +9688,24 @@ class SymbolTableVisitor(zincVisitor):
                 if field.is_infer and actual is None:
                     raise ZincTypeError(f"struct '{struct_info.name}' is missing infer field '{field.name}'")
                 if actual is not None and field.is_infer:
-                    actual_type, actual_symbol, _actual_expr_ctx = actual
-                    actual_struct_qualified_name, actual_anonymous_struct_info = self._struct_metadata_for_symbol(actual_symbol)
+                    actual_info = actual.value_info
                     concrete_fields.append(
                         AnonymousStructFieldInfo(
                             name=field.name,
-                            resolved_type=actual_type,
-                            exact_type=actual_symbol.exact_type if actual_symbol else default_exact_type(actual_type),
-                            array_info=self._array_info_from_symbol(actual_symbol),
-                            dict_info=self._copy_dict_info(actual_symbol.dict_info) if actual_symbol else None,
-                            set_info=self._copy_set_info(actual_symbol.set_info) if actual_symbol else None,
-                            tuple_info=self._copy_tuple_info(actual_symbol.tuple_info) if actual_symbol else None,
-                            callable_info=self._copy_callable_info(actual_symbol.callable_info) if actual_symbol else None,
-                            struct_qualified_name=actual_struct_qualified_name,
-                            anonymous_struct_info=self._copy_anonymous_struct_info(actual_anonymous_struct_info),
+                            resolved_type=actual_info.base_type,
+                            exact_type=actual_info.exact_type or default_exact_type(actual_info.base_type),
+                            array_info=self._copy_array_info(actual_info.array_info),
+                            dict_info=self._copy_dict_info(actual_info.dict_info),
+                            set_info=self._copy_set_info(actual_info.set_info),
+                            tuple_info=self._copy_tuple_info(actual_info.tuple_info),
+                            callable_info=self._copy_callable_info(actual_info.callable_info),
+                            struct_qualified_name=actual_info.struct_qualified_name,
+                            anonymous_struct_info=self._copy_anonymous_struct_info(actual_info.anonymous_struct_info),
+                            result_info=self._copy_result_info(actual_info.result_info),
+                            option_info=self._copy_option_info(actual_info.option_info),
                         )
                     )
-                    constraint_slots[field.name] = self._type_meta_from_symbol(actual_symbol)
+                    constraint_slots[field.name] = self._type_meta_from_value_info(actual_info)
                     continue
                 concrete_fields.append(
                     AnonymousStructFieldInfo(
@@ -9568,28 +9758,28 @@ class SymbolTableVisitor(zincVisitor):
 
     def visitAnonymousStructLiteral(self, ctx) -> BaseType:
         """Visit an anonymous struct literal."""
-        seen: set[str] = set()
+        bound_fields = self._bind_struct_literal_fields(
+            ctx,
+            allowed_names=None,
+            label="anonymous struct literal",
+        )
         fields: list[AnonymousStructFieldInfo] = []
-        for field_ctx in ctx.fieldInit():
-            field_name = field_ctx.IDENTIFIER().getText()
-            if field_name in seen:
-                raise ZincTypeError(f"anonymous struct literal has duplicate field '{field_name}'")
-            seen.add(field_name)
-            field_type = self.visit(field_ctx.expression())
-            field_symbol = self._expr_symbol(field_ctx.expression())
-            field_struct_qualified_name, field_anonymous_struct_info = self._struct_metadata_for_symbol(field_symbol)
+        for bound_field in bound_fields:
+            field_info = bound_field.value_info
             fields.append(
                 AnonymousStructFieldInfo(
-                    name=field_name,
-                    resolved_type=field_type,
-                    exact_type=field_symbol.exact_type if field_symbol else default_exact_type(field_type),
-                    array_info=self._array_info_from_symbol(field_symbol),
-                    dict_info=self._copy_dict_info(field_symbol.dict_info) if field_symbol else None,
-                    set_info=self._copy_set_info(field_symbol.set_info) if field_symbol else None,
-                    tuple_info=self._copy_tuple_info(field_symbol.tuple_info) if field_symbol else None,
-                    callable_info=self._copy_callable_info(field_symbol.callable_info) if field_symbol else None,
-                    struct_qualified_name=field_struct_qualified_name,
-                    anonymous_struct_info=self._copy_anonymous_struct_info(field_anonymous_struct_info),
+                    name=bound_field.name,
+                    resolved_type=field_info.base_type,
+                    exact_type=field_info.exact_type or default_exact_type(field_info.base_type),
+                    array_info=self._copy_array_info(field_info.array_info),
+                    dict_info=self._copy_dict_info(field_info.dict_info),
+                    set_info=self._copy_set_info(field_info.set_info),
+                    tuple_info=self._copy_tuple_info(field_info.tuple_info),
+                    callable_info=self._copy_callable_info(field_info.callable_info),
+                    struct_qualified_name=field_info.struct_qualified_name,
+                    anonymous_struct_info=self._copy_anonymous_struct_info(field_info.anonymous_struct_info),
+                    result_info=self._copy_result_info(field_info.result_info),
+                    option_info=self._copy_option_info(field_info.option_info),
                 )
             )
         temp = self.symbols.define_temp(

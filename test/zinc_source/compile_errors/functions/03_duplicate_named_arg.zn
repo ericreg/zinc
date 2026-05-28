@@ -1,8 +1,8 @@
-// expected-error: multiple values for argument 'x'
+// expected-error: spread expects a struct value
 fn add(x, y) {
     return x + y
 }
 
 fn main() {
-    add(1, x=2)
+    add(..1)
 }

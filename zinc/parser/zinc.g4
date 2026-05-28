@@ -409,7 +409,7 @@ anonymousStructFieldType
     ;
 
 anonymousStructLiteral
-    : 'struct' '{' (fieldInit (','? fieldInit)* ','?)? '}'
+    : 'struct' '{' (structFieldEntry (','? structFieldEntry)* ','?)? '}'
     ;
 
 dictEntry
@@ -417,7 +417,7 @@ dictEntry
     ;
 
 structInstantiation
-    : qualifiedName '{' (fieldInit (','? fieldInit)* ','?)? '}'
+    : qualifiedName '{' (structFieldEntry (','? structFieldEntry)* ','?)? '}'
     ;
 
 enumVariantConstruction
@@ -428,12 +428,22 @@ fieldInit
     : IDENTIFIER ':' expression
     ;
 
+structFieldEntry
+    : fieldInit
+    | fieldSpread
+    ;
+
+fieldSpread
+    : '..' expression
+    ;
+
 argumentList
     : argument (',' argument)*
     ;
 
 argument
     : IDENTIFIER '=' expression
+    | '..' expression
     | expression
     ;
 

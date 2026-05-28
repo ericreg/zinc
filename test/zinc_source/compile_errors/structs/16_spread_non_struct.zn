@@ -1,0 +1,10 @@
+// expected-error: spread expects a struct value
+
+struct Config {
+    value: i64
+}
+
+fn main() {
+    config = Config { ..1 }
+    print(config.value)
+}

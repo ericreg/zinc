@@ -1,0 +1,10 @@
+// expected-error: print\(\) does not accept named arguments
+
+struct Args {
+    value: i64
+}
+
+fn main() {
+    args = Args { value: 1 }
+    print(..args)
+}

@@ -1,0 +1,11 @@
+// expected-error: array\.push\(\) does not accept named arguments
+
+struct Args {
+    value: i64
+}
+
+fn main() {
+    args = Args { value: 1 }
+    values = []
+    values.push(..args)
+}

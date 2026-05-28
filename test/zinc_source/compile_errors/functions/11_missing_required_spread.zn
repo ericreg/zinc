@@ -1,0 +1,14 @@
+// expected-error: missing required argument 'a'
+
+struct PartialArgs {
+    b: i64
+}
+
+fn add(a, b) {
+    return a + b
+}
+
+fn main() {
+    args = PartialArgs { b: 2 }
+    add(..args)
+}

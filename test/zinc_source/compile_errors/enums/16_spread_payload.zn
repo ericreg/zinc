@@ -1,0 +1,12 @@
+// expected-error: enum variant payloads do not accept spread
+
+enum Message {
+    Value {
+        value: i64
+    }
+}
+
+fn main() {
+    args = struct { value: 1 }
+    message = Message.Value { ..args }
+}

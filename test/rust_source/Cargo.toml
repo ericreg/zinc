@@ -487,6 +487,10 @@ name = "functions_01_named_defaults"
 path = "src/functions/01_named_defaults.rs"
 
 [[bin]]
+name = "functions_02_argument_spread"
+path = "src/functions/02_argument_spread.rs"
+
+[[bin]]
 name = "if_else"
 path = "src/if_else.rs"
 
@@ -805,6 +809,10 @@ path = "src/structs/17_anon_array_tuple_channel.rs"
 [[bin]]
 name = "structs_18_anon_named_struct_field"
 path = "src/structs/18_anon_named_struct_field.rs"
+
+[[bin]]
+name = "structs_19_struct_spread"
+path = "src/structs/19_struct_spread.rs"
 
 [[bin]]
 name = "tuples_01_literal_index"

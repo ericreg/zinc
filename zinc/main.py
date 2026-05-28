@@ -32,6 +32,7 @@ def _compile_pipeline(file: Path):
         symbol_visitor._channel_infos,
         symbol_visitor.lexical_functions,
         symbol_visitor.bound_call_args,
+        symbol_visitor.bound_struct_fields,
     )
     return module_graph, atlas, symbols, codegen
 

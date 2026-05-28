@@ -1,9 +1,15 @@
-// expected-error: multiple values for argument 'x'
+// expected-error: positional arguments must come before named arguments
 
-fn add(x, y = 2) {
+struct Args {
+    x: i64
+    y: i64
+}
+
+fn add(x, y) {
     return x + y
 }
 
 fn main() {
-    add(x=1, x=2)
+    args = Args { x: 1, y: 2 }
+    add(..args, 3)
 }

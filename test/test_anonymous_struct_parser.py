@@ -101,8 +101,8 @@ def test_nested_anonymous_struct_literals_parse() -> None:
     assert errors == []
     assign_expr = tree.statement(0).functionDeclaration().block().statement(0).variableAssignment().expression()
     outer_literal = assign_expr.primaryExpression().anonymousStructLiteral()
-    nested_expr = outer_literal.fieldInit(0).expression()
     assert outer_literal is not None
+    nested_expr = outer_literal.structFieldEntry(0).fieldInit().expression()
     assert nested_expr.primaryExpression().anonymousStructLiteral() is not None
 
 
@@ -133,7 +133,7 @@ def test_anonymous_struct_literals_accept_optional_commas() -> None:
         .anonymousStructLiteral()
     )
     assert literal is not None
-    assert len(literal.fieldInit()) == 2
+    assert len(literal.structFieldEntry()) == 2
 
 
 def test_anonymous_struct_nested_in_array_and_callable_annotations_parse() -> None:

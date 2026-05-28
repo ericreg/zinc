@@ -42,7 +42,7 @@ from zinc.numeric_literals import is_numeric_literal, numeric_literal_value
 from zinc.parser.zincParser import zincParser as ZincParser
 from zinc.parser.zincVisitor import zincVisitor
 from zinc.string_literals import is_interpolated_string_literal, is_string_literal, to_rust_string_literal
-from zinc.symbols import BoundArgument, LexicalFunctionInfo, SymbolKind, SymbolTable
+from zinc.symbols import BoundArgument, BoundStructField, LexicalFunctionInfo, SymbolKind, SymbolTable
 
 
 @dataclass
@@ -104,6 +104,7 @@ class CodeGenVisitor(zincVisitor):
         channel_infos: dict[str, ChannelTypeInfo] | None = None,
         lexical_functions: dict[str, LexicalFunctionInfo] | None = None,
         bound_call_args: dict[tuple[str | None, tuple[int, int]], list[BoundArgument]] | None = None,
+        bound_struct_fields: dict[tuple[str | None, tuple[int, int]], list[BoundStructField]] | None = None,
     ):
         self.atlas = atlas
         self.module_graph = atlas.module_graph
@@ -112,6 +113,7 @@ class CodeGenVisitor(zincVisitor):
         self._channel_infos = channel_infos or {}  # var_name -> ChannelTypeInfo
         self._lexical_functions = lexical_functions or {}
         self._bound_call_args = bound_call_args or {}
+        self._bound_struct_fields = bound_struct_fields or {}
         self._uses_async = False
         self._current_function: str | None = None
         self._current_module: str | None = None
@@ -138,6 +140,7 @@ class CodeGenVisitor(zincVisitor):
         self._anonymous_structs: dict[tuple, AnonymousStructTypeInfo] = {}
         self._captured_binding_names: set[str] = set()
         self._needs_metadata_runtime = False
+        self._spread_temp_stack: list[dict[tuple[int, int], str]] = []
 
     def visit(self, tree):
         """Visit one parse node and post-process try-propagation sites."""
@@ -2290,9 +2293,131 @@ class CodeGenVisitor(zincVisitor):
         """Return bound call arguments when available, otherwise raw expressions."""
         return self._bound_call_args.get(self._call_key(ctx)) or self._raw_call_exprs(ctx.argumentList())
 
+    def _struct_fields_for_ctx(self, ctx) -> list[BoundStructField]:
+        """Return bound struct literal fields in final last-wins form."""
+        return self._bound_struct_fields.get(self._call_key(ctx), [])
+
+    def _raw_struct_literal_fields(self, ctx) -> tuple[dict[str, tuple[str, ParserRuleContext]], bool]:
+        """Render explicit struct fields directly when semantic binding is unavailable."""
+        fields: dict[str, tuple[str, ParserRuleContext]] = {}
+        has_spread = False
+        for entry_ctx in ctx.structFieldEntry():
+            if entry_ctx.fieldSpread() is not None:
+                has_spread = True
+                continue
+            field_ctx = entry_ctx.fieldInit()
+            field_name = field_ctx.IDENTIFIER().getText()
+            fields[field_name] = (self.visit(field_ctx.expression()), field_ctx.expression())
+        return fields, has_spread
+
     def _call_arg_expr(self, arg) -> object:
         """Return the parse expression for a raw or bound call argument."""
+        if isinstance(arg, BoundArgument) and arg.spread_field_name is not None:
+            return None
         return arg.expression if isinstance(arg, BoundArgument) else arg
+
+    def _spread_source_key(self, expr_ctx: ParserRuleContext) -> tuple[int, int]:
+        """Return a stable key for one spread source expression."""
+        return expr_ctx.getSourceInterval()
+
+    def _simple_spread_source(self, expr_ctx) -> bool:
+        """Return True when repeating a spread source cannot repeat side effects."""
+        if isinstance(expr_ctx, ZincParser.PrimaryExprContext):
+            primary = expr_ctx.primaryExpression()
+            return bool(primary and (primary.IDENTIFIER() or primary.getText() == "self"))
+        if isinstance(expr_ctx, ZincParser.MemberAccessExprContext):
+            return self._simple_spread_source(expr_ctx.expression())
+        return False
+
+    def _prepare_spread_temps(self, items: list, prefix: str) -> tuple[list[str], dict[tuple[int, int], str]]:
+        """Stage repeated nontrivial spread sources once for a call or struct literal."""
+        sources: dict[tuple[int, int], ParserRuleContext] = {}
+        counts: dict[tuple[int, int], int] = {}
+        for item in items:
+            source_expr = getattr(item, "spread_source_expr", None)
+            if source_expr is None:
+                continue
+            key = self._spread_source_key(source_expr)
+            sources.setdefault(key, source_expr)
+            counts[key] = counts.get(key, 0) + 1
+
+        lines: list[str] = []
+        temps: dict[tuple[int, int], str] = {}
+        for key, count in counts.items():
+            source_expr = sources[key]
+            if count <= 1 or self._simple_spread_source(source_expr):
+                continue
+            temp_name = self._staged_temp_name(prefix, source_expr)
+            temps[key] = temp_name
+            lines.append(f"let {temp_name} = {self.visit(source_expr)};")
+        return lines, temps
+
+    def _wrap_spread_temps(self, value: str, setup: list[str]) -> str:
+        """Wrap an expression in a Rust block that stages spread sources."""
+        if not setup:
+            return value
+        lines = ["{", *[f"    {line}" for line in setup], f"    {value}", "}"]
+        return "\n".join(lines)
+
+    def _spread_source_value(self, source_expr) -> str:
+        """Render a spread source, using a staged temporary when one is active."""
+        key = self._spread_source_key(source_expr)
+        for mapping in reversed(self._spread_temp_stack):
+            if key in mapping:
+                return mapping[key]
+        rendered = self.visit(source_expr)
+        if self._simple_spread_source(source_expr):
+            return rendered
+        return f"({rendered})"
+
+    def _spread_field_needs_clone(self, value_type: BaseType) -> bool:
+        """Return True for field values that should be cloned out of a spread source."""
+        return value_type in {
+            BaseType.STRING,
+            BaseType.ARRAY,
+            BaseType.DICT,
+            BaseType.SET,
+            BaseType.TUPLE,
+            BaseType.CALLABLE,
+            BaseType.STRUCT,
+            BaseType.RESULT,
+            BaseType.OPTION,
+        }
+
+    def _render_spread_field_value(
+        self,
+        source_expr,
+        field_name: str,
+        value_info,
+        *,
+        expected_type: BaseType | None = None,
+    ) -> str:
+        """Render one field contributed by a spread source."""
+        value = f"{self._spread_source_value(source_expr)}.{field_name}"
+        if self._spread_field_needs_clone(value_info.base_type):
+            value = f"{value}.clone()"
+        if expected_type == BaseType.FLOAT and value_info.base_type == BaseType.INTEGER:
+            return f"({value} as f64)"
+        return value
+
+    def _render_bound_struct_field(
+        self,
+        bound_field: BoundStructField,
+        *,
+        expected_type: BaseType | None = None,
+    ) -> str:
+        """Render one final struct literal field value."""
+        if bound_field.spread_field_name is not None:
+            return self._render_spread_field_value(
+                bound_field.spread_source_expr,
+                bound_field.spread_field_name,
+                bound_field.value_info,
+                expected_type=expected_type,
+            )
+        value = self.visit(bound_field.expression)
+        if expected_type == BaseType.FLOAT and bound_field.value_info.base_type == BaseType.INTEGER:
+            return f"({value} as f64)"
+        return value
 
     def _with_default_module(self, arg, render):
         """Render a default argument in its declaration module."""
@@ -2307,10 +2432,19 @@ class CodeGenVisitor(zincVisitor):
 
     def _visit_call_arg(self, arg) -> str:
         """Visit a raw or bound call argument."""
+        if isinstance(arg, BoundArgument) and arg.spread_field_name is not None:
+            return self._render_spread_field_value(arg.spread_source_expr, arg.spread_field_name, arg.value_info)
         return self._with_default_module(arg, lambda: self.visit(self._call_arg_expr(arg)))
 
     def _visit_call_arg_with_expectations(self, arg, **kwargs) -> str:
         """Visit a raw or bound call argument with expected type metadata."""
+        if isinstance(arg, BoundArgument) and arg.spread_field_name is not None:
+            return self._render_spread_field_value(
+                arg.spread_source_expr,
+                arg.spread_field_name,
+                arg.value_info,
+                expected_type=kwargs.get("expected_type"),
+            )
         return self._with_default_module(
             arg,
             lambda: self._visit_expression_with_expectations(self._call_arg_expr(arg), **kwargs),
@@ -2466,19 +2600,34 @@ class CodeGenVisitor(zincVisitor):
         anonymous_struct_info = expr_symbol.anonymous_struct_info if expr_symbol else None
         struct_name = anonymous_struct_info.rust_type_name() if anonymous_struct_info else "__ZincAnonStruct_missing"
         field_info_map = anonymous_struct_info.field_map() if anonymous_struct_info else {}
+        bound_fields = self._struct_fields_for_ctx(ctx)
+        if not bound_fields:
+            raw_fields, has_spread = self._raw_struct_literal_fields(ctx)
+            if has_spread:
+                raise RuntimeError("internal error: struct spread was not bound during semantic analysis")
+            fields = []
+            for field_name, (field_value, expr_ctx) in raw_fields.items():
+                field_info = field_info_map.get(field_name)
+                if field_info is not None:
+                    field_value = self._coerce_owned(field_value, field_info.resolved_type, expr_ctx)
+                fields.append(f"{field_name}: {field_value}")
+            return f"{struct_name} {{ {', '.join(fields)} }}"
+        spread_setup, spread_temps = self._prepare_spread_temps(bound_fields, "field_spread")
+        self._spread_temp_stack.append(spread_temps)
         fields = []
-        for field_ctx in ctx.fieldInit():
-            field_name = field_ctx.IDENTIFIER().getText()
-            field_value = self.visit(field_ctx.expression())
+        for bound_field in bound_fields:
+            field_name = bound_field.name
+            field_value = self._render_bound_struct_field(bound_field)
             field_info = field_info_map.get(field_name)
             if field_info is not None:
                 field_value = self._coerce_owned(
                     field_value,
                     field_info.resolved_type,
-                    field_ctx.expression(),
+                    None if bound_field.spread_source_expr is not None else bound_field.expression,
                 )
             fields.append(f"{field_name}: {field_value}")
-        return f"{struct_name} {{ {', '.join(fields)} }}"
+        self._spread_temp_stack.pop()
+        return self._wrap_spread_temps(f"{struct_name} {{ {', '.join(fields)} }}", spread_setup)
 
     def visitPrimaryExpr(self, ctx: ZincParser.PrimaryExprContext) -> str:
         """Visit primary expression wrapper."""
@@ -3090,16 +3239,23 @@ class CodeGenVisitor(zincVisitor):
             return self._render_constant_value(constant_value)
         callee_ctx = ctx.expression()
         call_args = self._call_args_for_ctx(ctx)
+        spread_setup, spread_temps = self._prepare_spread_temps(call_args, "arg_spread")
+        self._spread_temp_stack.append(spread_temps)
+
+        def finish(value: str) -> str:
+            self._spread_temp_stack.pop()
+            return self._wrap_spread_temps(value, spread_setup)
+
         arg_ctxs = [self._call_arg_expr(arg) for arg in call_args]
         args = [self._visit_call_arg(arg) for arg in call_args]
 
         if self._function_call_name(ctx) == "close":
             channel_arg = args[0] if args else "__zinc_missing_close_arg"
-            return f"{channel_arg}.close()"
+            return finish(f"{channel_arg}.close()")
 
         path = extract_identifier_path(callee_ctx) if self._current_module is not None else None
         if path == ["Context", "background"]:
-            return "__ZincContext::background()"
+            return finish("__ZincContext::background()")
         if path == ["Context", "with_cancel"]:
             parent = args[0] if args else "__zinc_missing_context"
             cancel_info = CallableTypeInfo(param_types=[], return_type=BaseType.VOID)
@@ -3117,19 +3273,21 @@ class CodeGenVisitor(zincVisitor):
                 )
             )
             cancel_variant = self._callable_variant_name(cancel_info, cancel_target)
-            return "\n".join(
-                [
-                    "{",
-                    f"    let __zinc_parent_ctx = {parent}.clone();",
-                    "    let __zinc_child_ctx = __ZincContext::background();",
-                    "    let __zinc_child_for_task = __zinc_child_ctx.clone();",
-                    "    tokio::spawn(async move {",
-                    "        let _ = __zinc_parent_ctx.done().recv_option().await;",
-                    "        __zinc_child_for_task.cancel();",
-                    "    });",
-                    f"    (__zinc_child_ctx.clone(), {cancel_type}::{cancel_variant}(__zinc_child_ctx))",
-                    "}",
-                ]
+            return finish(
+                "\n".join(
+                    [
+                        "{",
+                        f"    let __zinc_parent_ctx = {parent}.clone();",
+                        "    let __zinc_child_ctx = __ZincContext::background();",
+                        "    let __zinc_child_for_task = __zinc_child_ctx.clone();",
+                        "    tokio::spawn(async move {",
+                        "        let _ = __zinc_parent_ctx.done().recv_option().await;",
+                        "        __zinc_child_for_task.cancel();",
+                        "    });",
+                        f"    (__zinc_child_ctx.clone(), {cancel_type}::{cancel_variant}(__zinc_child_ctx))",
+                        "}",
+                    ]
+                )
             )
 
         # Get callee text first to check for static method
@@ -3150,20 +3308,20 @@ class CodeGenVisitor(zincVisitor):
                     args = [self._closure_env_constructor(closure_info), *args]
             call = f"{direct_mangled}({', '.join(args)})"
             if func and func.is_async:
-                return f"{call}.await"
-            return call
+                return finish(f"{call}.await")
+            return finish(call)
 
         if isinstance(callee_ctx, ZincParser.MemberAccessExprContext):
             receiver_ctx = callee_ctx.expression()
             method_name = callee_ctx.IDENTIFIER().getText()
             if self._get_expr_type(receiver_ctx) == BaseType.CONTEXT:
                 if method_name == "done":
-                    return f"{self.visit(receiver_ctx)}.done()"
+                    return finish(f"{self.visit(receiver_ctx)}.done()")
                 if method_name == "cancel":
-                    return f"{self.visit(receiver_ctx)}.cancel()"
+                    return finish(f"{self.visit(receiver_ctx)}.cancel()")
 
         if callee == "print":
-            return self._render_print_call(args, arg_ctxs)
+            return finish(self._render_print_call(args, arg_ctxs))
 
         if callee in {"dict", "sort_dict"}:
             info = self._expected_dict_info or self._get_dict_info(ctx) or DictTypeInfo(kind=callee)
@@ -3183,8 +3341,8 @@ class CodeGenVisitor(zincVisitor):
                     anonymous_struct_info=info.value_anonymous_struct_info,
                     as_reference=False,
                 )
-                return f"{collection_type}::<{key}, {value}>::new()"
-            return f"{collection_type}::new()"
+                return finish(f"{collection_type}::<{key}, {value}>::new()")
+            return finish(f"{collection_type}::new()")
 
         if callee in {"set", "sort_set"}:
             info = self._expected_set_info or self._get_set_info(ctx) or SetTypeInfo(kind=callee)
@@ -3196,8 +3354,8 @@ class CodeGenVisitor(zincVisitor):
                     anonymous_struct_info=info.element_anonymous_struct_info,
                     as_reference=False,
                 )
-                return f"{collection_type}::<{elem}>::new()"
-            return f"{collection_type}::new()"
+                return finish(f"{collection_type}::<{elem}>::new()")
+            return finish(f"{collection_type}::new()")
 
         # Static method call (StructName::method)
         if "::" in callee:
@@ -3205,7 +3363,7 @@ class CodeGenVisitor(zincVisitor):
             struct = next((s for s in self.atlas.structs.values() if self._struct_rust_name(s) == struct_name), None)
             if struct:
                 args = self._process_method_args(struct, method_name, args, arg_ctxs)
-            return f"{callee}({', '.join(args)})"
+            return finish(f"{callee}({', '.join(args)})")
 
         if (
             callee_symbol
@@ -3229,7 +3387,7 @@ class CodeGenVisitor(zincVisitor):
                 callable_expr = callee
                 if isinstance(callee_ctx, ZincParser.MemberAccessExprContext):
                     callable_expr = self._render_callable_value(callee_symbol.callable_info)
-                return f"{callable_expr}.call({', '.join(args)})"
+                return finish(f"{callable_expr}.call({', '.join(args)})")
 
         if self._current_module is not None:
             path = extract_identifier_path(callee_ctx)
@@ -3246,8 +3404,8 @@ class CodeGenVisitor(zincVisitor):
                     args = self._process_function_args(mangled, args, arg_ctxs)
                     call = f"{mangled}({', '.join(args)})"
                     if self.atlas.functions.get(mangled) and self.atlas.functions[mangled].is_async:
-                        return f"{call}.await"
-                    return call
+                        return finish(f"{call}.await")
+                    return finish(call)
 
         # Instance method call (obj.method) - already visited, callee is "obj.method"
         if isinstance(callee_ctx, ZincParser.MemberAccessExprContext):
@@ -3266,47 +3424,47 @@ class CodeGenVisitor(zincVisitor):
                 dict_target = f"{captured_receiver_name}.lock().unwrap()" if captured_receiver_name else target
                 info = self._get_dict_info(target_ctx) or DictTypeInfo()
                 if method_name == "len":
-                    return f"({dict_target}.len() as i64)"
+                    return finish(f"({dict_target}.len() as i64)")
                 if method_name == "is_empty":
-                    return f"{dict_target}.is_empty()"
+                    return finish(f"{dict_target}.is_empty()")
                 if method_name == "clear":
-                    return f"{{ {dict_target}.clear(); () }}"
+                    return finish(f"{{ {dict_target}.clear(); () }}")
                 if method_name == "keys":
-                    return f"{dict_target}.keys().cloned().collect::<Vec<_>>()"
+                    return finish(f"{dict_target}.keys().cloned().collect::<Vec<_>>()")
                 if method_name == "values":
-                    return f"{dict_target}.values().cloned().collect::<Vec<_>>()"
+                    return finish(f"{dict_target}.values().cloned().collect::<Vec<_>>()")
                 if method_name == "items":
-                    return f"{dict_target}.iter().map(|(k, v)| (k.clone(), v.clone())).collect::<Vec<_>>()"
+                    return finish(f"{dict_target}.iter().map(|(k, v)| (k.clone(), v.clone())).collect::<Vec<_>>()")
                 if method_name == "insert" and len(args) == 2:
                     key = self._coerce_owned(args[0], info.key_type, arg_ctxs[0] if arg_ctxs else None)
                     value = self._coerce_owned(args[1], info.value_type, arg_ctxs[1] if arg_ctxs else None)
-                    return f"{{ {dict_target}.insert({key}, {value}); () }}"
+                    return finish(f"{{ {dict_target}.insert({key}, {value}); () }}")
                 if method_name in {"get", "contains_key", "remove"} and len(args) == 1:
                     key = self._borrow_lookup_key(args[0], info.key_type, arg_ctxs[0] if arg_ctxs else None)
                     if method_name == "get":
-                        return f"{dict_target}.get({key}).unwrap().clone()"
+                        return finish(f"{dict_target}.get({key}).unwrap().clone()")
                     if method_name == "remove":
-                        return f"{{ {dict_target}.remove({key}); () }}"
-                    return f"{dict_target}.{method_name}({key})"
+                        return finish(f"{{ {dict_target}.remove({key}); () }}")
+                    return finish(f"{dict_target}.{method_name}({key})")
 
             if receiver_type == BaseType.SET:
                 target = self.visit(target_ctx)
                 set_target = f"{captured_receiver_name}.lock().unwrap()" if captured_receiver_name else target
                 info = self._get_set_info(target_ctx) or SetTypeInfo()
                 if method_name == "len":
-                    return f"({set_target}.len() as i64)"
+                    return finish(f"({set_target}.len() as i64)")
                 if method_name == "is_empty":
-                    return f"{set_target}.is_empty()"
+                    return finish(f"{set_target}.is_empty()")
                 if method_name == "clear":
-                    return f"{{ {set_target}.clear(); () }}"
+                    return finish(f"{{ {set_target}.clear(); () }}")
                 if method_name in {"push", "insert"} and len(args) == 1:
                     elem = self._coerce_owned(args[0], info.element_type, arg_ctxs[0] if arg_ctxs else None)
-                    return f"{{ {set_target}.insert({elem}); () }}"
+                    return finish(f"{{ {set_target}.insert({elem}); () }}")
                 if method_name in {"contains", "remove"} and len(args) == 1:
                     elem = self._borrow_lookup_key(args[0], info.element_type, arg_ctxs[0] if arg_ctxs else None)
                     if method_name == "remove":
-                        return f"{{ {set_target}.remove({elem}); () }}"
-                    return f"{set_target}.{method_name}({elem})"
+                        return finish(f"{{ {set_target}.remove({elem}); () }}")
+                    return finish(f"{set_target}.{method_name}({elem})")
 
             if receiver_type == BaseType.ARRAY and method_name == "push" and len(args) == 1:
                 receiver_symbol = self._get_expr_symbol(target_ctx)
@@ -3329,7 +3487,7 @@ class CodeGenVisitor(zincVisitor):
                         receiver_symbol.callable_info,
                     )
                 if captured_receiver_name is not None:
-                    return f"{captured_receiver_name}.lock().unwrap().push({args[0]})"
+                    return finish(f"{captured_receiver_name}.lock().unwrap().push({args[0]})")
 
             if isinstance(target_ctx, ZincParser.PrimaryExprContext):
                 primary = target_ctx.primaryExpression()
@@ -3345,19 +3503,19 @@ class CodeGenVisitor(zincVisitor):
                             if captured_receiver_name is not None and method:
                                 result = f"{captured_receiver_name}.lock().unwrap().{method_name}({', '.join(args)})"
                                 if method_name == "len":
-                                    return f"({result} as i64)"
-                                return result
+                                    return finish(f"({result} as i64)")
+                                return finish(result)
                             if self._boxed_struct_key(target_var) in self._boxed_struct_vars and method:
                                 borrow = "borrow_mut" if method.self_mutability == "&mut self" else "borrow"
                                 result = f"{target_var}.{borrow}().{method_name}({', '.join(args)})"
                                 if method_name == "len":
-                                    return f"({result} as i64)"
-                                return result
+                                    return finish(f"({result} as i64)")
+                                return finish(result)
             result = f"{callee}({', '.join(args)})"
             # len() returns usize in Rust but Zinc treats all integers as i64
             if method_name == "len":
-                return f"({result} as i64)"
-            return result
+                return finish(f"({result} as i64)")
+            return finish(result)
 
         # Look up mangled name from specialization map (scoped by current function)
         key = (self._current_function, ctx.getSourceInterval())
@@ -3372,10 +3530,10 @@ class CodeGenVisitor(zincVisitor):
                     args = [self._closure_env_constructor(closure_info), *args]
             call = f"{mangled}({', '.join(args)})"
             if func and func.is_async:
-                return f"{call}.await"
-            return call
+                return finish(f"{call}.await")
+            return finish(call)
 
-        return f"{callee}({', '.join(args)})"
+        return finish(f"{callee}({', '.join(args)})")
 
     def _render_function_args_for_instance(self, func: FunctionInstance, call_args: list) -> list[str]:
         """Render function-call arguments with the function signature as context."""
@@ -3659,14 +3817,29 @@ class CodeGenVisitor(zincVisitor):
                 else:
                     name = self._struct_rust_name(struct) if struct else ctx.qualifiedName().getText()
 
-        # Get provided field values
-        provided_fields: dict[str, str] = {}
-        provided_field_exprs: dict[str, ParserRuleContext] = {}
-        for field_ctx in ctx.fieldInit():
-            field_name = field_ctx.IDENTIFIER().getText()
-            field_value = self.visit(field_ctx.expression())
-            provided_fields[field_name] = field_value
-            provided_field_exprs[field_name] = field_ctx.expression()
+        bound_fields = self._struct_fields_for_ctx(ctx)
+        if not bound_fields:
+            raw_fields, has_spread = self._raw_struct_literal_fields(ctx)
+            if has_spread:
+                raise RuntimeError("internal error: struct spread was not bound during semantic analysis")
+            if struct:
+                fields = []
+                for f in struct.fields:
+                    if f.name in raw_fields:
+                        value, expr_ctx = raw_fields[f.name]
+                        if f.rust_type() == "String" and (
+                            self._expr_is_string_literal(expr_ctx) or self._looks_like_rust_string_literal(value)
+                        ):
+                            value = f"String::from({value})"
+                        fields.append(f"{f.name}: {value}")
+                    else:
+                        fields.append(f"{f.name}: {f.rust_default()}")
+                return f"{name} {{ {', '.join(fields)} }}"
+            return f"{name} {{ {', '.join(f'{field_name}: {value}' for field_name, (value, _expr) in raw_fields.items())} }}"
+
+        spread_setup, spread_temps = self._prepare_spread_temps(bound_fields, "field_spread")
+        self._spread_temp_stack.append(spread_temps)
+        provided_fields = {field.name: field for field in bound_fields}
 
         # Look up struct definition to get all fields with defaults
         if struct:
@@ -3674,7 +3847,8 @@ class CodeGenVisitor(zincVisitor):
             fields = []
             for f in struct.fields:
                 if f.name in provided_fields:
-                    value = provided_fields[f.name]
+                    bound_field = provided_fields[f.name]
+                    value = self._render_bound_struct_field(bound_field, expected_type=f.resolved_type)
                     concrete_field = concrete_field_map.get(f.name)
                     rust_type = (
                         self._type_with_metadata_to_rust(
@@ -3694,7 +3868,8 @@ class CodeGenVisitor(zincVisitor):
                     )
                     # Convert string literals to String::from() for String fields
                     if rust_type == "String" and (
-                        self._expr_is_string_literal(provided_field_exprs.get(f.name)) or self._looks_like_rust_string_literal(value)
+                        bound_field.spread_source_expr is None
+                        and (self._expr_is_string_literal(bound_field.expression) or self._looks_like_rust_string_literal(value))
                     ):
                         value = f"String::from({value})"
                     fields.append(f"{f.name}: {value}")
@@ -3702,11 +3877,13 @@ class CodeGenVisitor(zincVisitor):
                     # Use default value
                     fields.append(f"{f.name}: {f.rust_default()}")
             fields_str = ", ".join(fields)
-            return f"{name} {{ {fields_str} }}"
+            self._spread_temp_stack.pop()
+            return self._wrap_spread_temps(f"{name} {{ {fields_str} }}", spread_setup)
         # Fallback - just use provided fields
-        fields = [f"{k}: {v}" for k, v in provided_fields.items()]
+        fields = [f"{field.name}: {self._render_bound_struct_field(field)}" for field in bound_fields]
         fields_str = ", ".join(fields)
-        return f"{name} {{ {fields_str} }}"
+        self._spread_temp_stack.pop()
+        return self._wrap_spread_temps(f"{name} {{ {fields_str} }}", spread_setup)
 
     def visitEnumVariantConstruction(self, ctx: ZincParser.EnumVariantConstructionContext) -> str:
         """Visit enum payload construction."""

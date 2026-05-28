@@ -1,0 +1,52 @@
+struct Args {
+    a: i64
+    b: i64
+    c: i64
+    extra: i64
+}
+
+struct PartialArgs {
+    b: i64
+    c: i64
+}
+
+struct Tool {
+    seed: i64
+
+    fn add(a, b, c: i64 = 0) {
+        return self.seed + a + b + c
+    }
+
+    fn pack(a, b, c: i64 = 0) {
+        return a * 100 + b * 10 + c
+    }
+}
+
+fn combine(a, b, c: i64 = 5) {
+    return a * 100 + b * 10 + c
+}
+
+fn main() {
+    args = Args { a: 1, b: 2, c: 3, extra: 99 }
+    partial = PartialArgs { b: 7, c: 8 }
+    anon = struct { a: 4, b: 5, c: 6, ignored: 10 }
+
+    print(combine(..args))
+    print(combine(..args, a=9))
+    print(combine(a=9, ..args))
+    print(combine(a=4, ..partial))
+    print(combine(a=1, a=2, b=3))
+    print(combine(..anon))
+
+    f = combine
+    print(f(..args, c=6))
+
+    lambda = fn(a, b, c: i64 = 1) {
+        return a + b + c
+    }
+    print(lambda(..partial, a=10))
+
+    tool = Tool { seed: 100 }
+    print(tool.add(..partial, a=1))
+    print(Tool.pack(..partial, a=2))
+}

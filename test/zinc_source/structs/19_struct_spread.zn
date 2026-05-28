@@ -1,0 +1,49 @@
+struct Config {
+    a: i64
+    name: string
+    enabled: bool
+    ratio: f64
+}
+
+struct PartialConfig {
+    name: string
+    enabled: bool
+}
+
+fn make_config() -> Config {
+    return Config { a: 7, name: "made", enabled: true, ratio: 4.5 }
+}
+
+fn main() {
+    base = Config { a: 1, name: "base", enabled: false, ratio: 1.5 }
+    partial = PartialConfig { name: "partial", enabled: true }
+
+    right_override = Config { ..base, a: 2, name: "right" }
+    left_override = Config { a: 3, name: "left", ..base }
+    filled = Config { a: 4, ratio: 2.5, ..partial }
+    layered = Config { ..base, ..filled, enabled: false }
+    made = Config { ..make_config(), a: 8 }
+    duplicate = Config { a: 6, name: "old", enabled: false, ratio: 3.5, name: "dupe", enabled: true }
+
+    anon_base = struct { a: 5, name: "anon", enabled: true }
+    anon = struct { ..anon_base, name: "later", extra: 9 }
+    anon_duplicate = struct { x: 1, y: 2, x: 3 }
+
+    print(right_override.a)
+    print(right_override.name)
+    print(left_override.a)
+    print(left_override.name)
+    print(filled.name)
+    print(filled.enabled)
+    print(layered.a)
+    print(layered.name)
+    print(layered.enabled)
+    print(made.a)
+    print(made.name)
+    print(duplicate.name)
+    print(duplicate.enabled)
+    print(anon.a)
+    print(anon.name)
+    print(anon.extra)
+    print(anon_duplicate.x)
+}
