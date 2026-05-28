@@ -1,0 +1,15 @@
+// expected-error: struct field 'Config.name' expects a compatible 'String' value
+
+struct Config {
+    name: string
+}
+
+struct BadName {
+    name: i64
+}
+
+fn main() {
+    bad = BadName { name: 7 }
+    config = Config { name: "ok", ..bad }
+    print(config.name)
+}

@@ -777,6 +777,8 @@ class SymbolTableVisitor(zincVisitor):
         )
 
         self._struct_analysis_stack.append(qualified_name)
+        previous_module = self._current_module
+        self._current_module = symbol.module_id
         try:
             composition = struct_composition_from_ctx(ctx)
             fields: list[StructFieldInfo] = []
@@ -862,6 +864,7 @@ class SymbolTableVisitor(zincVisitor):
             self._struct_analysis_cache[qualified_name] = struct
             return struct
         finally:
+            self._current_module = previous_module
             self._struct_analysis_stack.pop()
 
     def _analyze_enum_by_qualified_name(self, qualified_name: str) -> EnumInstance:
@@ -884,6 +887,8 @@ class SymbolTableVisitor(zincVisitor):
         )
 
         self._enum_analysis_stack.append(qualified_name)
+        previous_module = self._current_module
+        self._current_module = symbol.module_id
         try:
             variants: list[EnumVariantInfo] = []
             variant_names: set[str] = set()
@@ -922,6 +927,7 @@ class SymbolTableVisitor(zincVisitor):
             self._enum_analysis_cache[qualified_name] = enum
             return enum
         finally:
+            self._current_module = previous_module
             self._enum_analysis_stack.pop()
 
     def _copy_struct_field(self, field: StructFieldInfo) -> StructFieldInfo:

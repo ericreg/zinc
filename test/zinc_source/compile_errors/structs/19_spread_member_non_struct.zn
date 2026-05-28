@@ -1,0 +1,15 @@
+// expected-error: struct 'Config' spread expects a struct value
+
+struct Config {
+    value: i64
+}
+
+struct Holder {
+    value: i64
+}
+
+fn main() {
+    holder = Holder { value: 1 }
+    config = Config { ..holder.value }
+    print(config.value)
+}

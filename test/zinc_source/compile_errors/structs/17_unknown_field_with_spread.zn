@@ -1,0 +1,11 @@
+// expected-error: struct 'Config' has no field 'missing'
+
+struct Config {
+    a: i64
+}
+
+fn main() {
+    base = Config { a: 1 }
+    config = Config { ..base, missing: 2 }
+    print(config.a)
+}

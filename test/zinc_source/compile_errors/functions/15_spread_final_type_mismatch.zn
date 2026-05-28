@@ -1,0 +1,16 @@
+// expected-error: parameter 'a' expects a compatible 'i64' value
+
+struct BadArgs {
+    a: string
+    b: i64
+    c: i64
+}
+
+fn pack(a: i64, b: i64, c: i64) {
+    return a * 100 + b * 10 + c
+}
+
+fn main() {
+    bad = BadArgs { a: "bad", b: 2, c: 3 }
+    pack(a=1, b=2, c=3, ..bad)
+}

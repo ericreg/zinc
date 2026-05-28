@@ -1,0 +1,14 @@
+// expected-error: call to 'pack' spread expects a struct value
+
+struct Holder {
+    value: i64
+}
+
+fn pack(value) {
+    return value
+}
+
+fn main() {
+    holder = Holder { value: 1 }
+    pack(..holder.value)
+}

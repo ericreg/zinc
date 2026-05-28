@@ -1876,7 +1876,20 @@ class CodeGenVisitor(zincVisitor):
         lines.append(f"struct {rust_name} {{")
         for f in struct.fields:
             vis = "" if f.is_private else "pub "
-            rust_type = f.rust_type()
+            rust_type = self._type_with_metadata_to_rust(
+                f.resolved_type,
+                exact_type=f.exact_type,
+                array_info=f.array_info,
+                dict_info=f.dict_info,
+                set_info=f.set_info,
+                tuple_info=f.tuple_info,
+                callable_info=f.callable_info,
+                struct_qualified_name=f.struct_qualified_name,
+                anonymous_struct_info=f.anonymous_struct_info,
+                result_info=f.result_info,
+                option_info=f.option_info,
+                as_reference=False,
+            )
             lines.append(f"    {vis}{f.name}: {rust_type},")
         lines.append("}")
         lines.append("")

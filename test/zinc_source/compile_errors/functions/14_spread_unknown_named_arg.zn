@@ -1,0 +1,16 @@
+// expected-error: unknown named argument 'd'
+
+struct Args {
+    a: i64
+    b: i64
+    c: i64
+}
+
+fn pack(a, b, c) {
+    return a * 100 + b * 10 + c
+}
+
+fn main() {
+    args = Args { a: 1, b: 2, c: 3 }
+    pack(..args, d=4)
+}

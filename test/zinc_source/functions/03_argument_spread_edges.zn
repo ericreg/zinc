@@ -1,0 +1,61 @@
+struct Args {
+    a: i64
+    b: i64
+    c: i64
+    extra: i64
+}
+
+struct AB {
+    a: i64
+    b: i64
+}
+
+struct BC {
+    b: i64
+    c: i64
+}
+
+struct OnlyB {
+    b: i64
+}
+
+struct BadA {
+    a: string
+    b: i64
+    c: i64
+}
+
+struct Holder {
+    nested: Args
+}
+
+fn pack(a, b, c: i64 = 9) {
+    return a * 100 + b * 10 + c
+}
+
+fn noisy_args() -> Args {
+    print("make args")
+    return Args { a: 3, b: 2, c: 1, extra: 99 }
+}
+
+fn ignored_args() -> Args {
+    print("ignore args")
+    return Args { a: 9, b: 9, c: 9, extra: 99 }
+}
+
+fn main() {
+    left = AB { a: 1, b: 2 }
+    right = BC { b: 7, c: 8 }
+    only_b = OnlyB { b: 4 }
+    holder = Holder { nested: Args { a: 6, b: 5, c: 4, extra: 0 } }
+    bad = BadA { a: "bad", b: 8, c: 9 }
+
+    print(pack(..left, ..right))
+    print(pack(..right, ..left, c=5))
+    print(pack(a=3, ..only_b))
+    print(pack(..holder.nested))
+    print(pack(..bad, a=7))
+    print(pack(..noisy_args()))
+    print(pack(..ignored_args(), a=1, b=2, c=3))
+    print(pack(a=1, b=2, c=3, ..noisy_args()))
+}

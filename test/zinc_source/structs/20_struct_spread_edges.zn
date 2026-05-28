@@ -1,0 +1,65 @@
+struct Config {
+    a: i64
+    name: string
+    enabled: bool
+    ratio: f64
+}
+
+struct BadName {
+    name: i64
+    enabled: bool
+}
+
+struct FloatRatio {
+    ratio: f64
+}
+
+struct Nested {
+    config: Config
+}
+
+fn noisy_config() -> Config {
+    print("make config")
+    return Config { a: 8, name: "made", enabled: true, ratio: 6.5 }
+}
+
+fn ignored_config() -> Config {
+    print("ignore config")
+    return Config { a: 9, name: "ignored", enabled: true, ratio: 9.5 }
+}
+
+fn main() {
+    base = Config { a: 1, name: "base", enabled: false, ratio: 1.5 }
+    bad = BadName { name: 404, enabled: true }
+    float_ratio = FloatRatio { ratio: 4.25 }
+    nested = Nested { config: base }
+    with_extra = struct { a: 4, name: "anon", extra: 99 }
+
+    fixed_bad = Config { a: 2, ratio: 2.5, ..bad, name: "fixed" }
+    from_nested = Config { ..nested.config, a: 7 }
+    spread_ratio = Config { a: 3, name: "ratio", enabled: false, ..float_ratio }
+    named_ignores_extra = Config { ..with_extra, enabled: true, ratio: 4.5 }
+    noisy = Config { ..noisy_config() }
+    ignored = Config { ..ignored_config(), a: 5, name: "direct", enabled: false, ratio: 5.5 }
+
+    anon_left = struct { a: 10, name: "left", extra: 1 }
+    anon_right = struct { name: "right", enabled: true }
+    anon_union = struct { z: 0, ..anon_left, ..anon_right, a: 11 }
+
+    print(fixed_bad.name)
+    print(fixed_bad.enabled)
+    print(from_nested.a)
+    print(from_nested.name)
+    print(spread_ratio.ratio)
+    print(named_ignores_extra.name)
+    print(named_ignores_extra.enabled)
+    print(noisy.a)
+    print(noisy.name)
+    print(ignored.a)
+    print(ignored.name)
+    print(anon_union.z)
+    print(anon_union.a)
+    print(anon_union.name)
+    print(anon_union.enabled)
+    print(anon_union.extra)
+}
