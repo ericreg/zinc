@@ -2,8 +2,7 @@ fn make_pair() {
     count = 0
 
     inc = fn() {
-        out count
-        count += 1
+        out count += 1
     }
 
     read = fn() {

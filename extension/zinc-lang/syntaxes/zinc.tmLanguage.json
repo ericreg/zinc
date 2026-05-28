@@ -20,6 +20,7 @@
     { "include": "#constants" },
     { "include": "#self" },
     { "include": "#patterns_zinc" },
+    { "include": "#out_assignments" },
     { "include": "#keywords" },
     { "include": "#result_option_constructors" },
     { "include": "#builtins" },
@@ -476,17 +477,19 @@
         }
       ]
     },
+    "out_assignments": {
+      "patterns": [
+        {
+          "name": "keyword.control.zinc",
+          "match": "\\bout\\b(?=\\s+[A-Za-z_][A-Za-z0-9_]*\\s*(?:(?:\\*\\*)|[+\\-*/%])?=)"
+        }
+      ]
+    },
     "keywords": {
       "patterns": [
         {
           "name": "keyword.control.zinc",
           "match": "\\b(?:if|else|for|in|while|loop|match|return|break|continue|try|fail)\\b"
-        },
-        {
-          "match": "^(\\s*)(out)\\b",
-          "captures": {
-            "2": { "name": "keyword.control.out.zinc" }
-          }
         },
         {
           "name": "keyword.other.concurrency.zinc",

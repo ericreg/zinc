@@ -123,7 +123,6 @@ class Symbol:
     binding_unique_name: str | None = None  # For temps/captured refs: the underlying binding
     is_captured_binding: bool = False  # True when this binding is shared with one or more closures
     is_captured_ref: bool = False  # True for closure-local aliases of captured outer bindings
-    is_out_capture: bool = False  # True when a closure marks this captured ref writable with `out`
     constant_value: object | None = None
     line_num: int = 0
 
@@ -6066,11 +6065,11 @@ class SymbolTableVisitor(zincVisitor):
                 if node.IDENTIFIER():
                     record_capture(node.IDENTIFIER().getText())
                 return
-            if isinstance(node, ZincParser.OutCaptureDeclarationContext):
+            if isinstance(node, ZincParser.OutAssignmentContext):
                 tokens = list(node.getTokens(ZincParser.IDENTIFIER))
-                if tokens and tokens[0].getText() == "out":
-                    for token in tokens[1:]:
-                        record_capture(token.getText())
+                if len(tokens) >= 2 and tokens[0].getText() == "out":
+                    record_capture(tokens[1].getText())
+                walk(node.expression())
                 return
             if isinstance(node, ZincParser.FunctionDeclarationContext):
                 return
@@ -9462,15 +9461,14 @@ class SymbolTableVisitor(zincVisitor):
         temp.binding_unique_name = symbol.unique_name
         temp.is_captured_binding = symbol.is_captured_binding
         temp.is_captured_ref = symbol.is_captured_ref
-        temp.is_out_capture = symbol.is_out_capture
         struct_qualified_name = self._struct_qualified_name_for_symbol(symbol)
         if struct_qualified_name is not None:
             self._struct_symbol_bindings[temp.unique_name] = struct_qualified_name
         return temp
 
     def _require_writable_capture(self, symbol: Symbol, name: str) -> None:
-        """Ensure a captured ref has been declared writable with `out name`."""
-        if symbol.is_captured_ref and not symbol.is_out_capture:
+        """Reject implicit writes to captured refs; they must use `out name = ...`."""
+        if symbol.is_captured_ref:
             raise ZincTypeError(f"assignment to captured outer variable '{name}' requires 'out {name}'")
 
     def _define_broadcast_local_binding(
@@ -9486,12 +9484,6 @@ class SymbolTableVisitor(zincVisitor):
         existing = self.symbols.lookup_by_id(var_name)
         if existing is not None and existing.is_captured_ref:
             self._require_writable_capture(existing, var_name)
-            if not self._binding_accepts_value_info(existing, expr_info, expr_ctx, expr_symbol):
-                raise ZincTypeError(f"captured outer variable '{var_name}' cannot change type after capture")
-            existing.is_mutated = True
-            existing.constant_value = None
-            self._define_assignment_temp_for_binding(existing, token.getSourceInterval())
-            return
 
         if existing is not None and existing.is_captured_binding and not self._binding_accepts_value_info(
             existing,
@@ -9878,12 +9870,6 @@ class SymbolTableVisitor(zincVisitor):
 
             if existing is not None and existing.is_captured_ref:
                 self._require_writable_capture(existing, var_name)
-                if not self._binding_accepts_value_info(existing, expr_info, ctx.expression(), expr_symbol):
-                    raise ZincTypeError(f"captured outer variable '{var_name}' cannot change type after capture")
-                existing.is_mutated = True
-                existing.constant_value = None
-                self._define_assignment_temp_for_binding(existing, target.getSourceInterval())
-                return
 
             # Check if this is a chan() call - track channel info
             if expr_type == BaseType.CHANNEL and self._is_channel_constructor_call(ctx.expression()):
@@ -11110,23 +11096,57 @@ class SymbolTableVisitor(zincVisitor):
         self._current_return_exact_type = self._exact_type_name_from_type_ctx(func_ctx.type_())
         self._current_return_result_info = self._copy_result_info(annotated_result_info)
 
-    def visitOutCaptureDeclaration(self, ctx: ZincParser.OutCaptureDeclarationContext) -> None:
-        """Mark captured outer bindings writable in this closure."""
+    def visitOutAssignment(self, ctx: ZincParser.OutAssignmentContext) -> None:
+        """Visit an explicit write to a captured outer binding."""
         tokens = list(ctx.getTokens(ZincParser.IDENTIFIER))
-        if not tokens or tokens[0].getText() != "out":
+        if len(tokens) < 2 or tokens[0].getText() != "out":
             statement = ctx.getText()
-            raise ZincTypeError(f"invalid statement '{statement}'; did you mean 'out {statement}'?")
+            raise ZincTypeError(f"invalid statement '{statement}'; expected 'out name = value'")
 
-        seen: set[str] = set()
-        for token in tokens[1:]:
-            name = token.getText()
-            if name in seen:
-                raise ZincTypeError(f"duplicate out variable '{name}'")
-            seen.add(name)
-            symbol = self.symbols.lookup_by_id(name)
-            if symbol is None or not symbol.is_captured_ref:
-                raise ZincTypeError(f"'out {name}' expects a captured outer variable '{name}'")
-            symbol.is_out_capture = True
+        name = tokens[1].getText()
+        symbol = self.symbols.lookup_by_id(name)
+        if symbol is None or not symbol.is_captured_ref:
+            raise ZincTypeError(f"'out {name}' expects a captured outer variable '{name}'")
+
+        expr_type = self.visit(ctx.expression())
+        assignment_op = ctx.assignmentOperator().getText()
+        if assignment_op != "=":
+            if expr_type not in {BaseType.INTEGER, BaseType.FLOAT}:
+                raise ZincTypeError(f"operator '{assignment_op}' requires a numeric value")
+            if symbol.resolved_type not in {BaseType.INTEGER, BaseType.FLOAT}:
+                raise ZincTypeError(f"operator '{assignment_op}' requires a numeric target")
+            if symbol.resolved_type == BaseType.INTEGER and expr_type == BaseType.FLOAT:
+                raise ZincTypeError(f"operator '{assignment_op}' cannot assign a float value to integer variable '{name}'")
+
+            expr_symbol = self._expr_symbol(ctx.expression())
+            can_cast_integer_to_float = symbol.resolved_type == BaseType.FLOAT and expr_type == BaseType.INTEGER
+            if not can_cast_integer_to_float and not self._assignment_metadata_compatible(
+                symbol.resolved_type,
+                expr_type,
+                expected_exact_type=symbol.declared_exact_type or symbol.exact_type,
+                actual_exact_type=expr_symbol.exact_type if expr_symbol else None,
+                actual_constant_value=self._literal_constant_value_for_expr(ctx.expression(), expr_symbol),
+            ):
+                expected_label = symbol.declared_exact_type or symbol.exact_type or type_to_rust(symbol.resolved_type)
+                raise ZincTypeError(f"variable '{name}' expects a compatible '{expected_label}' value")
+
+            symbol.is_mutated = True
+            symbol.constant_value = None
+            self._define_assignment_temp_for_binding(symbol, tokens[1].getSourceInterval())
+            return
+
+        expr_symbol = self._expr_symbol(ctx.expression())
+        expr_info = self._value_info_from_symbol(expr_type, expr_symbol)
+        if self._try_context_stack and expr_type in {BaseType.RESULT, BaseType.OPTION}:
+            if symbol.resolved_type not in {BaseType.RESULT, BaseType.OPTION}:
+                expr_info = self._unwrap_try_value(ctx.expression(), expr_info)
+
+        if not self._binding_accepts_value_info(symbol, expr_info, ctx.expression(), expr_symbol):
+            raise ZincTypeError(f"captured outer variable '{name}' cannot change type after capture")
+
+        symbol.is_mutated = True
+        symbol.constant_value = None
+        self._define_assignment_temp_for_binding(symbol, tokens[1].getSourceInterval())
 
     def visitSelectStatement(self, ctx: ZincParser.SelectStatementContext) -> None:
         """Visit a select statement and validate case structure."""

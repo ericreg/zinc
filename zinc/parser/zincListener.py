@@ -287,12 +287,12 @@ class zincListener(ParseTreeListener):
         pass
 
 
-    # Enter a parse tree produced by zincParser#outCaptureDeclaration.
-    def enterOutCaptureDeclaration(self, ctx:zincParser.OutCaptureDeclarationContext):
+    # Enter a parse tree produced by zincParser#outAssignment.
+    def enterOutAssignment(self, ctx:zincParser.OutAssignmentContext):
         pass
 
-    # Exit a parse tree produced by zincParser#outCaptureDeclaration.
-    def exitOutCaptureDeclaration(self, ctx:zincParser.OutCaptureDeclarationContext):
+    # Exit a parse tree produced by zincParser#outAssignment.
+    def exitOutAssignment(self, ctx:zincParser.OutAssignmentContext):
         pass
 
 

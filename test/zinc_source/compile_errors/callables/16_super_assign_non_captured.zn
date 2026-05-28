@@ -1,5 +1,5 @@
 // expected-error: 'out x' expects a captured outer variable 'x'
 fn main() {
     x = 1
-    out x
+    out x = 2
 }

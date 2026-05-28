@@ -15,7 +15,7 @@ statement
     | enumDeclaration
     | functionDeclaration
     | asyncFunctionDeclaration
-    | outCaptureDeclaration
+    | outAssignment
     | typedVariableAssignment
     | variableAssignment
     | channelSendStatement
@@ -170,8 +170,8 @@ assignmentOperator
     | '**='
     ;
 
-outCaptureDeclaration
-    : IDENTIFIER IDENTIFIER (',' IDENTIFIER)* ','?
+outAssignment
+    : IDENTIFIER IDENTIFIER assignmentOperator expression
     ;
 
 assignmentTarget

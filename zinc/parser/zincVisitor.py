@@ -164,8 +164,8 @@ class zincVisitor(ParseTreeVisitor):
         return self.visitChildren(ctx)
 
 
-    # Visit a parse tree produced by zincParser#outCaptureDeclaration.
-    def visitOutCaptureDeclaration(self, ctx:zincParser.OutCaptureDeclarationContext):
+    # Visit a parse tree produced by zincParser#outAssignment.
+    def visitOutAssignment(self, ctx:zincParser.OutAssignmentContext):
         return self.visitChildren(ctx)
 
 

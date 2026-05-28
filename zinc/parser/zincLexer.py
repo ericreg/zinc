@@ -380,46 +380,46 @@ class zincLexer(Lexer):
     modeNames = [ "DEFAULT_MODE" ]
 
     literalNames = [ "<INVALID>",
-            "'import'", "'as'", "'#['", "'+='", "'-='", "'*='", "'/='",
-            "'%='", "'**='", "'**'", "'use'", "'struct'", "'enum'", "'const'",
-            "'fn'", "'async'", "'await'", "'if'", "'else'", "'for'", "'in'",
-            "'while'", "'loop'", "'match'", "'return'", "'break'", "'continue'",
-            "'true'", "'false'", "'nil'", "'and'", "'or'", "'not'", "'self'",
-            "'select'", "'case'", "'default'", "'spawn'", "'type'", "'try'",
-            "'fail'", "'Ok'", "'Err'", "'Some'", "'None'", "'+'", "'-'",
-            "'*'", "'/'", "'%'", "'<<-'", "'='", "'=='", "'!='", "'<-'",
-            "'<'", "'<='", "'>'", "'>='", "'&&'", "'||'", "'!'", "'..'",
-            "'..='", "'=>'", "'->'", "'::'", "'.'", "','", "':'", "';'",
+            "'import'", "'as'", "'#['", "'+='", "'-='", "'*='", "'/='", 
+            "'%='", "'**='", "'**'", "'use'", "'struct'", "'enum'", "'const'", 
+            "'fn'", "'async'", "'await'", "'if'", "'else'", "'for'", "'in'", 
+            "'while'", "'loop'", "'match'", "'return'", "'break'", "'continue'", 
+            "'true'", "'false'", "'nil'", "'and'", "'or'", "'not'", "'self'", 
+            "'select'", "'case'", "'default'", "'spawn'", "'type'", "'try'", 
+            "'fail'", "'Ok'", "'Err'", "'Some'", "'None'", "'+'", "'-'", 
+            "'*'", "'/'", "'%'", "'<<-'", "'='", "'=='", "'!='", "'<-'", 
+            "'<'", "'<='", "'>'", "'>='", "'&&'", "'||'", "'!'", "'..'", 
+            "'..='", "'=>'", "'->'", "'::'", "'.'", "','", "':'", "';'", 
             "'('", "')'", "'{'", "'}'", "'['", "']'", "'|'", "'_'" ]
 
     symbolicNames = [ "<INVALID>",
-            "USE", "STRUCT", "ENUM", "CONST", "FN", "ASYNC", "AWAIT", "IF",
-            "ELSE", "FOR", "IN", "WHILE", "LOOP", "MATCH", "RETURN", "BREAK",
-            "CONTINUE", "TRUE", "FALSE", "NIL", "AND", "OR", "NOT", "SELF",
-            "SELECT", "CASE", "DEFAULT", "SPAWN", "TYPE_KW", "TRY", "FAIL",
-            "OK", "ERR", "SOME", "NONE", "FLOAT", "INTEGER", "STRING", "IDENTIFIER",
-            "PLUS", "MINUS", "STAR", "SLASH", "PERCENT", "REMOVED_SUPER_ASSIGN",
-            "EQ", "EQEQ", "NEQ", "LARROW", "LT", "LE", "GT", "GE", "AMPAMP",
-            "PIPEPIPE", "BANG", "DOTDOT", "DOTDOTEQ", "ARROW", "RARROW",
-            "COLONCOLON", "DOT", "COMMA", "COLON", "SEMI", "LPAREN", "RPAREN",
-            "LBRACE", "RBRACE", "LBRACK", "RBRACK", "PIPE", "UNDERSCORE",
+            "USE", "STRUCT", "ENUM", "CONST", "FN", "ASYNC", "AWAIT", "IF", 
+            "ELSE", "FOR", "IN", "WHILE", "LOOP", "MATCH", "RETURN", "BREAK", 
+            "CONTINUE", "TRUE", "FALSE", "NIL", "AND", "OR", "NOT", "SELF", 
+            "SELECT", "CASE", "DEFAULT", "SPAWN", "TYPE_KW", "TRY", "FAIL", 
+            "OK", "ERR", "SOME", "NONE", "FLOAT", "INTEGER", "STRING", "IDENTIFIER", 
+            "PLUS", "MINUS", "STAR", "SLASH", "PERCENT", "REMOVED_SUPER_ASSIGN", 
+            "EQ", "EQEQ", "NEQ", "LARROW", "LT", "LE", "GT", "GE", "AMPAMP", 
+            "PIPEPIPE", "BANG", "DOTDOT", "DOTDOTEQ", "ARROW", "RARROW", 
+            "COLONCOLON", "DOT", "COMMA", "COLON", "SEMI", "LPAREN", "RPAREN", 
+            "LBRACE", "RBRACE", "LBRACK", "RBRACK", "PIPE", "UNDERSCORE", 
             "WS", "LINE_COMMENT", "BLOCK_COMMENT" ]
 
-    ruleNames = [ "T__0", "T__1", "T__2", "T__3", "T__4", "T__5", "T__6",
-                  "T__7", "T__8", "T__9", "USE", "STRUCT", "ENUM", "CONST",
-                  "FN", "ASYNC", "AWAIT", "IF", "ELSE", "FOR", "IN", "WHILE",
-                  "LOOP", "MATCH", "RETURN", "BREAK", "CONTINUE", "TRUE",
-                  "FALSE", "NIL", "AND", "OR", "NOT", "SELF", "SELECT",
-                  "CASE", "DEFAULT", "SPAWN", "TYPE_KW", "TRY", "FAIL",
-                  "OK", "ERR", "SOME", "NONE", "FLOAT", "INTEGER", "STRING",
-                  "EscapeSequence", "HexDigit", "DecLiteral", "BinLiteral",
-                  "OctLiteral", "HexLiteral", "IntegerSuffix", "FloatSuffix",
-                  "FloatExponent", "IDENTIFIER", "PLUS", "MINUS", "STAR",
-                  "SLASH", "PERCENT", "REMOVED_SUPER_ASSIGN", "EQ", "EQEQ",
-                  "NEQ", "LARROW", "LT", "LE", "GT", "GE", "AMPAMP", "PIPEPIPE",
-                  "BANG", "DOTDOT", "DOTDOTEQ", "ARROW", "RARROW", "COLONCOLON",
-                  "DOT", "COMMA", "COLON", "SEMI", "LPAREN", "RPAREN", "LBRACE",
-                  "RBRACE", "LBRACK", "RBRACK", "PIPE", "UNDERSCORE", "WS",
+    ruleNames = [ "T__0", "T__1", "T__2", "T__3", "T__4", "T__5", "T__6", 
+                  "T__7", "T__8", "T__9", "USE", "STRUCT", "ENUM", "CONST", 
+                  "FN", "ASYNC", "AWAIT", "IF", "ELSE", "FOR", "IN", "WHILE", 
+                  "LOOP", "MATCH", "RETURN", "BREAK", "CONTINUE", "TRUE", 
+                  "FALSE", "NIL", "AND", "OR", "NOT", "SELF", "SELECT", 
+                  "CASE", "DEFAULT", "SPAWN", "TYPE_KW", "TRY", "FAIL", 
+                  "OK", "ERR", "SOME", "NONE", "FLOAT", "INTEGER", "STRING", 
+                  "EscapeSequence", "HexDigit", "DecLiteral", "BinLiteral", 
+                  "OctLiteral", "HexLiteral", "IntegerSuffix", "FloatSuffix", 
+                  "FloatExponent", "IDENTIFIER", "PLUS", "MINUS", "STAR", 
+                  "SLASH", "PERCENT", "REMOVED_SUPER_ASSIGN", "EQ", "EQEQ", 
+                  "NEQ", "LARROW", "LT", "LE", "GT", "GE", "AMPAMP", "PIPEPIPE", 
+                  "BANG", "DOTDOT", "DOTDOTEQ", "ARROW", "RARROW", "COLONCOLON", 
+                  "DOT", "COMMA", "COLON", "SEMI", "LPAREN", "RPAREN", "LBRACE", 
+                  "RBRACE", "LBRACK", "RBRACK", "PIPE", "UNDERSCORE", "WS", 
                   "LINE_COMMENT", "BLOCK_COMMENT" ]
 
     grammarFileName = "zinc.g4"
@@ -446,3 +446,6 @@ class zincLexer(Lexer):
     def FLOAT_sempred(self, localctx:RuleContext, predIndex:int):
             if predIndex == 0:
                 return self._input.LA(1) != ord('.') and self._input.LA(1) != ord('_') and not (ord('0') <= self._input.LA(1) <= ord('9')) and not (ord('A') <= self._input.LA(1) <= ord('Z')) and not (ord('a') <= self._input.LA(1) <= ord('z'))
+         
+
+

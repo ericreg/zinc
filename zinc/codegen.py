@@ -317,6 +317,8 @@ class CodeGenVisitor(zincVisitor):
             expressions.append(stmt_ctx.typedVariableAssignment().expression())
         if stmt_ctx.variableAssignment():
             expressions.append(stmt_ctx.variableAssignment().expression())
+        if stmt_ctx.outAssignment():
+            expressions.append(stmt_ctx.outAssignment().expression())
         if stmt_ctx.expressionStatement():
             expressions.append(stmt_ctx.expressionStatement().expression())
         if stmt_ctx.returnStatement() and stmt_ctx.returnStatement().expression():
@@ -4122,9 +4124,55 @@ class CodeGenVisitor(zincVisitor):
         lines.append("})()")
         return "\n".join(lines)
 
-    def visitOutCaptureDeclaration(self, ctx: ZincParser.OutCaptureDeclarationContext) -> str:
-        """The `out` marker is semantic-only; assignments perform the writes."""
-        return ""
+    def visitOutAssignment(self, ctx: ZincParser.OutAssignmentContext) -> str:
+        """Render an explicit write through a captured outer binding cell."""
+        tokens = list(ctx.getTokens(ZincParser.IDENTIFIER))
+        if len(tokens) < 2:
+            return 'panic!("invalid out assignment");'
+        target_token = tokens[1]
+        name = target_token.getText()
+        symbol = self.symbols.lookup_by_interval(
+            target_token.getSourceInterval(), self._current_function
+        ) or self._lookup_captured_ref_symbol(name)
+        storage_name = self._symbol_storage_unique_name(symbol)
+        if symbol is None or storage_name is None:
+            return 'panic!("missing captured binding");'
+
+        assignment_op = ctx.assignmentOperator().getText()
+        expr = ctx.expression()
+        value = self._visit_expression_with_expectations(
+            expr,
+            expected_type=symbol.resolved_type,
+            dict_info=symbol.dict_info,
+            set_info=symbol.set_info,
+            tuple_info=symbol.tuple_info,
+            callable_info=symbol.callable_info,
+            coerce_scalar=False,
+        )
+        if assignment_op == "=":
+            value = self._coerce_numeric_rhs_for_target(value, expr, symbol.resolved_type, symbol.exact_type)
+            temp_name = self._staged_temp_name("captured_write", ctx)
+            return f"let {temp_name} = {value};\n*{self._rust_binding_name(storage_name)}.lock().unwrap() = {temp_name};"
+
+        if assignment_op != "**=":
+            value = self._coerce_numeric_rhs_for_target(value, expr, symbol.resolved_type, symbol.exact_type)
+        rust_target = self._rust_binding_name(storage_name)
+        value_temp = self._staged_temp_name("captured_compound", expr)
+        lines = [f"let {value_temp} = {value};"]
+        if assignment_op == "**=":
+            guard_name = self._staged_temp_name("captured_guard", ctx)
+            power_value = self._render_power_assignment_expr(f"*{guard_name}", symbol.resolved_type, symbol.exact_type, value_temp, expr)
+            lines.extend(
+                [
+                    "{",
+                    f"    let mut {guard_name} = {rust_target}.lock().unwrap();",
+                    f"    *{guard_name} = {power_value};",
+                    "}",
+                ]
+            )
+            return "\n".join(lines)
+        lines.append(f"*{rust_target}.lock().unwrap() {assignment_op} {value_temp};")
+        return "\n".join(lines)
 
     def visitTypedVariableAssignment(self, ctx: ZincParser.TypedVariableAssignmentContext) -> str:
         """Visit a typed local declaration."""
