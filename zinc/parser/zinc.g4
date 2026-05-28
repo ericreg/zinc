@@ -118,7 +118,7 @@ asyncFunctionDeclaration
     ;
 
 parameterList
-    : parameter (',' parameter)*
+    : parameter (',' parameter)* ','?
     ;
 
 parameter
@@ -139,7 +139,7 @@ type
     ;
 
 typeList
-    : type (',' type)*
+    : type (',' type)* ','?
     ;
 
 tupleType
@@ -171,7 +171,7 @@ assignmentOperator
     ;
 
 outCaptureDeclaration
-    : IDENTIFIER IDENTIFIER (',' IDENTIFIER)*
+    : IDENTIFIER IDENTIFIER (',' IDENTIFIER)* ','?
     ;
 
 assignmentTarget
@@ -227,14 +227,14 @@ pattern
     | IDENTIFIER                                // binding pattern
     | enumVariantPattern                        // enum variant pattern
     | rangePattern                              // range pattern (e.g., 0..17)
-    | '(' pattern (',' pattern)* ')'            // tuple pattern
+    | '(' pattern (',' pattern)* ','? ')'       // tuple pattern
     | IDENTIFIER '{' fieldPattern (',' fieldPattern)* ','? '}'  // struct pattern
     ;
 
 resultOptionPattern
-    : 'Ok' '(' pattern ')'
-    | 'Err' '(' pattern ')'
-    | 'Some' '(' pattern ')'
+    : 'Ok' '(' pattern ','? ')'
+    | 'Err' '(' pattern ','? ')'
+    | 'Some' '(' pattern ','? ')'
     | 'None'
     ;
 
@@ -355,9 +355,9 @@ typeQueryType
     ;
 
 builtinResultOptionConstructor
-    : 'Ok' '(' expression ')'
-    | 'Err' '(' expression ')'
-    | 'Some' '(' expression ')'
+    : 'Ok' '(' expression ','? ')'
+    | 'Err' '(' expression ','? ')'
+    | 'Some' '(' expression ','? ')'
     | 'None'
     ;
 
@@ -438,7 +438,7 @@ fieldSpread
     ;
 
 argumentList
-    : argument (',' argument)*
+    : argument (',' argument)* ','?
     ;
 
 argument
