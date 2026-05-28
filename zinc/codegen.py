@@ -318,8 +318,6 @@ class CodeGenVisitor(zincVisitor):
             expressions.append(stmt_ctx.expressionStatement().expression())
         if stmt_ctx.returnStatement() and stmt_ctx.returnStatement().expression():
             expressions.append(stmt_ctx.returnStatement().expression())
-        if stmt_ctx.superAssignment():
-            expressions.append(stmt_ctx.superAssignment().expression())
         if stmt_ctx.channelSendStatement():
             expressions.append(stmt_ctx.channelSendStatement().expression())
         if stmt_ctx.ifStatement():
@@ -2791,16 +2789,17 @@ class CodeGenVisitor(zincVisitor):
             self._declared_vars.add(name)
             return f"let {name} = {value};"
 
-        captured_target = symbol.unique_name in self._captured_binding_names
-        rendered_target = self._rust_binding_name(symbol.unique_name) if captured_target else name
-        if captured_target and not (symbol.is_shadow or name not in self._declared_vars):
+        captured_target = self._symbol_is_captured_cell(symbol)
+        storage_name = self._symbol_storage_unique_name(symbol) if captured_target else None
+        rendered_target = self._rust_binding_name(storage_name) if storage_name is not None else name
+        if captured_target and (symbol.is_captured_ref or not (symbol.is_shadow or name not in self._declared_vars)):
             return f"*{rendered_target}.lock().unwrap() = {value};"
 
         if symbol.is_shadow or name not in self._declared_vars:
             self._declared_vars.add(name)
             needs_mut = symbol.is_mutated or name in self._mut_struct_vars
             mut_prefix = "mut " if needs_mut else ""
-            if captured_target:
+            if storage_name in self._captured_binding_names:
                 value = f"Arc::new(Mutex::new({value}))"
             if include_type:
                 return f"let {mut_prefix}{rendered_target}: {self._symbol_rust_type(symbol)} = {value};"
@@ -3933,25 +3932,9 @@ class CodeGenVisitor(zincVisitor):
         lines.append("})()")
         return "\n".join(lines)
 
-    def visitSuperAssignment(self, ctx: ZincParser.SuperAssignmentContext) -> str:
-        """Write through a captured outer binding cell."""
-        symbol = self.symbols.lookup_by_interval(
-            ctx.IDENTIFIER().getSourceInterval(), self._current_function
-        ) or self._lookup_captured_ref_symbol(ctx.IDENTIFIER().getText())
-        storage_name = self._symbol_storage_unique_name(symbol)
-        value = self._visit_expression_with_expectations(
-            ctx.expression(),
-            expected_type=symbol.resolved_type if symbol else None,
-            dict_info=symbol.dict_info if symbol else None,
-            set_info=symbol.set_info if symbol else None,
-            tuple_info=symbol.tuple_info if symbol else None,
-            callable_info=symbol.callable_info if symbol else None,
-            coerce_scalar=False,
-        )
-        if storage_name is None:
-            return 'panic!("missing captured binding");'
-        temp_name = self._staged_temp_name("captured_write", ctx)
-        return f"let {temp_name} = {value};\n*{self._rust_binding_name(storage_name)}.lock().unwrap() = {temp_name};"
+    def visitOutCaptureDeclaration(self, ctx: ZincParser.OutCaptureDeclarationContext) -> str:
+        """The `out` marker is semantic-only; assignments perform the writes."""
+        return ""
 
     def visitTypedVariableAssignment(self, ctx: ZincParser.TypedVariableAssignmentContext) -> str:
         """Visit a typed local declaration."""
@@ -4096,9 +4079,10 @@ class CodeGenVisitor(zincVisitor):
                 else:
                     value = f"Rc::new(RefCell::new({value}))"
 
-        captured_target = target_symbol is not None and target_symbol.unique_name in self._captured_binding_names
-        rendered_target = self._rust_binding_name(target_symbol.unique_name) if captured_target and target_symbol is not None else target
-        if captured_target:
+        captured_target = target_symbol is not None and self._symbol_is_captured_cell(target_symbol)
+        storage_name = self._symbol_storage_unique_name(target_symbol) if captured_target and target_symbol is not None else None
+        rendered_target = self._rust_binding_name(storage_name) if storage_name is not None else target
+        if storage_name in self._captured_binding_names:
             value = f"Arc::new(Mutex::new({value}))" if (target_symbol.is_shadow or target not in self._declared_vars) else value
 
         if target_ctx.tupleAssignmentTarget():
@@ -4161,9 +4145,14 @@ class CodeGenVisitor(zincVisitor):
                 # Fallback - shouldn't happen
                 return f"let {var_name} = {value};"
 
-            if symbol.unique_name in self._captured_binding_names and not (symbol.is_shadow or var_name not in self._declared_vars):
+            if self._symbol_is_captured_cell(symbol) and (
+                symbol.is_captured_ref or not (symbol.is_shadow or var_name not in self._declared_vars)
+            ):
+                storage_name = self._symbol_storage_unique_name(symbol)
+                if storage_name is None:
+                    return 'panic!("missing captured binding");'
                 temp_name = self._staged_temp_name("captured_write", ctx)
-                return f"let {temp_name} = {value};\n*{self._rust_binding_name(symbol.unique_name)}.lock().unwrap() = {temp_name};"
+                return f"let {temp_name} = {value};\n*{self._rust_binding_name(storage_name)}.lock().unwrap() = {temp_name};"
 
             if symbol.is_shadow or var_name not in self._declared_vars:
                 # First declaration OR shadow (type change) -> use let
@@ -4216,10 +4205,27 @@ class CodeGenVisitor(zincVisitor):
         if assignment_op != "**=":
             value = self._coerce_numeric_rhs_for_target(value, expr, target_type, target_exact_type)
 
-        if target_ctx.IDENTIFIER() and target_symbol is not None:
-            target = (
-                self._rust_binding_name(target_symbol.unique_name) if target_symbol.unique_name in self._captured_binding_names else target
-            )
+        if target_ctx.IDENTIFIER() and target_symbol is not None and self._symbol_is_captured_cell(target_symbol):
+            storage_name = self._symbol_storage_unique_name(target_symbol)
+            if storage_name is None:
+                return 'panic!("missing captured binding");'
+            rust_target = self._rust_binding_name(storage_name)
+            value_temp = self._staged_temp_name("captured_compound", expr)
+            lines = [f"let {value_temp} = {value};"]
+            if assignment_op == "**=":
+                guard_name = self._staged_temp_name("captured_guard", target_ctx)
+                power_value = self._render_power_assignment_expr(f"*{guard_name}", target_type, target_exact_type, value_temp, expr)
+                lines.extend(
+                    [
+                        "{",
+                        f"    let mut {guard_name} = {rust_target}.lock().unwrap();",
+                        f"    *{guard_name} = {power_value};",
+                        "}",
+                    ]
+                )
+                return "\n".join(lines)
+            lines.append(f"*{rust_target}.lock().unwrap() {assignment_op} {value_temp};")
+            return "\n".join(lines)
 
         if assignment_op == "**=":
             power_value = self._render_power_assignment_expr(target, target_type, target_exact_type, value, expr)

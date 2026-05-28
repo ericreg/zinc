@@ -483,6 +483,12 @@
           "match": "\\b(?:if|else|for|in|while|loop|match|return|break|continue|try|fail)\\b"
         },
         {
+          "match": "^(\\s*)(out)\\b",
+          "captures": {
+            "2": { "name": "keyword.control.out.zinc" }
+          }
+        },
+        {
           "name": "keyword.other.concurrency.zinc",
           "match": "\\b(?:spawn|select|case|default|await)\\b"
         },
@@ -540,10 +546,6 @@
         {
           "name": "keyword.operator.channel.zinc",
           "match": "<-"
-        },
-        {
-          "name": "keyword.operator.super-assign.zinc",
-          "match": "<<-"
         },
         {
           "name": "keyword.operator.range.zinc",

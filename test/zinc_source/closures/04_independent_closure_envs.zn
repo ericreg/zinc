@@ -1,7 +1,8 @@
 fn make_counter(start) {
     x = start
     return fn() {
-        x <<- x + 1
+        out x
+        x += 1
         return x
     }
 }
@@ -14,4 +15,3 @@ fn main() {
     print(first())
     print(second())
 }
-

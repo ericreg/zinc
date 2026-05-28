@@ -1,6 +1,5 @@
-// expected-error: '<<-' expects a captured outer variable 'x'
+// expected-error: 'out x' expects a captured outer variable 'x'
 fn main() {
     x = 1
-    x <<- 2
+    out x
 }
-

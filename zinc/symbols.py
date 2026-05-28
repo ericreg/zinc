@@ -123,6 +123,7 @@ class Symbol:
     binding_unique_name: str | None = None  # For temps/captured refs: the underlying binding
     is_captured_binding: bool = False  # True when this binding is shared with one or more closures
     is_captured_ref: bool = False  # True for closure-local aliases of captured outer bindings
+    is_out_capture: bool = False  # True when a closure marks this captured ref writable with `out`
     constant_value: object | None = None
     line_num: int = 0
 
@@ -5917,9 +5918,11 @@ class SymbolTableVisitor(zincVisitor):
                 if node.IDENTIFIER():
                     record_capture(node.IDENTIFIER().getText())
                 return
-            if isinstance(node, ZincParser.SuperAssignmentContext):
-                record_capture(node.IDENTIFIER().getText())
-                walk(node.expression())
+            if isinstance(node, ZincParser.OutCaptureDeclarationContext):
+                tokens = list(node.getTokens(ZincParser.IDENTIFIER))
+                if tokens and tokens[0].getText() == "out":
+                    for token in tokens[1:]:
+                        record_capture(token.getText())
                 return
             if isinstance(node, ZincParser.FunctionDeclarationContext):
                 return
@@ -9283,6 +9286,45 @@ class SymbolTableVisitor(zincVisitor):
             actual_option=self._copy_option_info(info.option_info),
         )
 
+    def _define_assignment_temp_for_binding(
+        self,
+        symbol: Symbol,
+        interval: tuple[int, int],
+        *,
+        exact_type: str | None = None,
+    ) -> Symbol:
+        """Define an assignment-target temp that preserves binding/capture metadata."""
+        temp = self.symbols.define_temp(
+            resolved_type=symbol.resolved_type,
+            interval=interval,
+            exact_type=exact_type if exact_type is not None else symbol.declared_exact_type or symbol.exact_type,
+        )
+        temp.element_type = symbol.element_type
+        temp.element_exact_type = symbol.element_exact_type
+        temp.channel_info = self._copy_channel_info(symbol.channel_info)
+        temp.dict_info = self._copy_dict_info(symbol.dict_info)
+        temp.set_info = self._copy_set_info(symbol.set_info)
+        temp.tuple_info = self._copy_tuple_info(symbol.tuple_info)
+        temp.callable_info = self._copy_callable_info(symbol.callable_info)
+        temp.anonymous_struct_info = self._copy_anonymous_struct_info(symbol.anonymous_struct_info)
+        temp.result_info = self._copy_result_info(symbol.result_info)
+        temp.option_info = self._copy_option_info(symbol.option_info)
+        temp.element_struct_qualified_name = symbol.element_struct_qualified_name
+        temp.element_anonymous_struct_info = self._copy_anonymous_struct_info(symbol.element_anonymous_struct_info)
+        temp.binding_unique_name = symbol.unique_name
+        temp.is_captured_binding = symbol.is_captured_binding
+        temp.is_captured_ref = symbol.is_captured_ref
+        temp.is_out_capture = symbol.is_out_capture
+        struct_qualified_name = self._struct_qualified_name_for_symbol(symbol)
+        if struct_qualified_name is not None:
+            self._struct_symbol_bindings[temp.unique_name] = struct_qualified_name
+        return temp
+
+    def _require_writable_capture(self, symbol: Symbol, name: str) -> None:
+        """Ensure a captured ref has been declared writable with `out name`."""
+        if symbol.is_captured_ref and not symbol.is_out_capture:
+            raise ZincTypeError(f"assignment to captured outer variable '{name}' requires 'out {name}'")
+
     def _define_broadcast_local_binding(
         self,
         token,
@@ -9295,7 +9337,13 @@ class SymbolTableVisitor(zincVisitor):
         var_name = token.getText()
         existing = self.symbols.lookup_by_id(var_name)
         if existing is not None and existing.is_captured_ref:
-            raise ZincTypeError(f"assignment to captured outer variable '{var_name}' requires '<<-'")
+            self._require_writable_capture(existing, var_name)
+            if not self._binding_accepts_value_info(existing, expr_info, expr_ctx, expr_symbol):
+                raise ZincTypeError(f"captured outer variable '{var_name}' cannot change type after capture")
+            existing.is_mutated = True
+            existing.constant_value = None
+            self._define_assignment_temp_for_binding(existing, token.getSourceInterval())
+            return
 
         if existing is not None and existing.is_captured_binding and not self._binding_accepts_value_info(
             existing,
@@ -9624,8 +9672,6 @@ class SymbolTableVisitor(zincVisitor):
         if target.IDENTIFIER():
             var_name = target.IDENTIFIER().getText()
             existing = self.symbols.lookup_by_id(var_name)
-            if existing is not None and existing.is_captured_ref:
-                raise ZincTypeError(f"assignment to captured outer variable '{var_name}' requires '<<-'")
 
             expr_symbol = self._expr_symbol(ctx.expression())
             expr_info = self._value_info_from_symbol(expr_type, expr_symbol)
@@ -9633,6 +9679,15 @@ class SymbolTableVisitor(zincVisitor):
                 if existing is None or existing.resolved_type not in {BaseType.RESULT, BaseType.OPTION}:
                     expr_info = self._unwrap_try_value(ctx.expression(), expr_info)
                     expr_type = expr_info.base_type
+
+            if existing is not None and existing.is_captured_ref:
+                self._require_writable_capture(existing, var_name)
+                if not self._binding_accepts_value_info(existing, expr_info, ctx.expression(), expr_symbol):
+                    raise ZincTypeError(f"captured outer variable '{var_name}' cannot change type after capture")
+                existing.is_mutated = True
+                existing.constant_value = None
+                self._define_assignment_temp_for_binding(existing, target.getSourceInterval())
+                return
 
             # Check if this is a chan() call - track channel info
             if expr_type == BaseType.CHANNEL and self._is_channel_constructor_call(ctx.expression()):
@@ -10168,8 +10223,7 @@ class SymbolTableVisitor(zincVisitor):
             existing = self.symbols.lookup_by_id(var_name)
             if existing is None:
                 raise ZincTypeError(f"operator '{assignment_op}' requires existing variable '{var_name}'")
-            if existing.is_captured_ref:
-                raise ZincTypeError(f"assignment to captured outer variable '{var_name}' requires '<<-'")
+            self._require_writable_capture(existing, var_name)
             if existing.resolved_type not in {BaseType.INTEGER, BaseType.FLOAT}:
                 raise ZincTypeError(f"operator '{assignment_op}' requires a numeric target")
             if existing.resolved_type == BaseType.INTEGER and expr_type == BaseType.FLOAT:
@@ -10189,11 +10243,7 @@ class SymbolTableVisitor(zincVisitor):
 
             existing.is_mutated = True
             existing.constant_value = None
-            self.symbols.define_temp(
-                resolved_type=existing.resolved_type,
-                interval=target.getSourceInterval(),
-                exact_type=existing.exact_type,
-            )
+            self._define_assignment_temp_for_binding(existing, target.getSourceInterval())
             return
 
         self.symbols.define_temp(
@@ -10864,36 +10914,23 @@ class SymbolTableVisitor(zincVisitor):
         self._current_return_exact_type = self._exact_type_name_from_type_ctx(func_ctx.type_())
         self._current_return_result_info = self._copy_result_info(annotated_result_info)
 
-    def visitSuperAssignment(self, ctx: ZincParser.SuperAssignmentContext) -> None:
-        """Visit closure super-assignment to a captured outer binding."""
-        name = ctx.IDENTIFIER().getText()
-        symbol = self.symbols.lookup_by_id(name)
-        if symbol is None or not symbol.is_captured_ref:
-            raise ZincTypeError(f"'<<-' expects a captured outer variable '{name}'")
-        expr_type = self.visit(ctx.expression())
-        expr_symbol = self._expr_symbol(ctx.expression())
-        if not self._assignment_metadata_compatible(
-            symbol.resolved_type,
-            expr_type,
-            expected_dict=symbol.dict_info,
-            actual_dict=self._copy_dict_info(expr_symbol.dict_info) if expr_symbol else None,
-            expected_set=symbol.set_info,
-            actual_set=self._copy_set_info(expr_symbol.set_info) if expr_symbol else None,
-            expected_tuple=symbol.tuple_info,
-            actual_tuple=self._copy_tuple_info(expr_symbol.tuple_info) if expr_symbol else None,
-            expected_callable=symbol.callable_info,
-            actual_callable=self._copy_callable_info(expr_symbol.callable_info) if expr_symbol else None,
-            expected_struct_qualified_name=self._struct_qualified_name_for_symbol(symbol),
-            actual_struct_qualified_name=self._struct_qualified_name_for_symbol(expr_symbol),
-            expected_anonymous_struct_info=symbol.anonymous_struct_info,
-            actual_anonymous_struct_info=self._copy_anonymous_struct_info(expr_symbol.anonymous_struct_info if expr_symbol else None),
-        ):
-            raise ZincTypeError(f"captured outer variable '{name}' cannot change type after capture")
-        symbol.is_mutated = True
-        self.symbols.define_temp(
-            resolved_type=symbol.resolved_type,
-            interval=ctx.getSourceInterval(),
-        )
+    def visitOutCaptureDeclaration(self, ctx: ZincParser.OutCaptureDeclarationContext) -> None:
+        """Mark captured outer bindings writable in this closure."""
+        tokens = list(ctx.getTokens(ZincParser.IDENTIFIER))
+        if not tokens or tokens[0].getText() != "out":
+            statement = ctx.getText()
+            raise ZincTypeError(f"invalid statement '{statement}'; did you mean 'out {statement}'?")
+
+        seen: set[str] = set()
+        for token in tokens[1:]:
+            name = token.getText()
+            if name in seen:
+                raise ZincTypeError(f"duplicate out variable '{name}'")
+            seen.add(name)
+            symbol = self.symbols.lookup_by_id(name)
+            if symbol is None or not symbol.is_captured_ref:
+                raise ZincTypeError(f"'out {name}' expects a captured outer variable '{name}'")
+            symbol.is_out_capture = True
 
     def visitSelectStatement(self, ctx: ZincParser.SelectStatementContext) -> None:
         """Visit a select statement and validate case structure."""

@@ -29,8 +29,8 @@ def parse_program(source: str) -> tuple[zincParser.ProgramContext, list[str]]:
     return tree, listener.messages
 
 
-def test_closure_reads_super_assignment_and_nested_functions_parse() -> None:
-    """Closures can read outers, use <<-, and declare nested functions."""
+def test_closure_reads_out_capture_and_nested_functions_parse() -> None:
+    """Closures can read outers, mark out captures, and declare nested functions."""
     tree, errors = parse_program(
         """
         fn main() {
@@ -41,7 +41,8 @@ def test_closure_reads_super_assignment_and_nested_functions_parse() -> None:
             }
 
             f = fn() {
-                x <<- x + 1
+                out x
+                x = x + 1
                 return add(x)
             }
         }
@@ -53,7 +54,7 @@ def test_closure_reads_super_assignment_and_nested_functions_parse() -> None:
     nested_decl = main_block.statement(1).functionDeclaration()
     lambda_block = main_block.statement(2).variableAssignment().expression().lambdaExpression().block()
     assert nested_decl.IDENTIFIER().getText() == "add"
-    assert lambda_block.statement(0).superAssignment().IDENTIFIER().getText() == "x"
+    assert lambda_block.statement(0).outCaptureDeclaration().IDENTIFIER(1).getText() == "x"
 
 
 def test_nested_async_function_and_await_parse() -> None:
@@ -77,14 +78,14 @@ def test_nested_async_function_and_await_parse() -> None:
     assert isinstance(await_expr, zincParser.AwaitExprContext)
 
 
-def test_super_assignment_requires_bare_identifier_target() -> None:
-    """Member/index targets are not valid <<- syntax."""
+def test_old_super_assignment_operator_is_rejected() -> None:
+    """The old closure assignment operator is no longer accepted."""
     _, errors = parse_program(
         """
         fn main() {
             values = [1]
             f = fn() {
-                values[0] <<- 2
+                values <<- 2
             }
         }
         """

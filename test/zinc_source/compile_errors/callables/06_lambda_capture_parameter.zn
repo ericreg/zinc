@@ -1,4 +1,4 @@
-// expected-error: assignment to captured outer variable 'x' requires '<<-'
+// expected-error: assignment to captured outer variable 'x' requires 'out x'
 fn wrap(x) {
     f = fn() {
         x = x + 1

@@ -257,12 +257,12 @@ class zincListener(ParseTreeListener):
     def exitAssignmentOperator(self, ctx: zincParser.AssignmentOperatorContext):
         pass
 
-    # Enter a parse tree produced by zincParser#superAssignment.
-    def enterSuperAssignment(self, ctx: zincParser.SuperAssignmentContext):
+    # Enter a parse tree produced by zincParser#outCaptureDeclaration.
+    def enterOutCaptureDeclaration(self, ctx: zincParser.OutCaptureDeclarationContext):
         pass
 
-    # Exit a parse tree produced by zincParser#superAssignment.
-    def exitSuperAssignment(self, ctx: zincParser.SuperAssignmentContext):
+    # Exit a parse tree produced by zincParser#outCaptureDeclaration.
+    def exitOutCaptureDeclaration(self, ctx: zincParser.OutCaptureDeclarationContext):
         pass
 
     # Enter a parse tree produced by zincParser#assignmentTarget.

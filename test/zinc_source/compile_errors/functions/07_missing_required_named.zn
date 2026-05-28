@@ -1,0 +1,9 @@
+// expected-error: missing required argument 'x'
+
+fn add(x, y = 2) {
+    return x + y
+}
+
+fn main() {
+    add(y=3)
+}

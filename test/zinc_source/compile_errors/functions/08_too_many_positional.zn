@@ -1,0 +1,9 @@
+// expected-error: got too many arguments
+
+fn add(x, y = 2) {
+    return x + y
+}
+
+fn main() {
+    add(1, 2, 3)
+}

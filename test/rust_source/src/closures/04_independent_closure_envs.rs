@@ -233,8 +233,8 @@ impl __ZincCallable_Unit_to_i64 {
 
 fn closures_04_independent_closure_envs____lambda_closures_04_independent_closure_envs__make_counter_i64_10_21(__env: __ZincClosureEnv_closures_04_independent_closure_envs___lambda_closures_04_independent_closure_envs__make_counter_i64_10_21) -> i64 {
     let __zv_closures_04_independent_closure_envs____lambda_closures_04_independent_closure_envs__make_counter_i64_10_21_x_i64 = __env.x.clone();
-    let __zinc_captured_write_14_18 = (*__zv_closures_04_independent_closure_envs____lambda_closures_04_independent_closure_envs__make_counter_i64_10_21_x_i64.lock().unwrap() + 1);
-    *__zv_closures_04_independent_closure_envs____lambda_closures_04_independent_closure_envs__make_counter_i64_10_21_x_i64.lock().unwrap() = __zinc_captured_write_14_18;
+    let __zinc_captured_compound_18_18 = 1;
+    *__zv_closures_04_independent_closure_envs____lambda_closures_04_independent_closure_envs__make_counter_i64_10_21_x_i64.lock().unwrap() += __zinc_captured_compound_18_18;
     return *__zv_closures_04_independent_closure_envs____lambda_closures_04_independent_closure_envs__make_counter_i64_10_21_x_i64.lock().unwrap();
 }
 

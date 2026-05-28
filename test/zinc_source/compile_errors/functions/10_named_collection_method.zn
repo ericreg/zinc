@@ -1,0 +1,6 @@
+// expected-error: array\.push\(\) does not accept named arguments
+
+fn main() {
+    values = []
+    values.push(value=1)
+}

@@ -15,7 +15,7 @@ statement
     | enumDeclaration
     | functionDeclaration
     | asyncFunctionDeclaration
-    | superAssignment
+    | outCaptureDeclaration
     | typedVariableAssignment
     | variableAssignment
     | channelSendStatement
@@ -170,8 +170,8 @@ assignmentOperator
     | '**='
     ;
 
-superAssignment
-    : IDENTIFIER '<<-' expression
+outCaptureDeclaration
+    : IDENTIFIER IDENTIFIER (',' IDENTIFIER)*
     ;
 
 assignmentTarget
@@ -573,7 +573,7 @@ MINUS       : '-';
 STAR        : '*';
 SLASH       : '/';
 PERCENT     : '%';
-SUPER_ASSIGN: '<<-';
+REMOVED_SUPER_ASSIGN: '<<-';
 EQ          : '=';
 EQEQ        : '==';
 NEQ         : '!=';

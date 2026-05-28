@@ -1,4 +1,4 @@
-// expected-error: assignment to captured outer variable 'x' requires '<<-'
+// expected-error: assignment to captured outer variable 'x' requires 'out x'
 fn main() {
     x = 1
     f = fn() {

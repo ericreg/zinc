@@ -1,8 +1,7 @@
 # Generated from zinc.g4 by ANTLR 4.13.2
-import sys
-from io import StringIO
-
 from antlr4 import *
+from io import StringIO
+import sys
 
 if sys.version_info[1] > 5:
     from typing import TextIO
@@ -6595,7 +6594,7 @@ class zincLexer(Lexer):
     STAR = 52
     SLASH = 53
     PERCENT = 54
-    SUPER_ASSIGN = 55
+    REMOVED_SUPER_ASSIGN = 55
     EQ = 56
     EQEQ = 57
     NEQ = 58
@@ -6761,7 +6760,7 @@ class zincLexer(Lexer):
         "STAR",
         "SLASH",
         "PERCENT",
-        "SUPER_ASSIGN",
+        "REMOVED_SUPER_ASSIGN",
         "EQ",
         "EQEQ",
         "NEQ",
@@ -6859,7 +6858,7 @@ class zincLexer(Lexer):
         "STAR",
         "SLASH",
         "PERCENT",
-        "SUPER_ASSIGN",
+        "REMOVED_SUPER_ASSIGN",
         "EQ",
         "EQEQ",
         "NEQ",
