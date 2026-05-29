@@ -10,9 +10,11 @@ class RecordingErrorListener(ErrorListener):
     """Collect parser errors without printing them during tests."""
 
     def __init__(self) -> None:
+        """Initialize an empty error list."""
         self.messages: list[str] = []
 
     def syntaxError(self, recognizer, offendingSymbol, line, column, msg, e) -> None:  # noqa: N802
+        """Record one parser syntax error."""
         self.messages.append(f"{line}:{column}: {msg}")
 
 
@@ -166,3 +168,32 @@ def test_bar_lambda_syntax_is_rejected() -> None:
     )
 
     assert errors
+
+
+def test_arrow_lambda_forms_parse() -> None:
+    """Julia-style arrow lambdas parse in expression position."""
+    tree, errors = parse_program(
+        """
+        fn main() {
+            inc = x -> x + 1
+            add = (x, y) -> x + y
+            partial = (x, y: i32) -> x + 1
+            zero = () -> 42
+            curried = x -> y -> x + y
+        }
+        """
+    )
+
+    assert errors == []
+    statements = tree.statement(0).functionDeclaration().block().statement()
+    inc_lambda = statements[0].variableAssignment().expression().lambdaExpression()
+    add_lambda = statements[1].variableAssignment().expression().lambdaExpression()
+    partial_lambda = statements[2].variableAssignment().expression().lambdaExpression()
+    zero_lambda = statements[3].variableAssignment().expression().lambdaExpression()
+    curried_body = statements[4].variableAssignment().expression().lambdaExpression().expression()
+
+    assert inc_lambda.IDENTIFIER().getText() == "x"
+    assert add_lambda.parameterList().getText() == "x,y"
+    assert partial_lambda.parameterList().parameter(1).typeAlternative().getText() == "i32"
+    assert zero_lambda.parameterList() is None
+    assert isinstance(curried_body, zincParser.LambdaExprContext)

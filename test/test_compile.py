@@ -139,6 +139,7 @@ def compile_zinc(source_path: Path) -> str:
         symbol_visitor.lexical_functions,
         symbol_visitor.bound_call_args,
         symbol_visitor.bound_struct_fields,
+        symbol_visitor.callable_call_specialization_map,
     )
     program = codegen.generate()
     return program.render()

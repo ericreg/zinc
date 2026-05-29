@@ -1,0 +1,4 @@
+// expected-error: arrow lambda parameters cannot have defaults
+fn main() {
+    f = (x = 1) -> x
+}

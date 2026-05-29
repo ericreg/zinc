@@ -469,6 +469,8 @@ selectReceiveBinding
 
 lambdaExpression
     : 'fn' '(' parameterList? ')' block
+    | IDENTIFIER '->' expression
+    | '(' parameterList? ')' '->' expression
     ;
 
 // ============================================================================

@@ -1,3 +1,5 @@
+"""Command-line interface for the Zinc compiler."""
+
 import json
 from pathlib import Path
 
@@ -33,6 +35,7 @@ def _compile_pipeline(file: Path):
         symbol_visitor.lexical_functions,
         symbol_visitor.bound_call_args,
         symbol_visitor.bound_struct_fields,
+        symbol_visitor.callable_call_specialization_map,
     )
     return module_graph, atlas, symbols, codegen
 

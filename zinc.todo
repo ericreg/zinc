@@ -24,16 +24,17 @@ Implemented core pillars
 - [x] math operators, +=, *=, -=, etc 
 - [x] default parameters
 - [x] arg matching
+- [x] bitwise operations
 - [x] multiple assignment, x, y, z = 1
+- [x] lambda expressions
 
 - [] decorators
-- [] support for lambda expressions
 - [] iterator stuff such as for i in (1..upper_bound).step_by(2)
-- [x] bitwise operations
+
 
 Currently (possibly forever) unsupported
 ------------------------------------------
-- locking primitives (mutex, semaphore, etc) (use channels)
+- locking primitives (mutex, semaphore, etc) (use channels / lockfree data structures)
 - inheritance (use composition)
 - macros (Do not use the dark arts)
 - traits (Not needed)
@@ -44,13 +45,10 @@ Currently (possibly forever) unsupported
 Highest-priority language gaps
 ------------------------------
 - [ ] Zinc stdlib
-      The language has a solid core, but it still needs a standard library layer
-      to make code generation and user programs feel simpler and more "Python-like".
 
 - more efficient/readable rust code generation
 - write the compilers in Zinc
 - language interop
-
 
 Language ergonomics
 -------------------
@@ -88,8 +86,8 @@ Research / design notes
 -----------------------
 - [ ] Evaluate depending on `fixed-num`
       https://docs.rs/fixed-num/latest/fixed_num/
-
-
+- [ ] Promote type to concurrent lockfree data structures
+      based on usage
 
 
 Benchmarks:
@@ -115,55 +113,9 @@ Measure
 
 Use rust benchmarks to optimize rust codegen
 
-
 Example Applications:
 - raytracing in one weekend
 - cli/ps1 todo app
 - kalman filter
 - webserver
 - math benchmarks
-
-
-
-// x is locked to i32, default value is 10 if not provided
-// y is locked to i32, default value is 10 if not provided
-fn my_func(x: i32 = 10, y: i32 = 10) { 
-}
-
-// x is locked to numeric, default value is 10 if not provided
-// y is locked to numeric, default value is 10 if not provided
-fn my_func(x: numeric = 10,  y: numeric = 10) { 
-}
-
-
-// x has no specified type, if no value is provided then it is i32
-// but if a value is provided we take that type instead
-// y is still locked to i32
-fn my_func(x = 10, y: i32 = 10) {
-}
-
-// named arguments should be allowed via the arg= syntax
-// y is still locked to i32
-a = 34.5
-b = 50.0
-my_func(x=a, y=b)
-
-// the order of args shouldn't matter is all args are names
-my_func(y=b, x=a)
-
-// is equivalent to 
-my_func(x=a, y=b)
-
-
-// unnamed args must always come first
-fn func_2(a, b, c) { }
-
-x = 1
-y = 2
-z = 3
-
-// there are valid
-func_2(x, b=y, c=z)
-
-// this is not
-func_2(c=z, b=y, x)

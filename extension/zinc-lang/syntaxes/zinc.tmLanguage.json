@@ -613,6 +613,10 @@
         {
           "name": "meta.lambda.zinc",
           "match": "\\bfn(?=\\s*\\()"
+        },
+        {
+          "name": "meta.lambda.arrow.zinc",
+          "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\s*(?=->)|\\([^\\n()]*\\)\\s*(?=->)"
         }
       ]
     },

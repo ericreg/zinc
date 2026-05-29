@@ -135,6 +135,10 @@ name = "callables_21_channel_same_signature_mix"
 path = "src/callables/21_channel_same_signature_mix.rs"
 
 [[bin]]
+name = "callables_22_arrow_lambda"
+path = "src/callables/22_arrow_lambda.rs"
+
+[[bin]]
 name = "closures_01_lambda_capture_read"
 path = "src/closures/01_lambda_capture_read.rs"
 

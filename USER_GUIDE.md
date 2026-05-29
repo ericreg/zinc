@@ -318,6 +318,45 @@ fn main() {
 }
 ```
 
+## Callables And Lambdas
+
+Functions and lambdas can be stored, passed, returned, and called through the
+same `value(args...)` syntax:
+
+```zinc
+fn apply(f, x) {
+    return f(x)
+}
+
+fn main() {
+    inc = x -> x + 1
+    print(apply(inc, 4))
+    print(apply(x -> x * 2, 5))
+}
+```
+
+Arrow lambdas are expression-only. Use `fn(...) { ... }` when a closure needs
+multiple statements:
+
+```zinc
+fn main() {
+    f = fn(x) {
+        y = x + 1
+        return y * 2
+    }
+}
+```
+
+Arrow lambdas support one untyped bare parameter, parenthesized parameter lists,
+zero parameters, and partial annotations:
+
+```zinc
+x -> x + 1
+(x, y) -> x + y
+(x, y: i32) -> x + 1
+() -> 42
+```
+
 ## Constants
 
 Global constants use `const`:

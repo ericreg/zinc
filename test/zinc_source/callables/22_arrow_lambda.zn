@@ -1,0 +1,30 @@
+fn apply(f, x) {
+    return f(x)
+}
+
+fn make_offset(base) {
+    return x -> x + base
+}
+
+fn main() {
+    print(apply(x -> x + 1, 4))
+
+    partial: (i64, i32) -> i64 = (x, y: i32) -> x + 1
+    print(partial(5, 2i32))
+
+    add10 = make_offset(10)
+    print(add10(5))
+
+    maker = x -> y -> x + y
+    add7 = maker(7)
+    print(add7(8))
+
+    ops = []
+    ops.push(x -> x + 1)
+    ops.push(x -> x * 2)
+    print(ops[0](3))
+    print(ops[1](3))
+
+    print((() -> 42)())
+    print((x -> x * 2)(5))
+}

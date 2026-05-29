@@ -383,7 +383,7 @@ Zinc uses a 3-pass compiler:
 - [x] Error handling: `try`, `match`, `fail`
 - [x] Modules and imports
 - [ ] Decorators
-- [ ] Lambda expressions
+- [x] Lambda expressions
 - [ ] Bimaps
 - [ ] Priority queues
 - [ ] Even more tests
@@ -420,4 +420,3 @@ To regenerate rust source
 ```sh
 uv run python test/test_compile.py --update-output
 ```
-

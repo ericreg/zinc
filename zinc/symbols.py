@@ -238,6 +238,62 @@ class BoundStructField:
     spread_field_name: str | None = None
 
 
+@dataclass(frozen=True)
+class FunctionParameterInfo:
+    """Normalized parameter metadata for declarations and arrow lambdas."""
+
+    name: str
+    ctx: ParserRuleContext | None
+    default_expr: ParserRuleContext | None
+    interval: tuple[int, int]
+    line_num: int
+
+
+def is_arrow_lambda_context(ctx) -> bool:
+    """Return True when a lambdaExpression node uses arrow syntax."""
+    return isinstance(ctx, ZincParser.LambdaExpressionContext) and ctx.block() is None
+
+
+def arrow_lambda_body_expression(ctx):
+    """Return the implicit-return expression for an arrow lambda, if any."""
+    if not is_arrow_lambda_context(ctx):
+        return None
+    return ctx.expression()
+
+
+def function_parameters(ctx) -> list[FunctionParameterInfo]:
+    """Return normalized parameters for function-like parse nodes."""
+    params: list[FunctionParameterInfo] = []
+    parameter_list = ctx.parameterList() if hasattr(ctx, "parameterList") else None
+    if parameter_list is not None:
+        for param_ctx in parameter_list.parameter():
+            params.append(
+                FunctionParameterInfo(
+                    name=param_ctx.IDENTIFIER().getText(),
+                    ctx=param_ctx,
+                    default_expr=param_ctx.expression(),
+                    interval=param_ctx.getSourceInterval(),
+                    line_num=param_ctx.start.line if param_ctx.start is not None else 0,
+                )
+            )
+        return params
+
+    if is_arrow_lambda_context(ctx) and ctx.IDENTIFIER() is not None:
+        token = ctx.IDENTIFIER()
+        symbol = token.getSymbol()
+        return [
+            FunctionParameterInfo(
+                name=token.getText(),
+                ctx=None,
+                default_expr=None,
+                interval=token.getSourceInterval(),
+                line_num=symbol.line if symbol is not None else 0,
+            )
+        ]
+
+    return params
+
+
 class SymbolTable:
     """Scoped symbol table with lookup by id or source interval."""
 
@@ -425,6 +481,7 @@ class SymbolTableVisitor(zincVisitor):
         # Maps (caller_function, call_site_interval) -> mangled name for CodeGen to use
         # Scoped by caller function to handle different specializations of the same generic
         self.specialization_map: dict[tuple[str | None, tuple[int, int]], str] = {}
+        self.callable_call_specialization_map: dict[tuple[str | None, tuple[int, int]], list[str]] = {}
         self.bound_call_args: dict[tuple[str | None, tuple[int, int]], list[BoundArgument]] = {}
         self.bound_struct_fields: dict[tuple[str | None, tuple[int, int]], list[BoundStructField]] = {}
         # Track channel variables and their type info (var_name -> ChannelTypeInfo)
@@ -1778,6 +1835,8 @@ class SymbolTableVisitor(zincVisitor):
     def _validate_parameter_defaults_for_ctx(self, ctx, label: str, owner_module_id: str | None) -> None:
         """Validate default parameter ordering, const-ness, and annotations."""
         specs = self._parameter_specs_from_ctx(ctx, owner_module_id)
+        if is_arrow_lambda_context(ctx) and any(spec.default_expr is not None for spec in specs):
+            raise ZincTypeError("arrow lambda parameters cannot have defaults")
         seen_default = False
         for spec in specs:
             if spec.default_expr is None:
@@ -4277,12 +4336,10 @@ class SymbolTableVisitor(zincVisitor):
     ) -> dict[str, MetaValue]:
         """Build the slot->TypeMeta environment for parameter constraints."""
         slots: dict[str, MetaValue] = {}
-        if not hasattr(ctx, "parameterList") or ctx.parameterList() is None:
-            return slots
-        for index, param_ctx in enumerate(ctx.parameterList().parameter()):
+        for index, param in enumerate(function_parameters(ctx)):
             if index >= len(arg_types):
                 continue
-            slots[param_ctx.IDENTIFIER().getText()] = self._type_meta_from_base(
+            slots[param.name] = self._type_meta_from_base(
                 arg_types[index],
                 exact_type=arg_exact_types[index] if index < len(arg_exact_types) else None,
                 array_info=arg_array_infos.get(index),
@@ -5131,7 +5188,12 @@ class SymbolTableVisitor(zincVisitor):
 
     def _expr_symbol(self, ctx) -> Symbol | None:
         """Look up the symbol for an expression in the current function."""
-        return self.symbols.lookup_by_interval(ctx.getSourceInterval(), self._current_function)
+        symbol = self.symbols.lookup_by_interval(ctx.getSourceInterval(), self._current_function)
+        if symbol is not None:
+            return symbol
+        if isinstance(ctx, ZincParser.LambdaExprContext):
+            return self.symbols.lookup_by_interval(ctx.lambdaExpression().getSourceInterval(), self._current_function)
+        return None
 
     def _expr_exact_type(self, ctx) -> str | None:
         """Return the resolved exact scalar type for an expression, if known."""
@@ -5349,16 +5411,14 @@ class SymbolTableVisitor(zincVisitor):
 
     def _parameter_specs_from_ctx(self, ctx, owner_module_id: str | None) -> list[ParameterSpec]:
         """Build parameter binding specs from a function-like parse node."""
-        if not hasattr(ctx, "parameterList") or ctx.parameterList() is None:
-            return []
         return [
             ParameterSpec(
-                name=param_ctx.IDENTIFIER().getText(),
-                ctx=param_ctx,
-                default_expr=param_ctx.expression(),
+                name=param.name,
+                ctx=param.ctx,
+                default_expr=param.default_expr,
                 owner_module_id=owner_module_id,
             )
-            for param_ctx in ctx.parameterList().parameter()
+            for param in function_parameters(ctx)
         ]
 
     def _parameter_specs_from_method(self, method: StructMethodInfo) -> list[ParameterSpec]:
@@ -5697,153 +5757,156 @@ class SymbolTableVisitor(zincVisitor):
         # Define parameters with types from func.arg_types
         # Track parameter names for mutation detection
         param_names: list[str] = []
-        if hasattr(ctx, "parameterList") and ctx.parameterList():
-            for i, param_ctx in enumerate(ctx.parameterList().parameter()):
-                param_name = param_ctx.IDENTIFIER().getText()
-                param_names.append(param_name)
-                # Use arg type from specialization if available
-                if i < len(func.arg_types):
-                    param_type = func.arg_types[i]
-                else:
-                    param_type = BaseType.UNKNOWN
-                param_exact_type = func.arg_exact_types[i] if i < len(func.arg_exact_types) else None
-                type_ctx = self._single_type_ctx(param_ctx)
-                annotated_type = BaseType.UNKNOWN
-                annotated_array_info = None
-                annotated_dict_info = None
-                annotated_set_info = None
-                annotated_tuple_info = None
-                annotated_callable_info = None
-                annotated_struct_qualified_name = None
-                annotated_anonymous_struct_info = None
-                annotated_result_info = None
-                annotated_option_info = None
-                declared_exact_type = self._exact_type_name_from_type_ctx(type_ctx)
-                if self._has_type_alternative_constraint(param_ctx):
-                    actual_struct_qualified_name = func.arg_struct_qualified_names.get(i)
-                    actual_anonymous_struct_info = func.arg_anonymous_struct_infos.get(i)
-                    if not self._type_satisfies_type_alternatives(
-                        param_ctx,
-                        param_type,
-                        param_exact_type,
-                        array_info=func.arg_array_infos.get(i),
-                        dict_info=func.arg_dict_infos.get(i),
-                        set_info=func.arg_set_infos.get(i),
-                        tuple_info=func.arg_tuple_infos.get(i),
-                        callable_info=func.arg_callable_infos.get(i),
-                        struct_qualified_name=actual_struct_qualified_name,
-                        anonymous_struct_info=actual_anonymous_struct_info,
-                        result_info=func.arg_result_infos.get(i),
-                        option_info=func.arg_option_infos.get(i),
-                    ):
-                        raise ZincTypeError(
-                            f"parameter '{param_name}' expects a compatible '{param_ctx.typeAlternative().getText()}' value"
-                        )
-                elif type_ctx is not None:
-                    (
-                        annotated_type,
-                        annotated_array_info,
-                        annotated_dict_info,
-                        annotated_set_info,
-                        annotated_tuple_info,
+        for i, param in enumerate(function_parameters(ctx)):
+            param_ctx = param.ctx
+            param_name = param.name
+            param_names.append(param_name)
+            # Use arg type from specialization if available
+            if i < len(func.arg_types):
+                param_type = func.arg_types[i]
+            else:
+                param_type = BaseType.UNKNOWN
+            param_exact_type = func.arg_exact_types[i] if i < len(func.arg_exact_types) else None
+            type_ctx = self._single_type_ctx(param_ctx) if param_ctx is not None else None
+            annotated_type = BaseType.UNKNOWN
+            annotated_array_info = None
+            annotated_dict_info = None
+            annotated_set_info = None
+            annotated_tuple_info = None
+            annotated_callable_info = None
+            annotated_struct_qualified_name = None
+            annotated_anonymous_struct_info = None
+            annotated_result_info = None
+            annotated_option_info = None
+            declared_exact_type = self._exact_type_name_from_type_ctx(type_ctx)
+            if param_ctx is not None and self._has_type_alternative_constraint(param_ctx):
+                actual_struct_qualified_name = func.arg_struct_qualified_names.get(i)
+                actual_anonymous_struct_info = func.arg_anonymous_struct_infos.get(i)
+                if not self._type_satisfies_type_alternatives(
+                    param_ctx,
+                    param_type,
+                    param_exact_type,
+                    array_info=func.arg_array_infos.get(i),
+                    dict_info=func.arg_dict_infos.get(i),
+                    set_info=func.arg_set_infos.get(i),
+                    tuple_info=func.arg_tuple_infos.get(i),
+                    callable_info=func.arg_callable_infos.get(i),
+                    struct_qualified_name=actual_struct_qualified_name,
+                    anonymous_struct_info=actual_anonymous_struct_info,
+                    result_info=func.arg_result_infos.get(i),
+                    option_info=func.arg_option_infos.get(i),
+                ):
+                    raise ZincTypeError(f"parameter '{param_name}' expects a compatible '{param_ctx.typeAlternative().getText()}' value")
+            elif type_ctx is not None:
+                (
+                    annotated_type,
+                    annotated_array_info,
+                    annotated_dict_info,
+                    annotated_set_info,
+                    annotated_tuple_info,
+                    annotated_callable_info,
+                    annotated_struct_qualified_name,
+                    annotated_anonymous_struct_info,
+                    annotated_result_info,
+                    annotated_option_info,
+                ) = self._type_metadata_from_type_ctx(type_ctx)
+                actual_struct_qualified_name = func.arg_struct_qualified_names.get(i)
+                actual_anonymous_struct_info = func.arg_anonymous_struct_infos.get(i)
+                if not self._assignment_metadata_compatible(
+                    annotated_type,
+                    param_type,
+                    expected_exact_type=self._exact_type_name_from_type_ctx(type_ctx),
+                    actual_exact_type=param_exact_type,
+                    expected_array=annotated_array_info,
+                    actual_array=func.arg_array_infos.get(i),
+                    expected_dict=annotated_dict_info,
+                    actual_dict=func.arg_dict_infos.get(i),
+                    expected_set=annotated_set_info,
+                    actual_set=func.arg_set_infos.get(i),
+                    expected_tuple=annotated_tuple_info,
+                    actual_tuple=func.arg_tuple_infos.get(i),
+                    expected_callable=annotated_callable_info,
+                    actual_callable=func.arg_callable_infos.get(i),
+                    expected_struct_qualified_name=annotated_struct_qualified_name,
+                    actual_struct_qualified_name=actual_struct_qualified_name,
+                    expected_anonymous_struct_info=annotated_anonymous_struct_info,
+                    actual_anonymous_struct_info=actual_anonymous_struct_info,
+                    expected_result=annotated_result_info,
+                    actual_result=func.arg_result_infos.get(i),
+                    expected_option=annotated_option_info,
+                    actual_option=func.arg_option_infos.get(i),
+                ):
+                    raise ZincTypeError(f"parameter '{param_name}' expects a compatible '{type_ctx.getText()}' value")
+                if declared_exact_type is not None:
+                    param_exact_type = declared_exact_type
+            param_symbol = self.symbols.define(
+                id=param_name,
+                kind=SymbolKind.PARAMETER,
+                resolved_type=param_type,
+                interval=param.interval,
+                exact_type=param_exact_type,
+                declared_exact_type=declared_exact_type,
+                has_declared_type=type_ctx is not None,
+                parameter_index=i,
+                has_default=param.default_expr is not None,
+                line_num=param.line_num,
+            )
+            # Track channel parameters for element type inference
+            # Store the list of all caller channels for this parameter
+            if param_type == BaseType.CHANNEL and i in func.arg_channel_infos:
+                # Use first one as primary reference, but store all for updating
+                all_chan_infos = func.arg_channel_infos[i]
+                if all_chan_infos:
+                    self._channel_infos[param_name] = all_chan_infos[0]
+                    param_symbol.channel_info = self._copy_channel_info(all_chan_infos[0])
+                    # Store full list for updating all callers when element type is inferred
+                    self._channel_param_all_infos[param_name] = all_chan_infos
+            # Track array parameters for element type
+            if param_type == BaseType.ARRAY and i in func.arg_array_infos:
+                self._apply_array_info_to_symbol(param_symbol, func.arg_array_infos[i])
+            if param_type == BaseType.DICT and i in func.arg_dict_infos:
+                param_symbol.dict_info = self._copy_dict_info(func.arg_dict_infos[i])
+            if param_type == BaseType.SET and i in func.arg_set_infos:
+                param_symbol.set_info = self._copy_set_info(func.arg_set_infos[i])
+            if param_type == BaseType.TUPLE and i in func.arg_tuple_infos:
+                param_symbol.tuple_info = self._copy_tuple_info(func.arg_tuple_infos[i])
+            if param_type == BaseType.CALLABLE and i in func.arg_callable_infos:
+                param_symbol.callable_info = self._copy_callable_info(func.arg_callable_infos[i])
+            if param_type == BaseType.RESULT and i in func.arg_result_infos:
+                param_symbol.result_info = self._copy_result_info(func.arg_result_infos[i])
+            if param_type == BaseType.OPTION and i in func.arg_option_infos:
+                param_symbol.option_info = self._copy_option_info(func.arg_option_infos[i])
+            if param_type == BaseType.STRUCT:
+                if i in func.arg_struct_qualified_names:
+                    self._struct_symbol_bindings[param_symbol.unique_name] = func.arg_struct_qualified_names[i]
+                if i in func.arg_anonymous_struct_infos:
+                    param_symbol.anonymous_struct_info = self._copy_anonymous_struct_info(func.arg_anonymous_struct_infos[i])
+            if type_ctx is not None:
+                if annotated_type == BaseType.ARRAY:
+                    self._apply_array_info_to_symbol(param_symbol, annotated_array_info or func.arg_array_infos.get(i))
+                if annotated_type == BaseType.CALLABLE and annotated_callable_info is not None:
+                    param_symbol.callable_info = self._merge_callable_info(
                         annotated_callable_info,
-                        annotated_struct_qualified_name,
-                        annotated_anonymous_struct_info,
-                        annotated_result_info,
-                        annotated_option_info,
-                    ) = self._type_metadata_from_type_ctx(type_ctx)
-                    actual_struct_qualified_name = func.arg_struct_qualified_names.get(i)
-                    actual_anonymous_struct_info = func.arg_anonymous_struct_infos.get(i)
-                    if not self._assignment_metadata_compatible(
-                        annotated_type,
-                        param_type,
-                        expected_exact_type=self._exact_type_name_from_type_ctx(type_ctx),
-                        actual_exact_type=param_exact_type,
-                        expected_array=annotated_array_info,
-                        actual_array=func.arg_array_infos.get(i),
-                        expected_dict=annotated_dict_info,
-                        actual_dict=func.arg_dict_infos.get(i),
-                        expected_set=annotated_set_info,
-                        actual_set=func.arg_set_infos.get(i),
-                        expected_tuple=annotated_tuple_info,
-                        actual_tuple=func.arg_tuple_infos.get(i),
-                        expected_callable=annotated_callable_info,
-                        actual_callable=func.arg_callable_infos.get(i),
-                        expected_struct_qualified_name=annotated_struct_qualified_name,
-                        actual_struct_qualified_name=actual_struct_qualified_name,
-                        expected_anonymous_struct_info=annotated_anonymous_struct_info,
-                        actual_anonymous_struct_info=actual_anonymous_struct_info,
-                        expected_result=annotated_result_info,
-                        actual_result=func.arg_result_infos.get(i),
-                        expected_option=annotated_option_info,
-                        actual_option=func.arg_option_infos.get(i),
-                    ):
-                        raise ZincTypeError(f"parameter '{param_name}' expects a compatible '{type_ctx.getText()}' value")
-                    if declared_exact_type is not None:
-                        param_exact_type = declared_exact_type
-                param_symbol = self.symbols.define(
-                    id=param_name,
-                    kind=SymbolKind.PARAMETER,
-                    resolved_type=param_type,
-                    interval=param_ctx.getSourceInterval(),
-                    exact_type=param_exact_type,
-                    declared_exact_type=declared_exact_type,
-                    has_declared_type=type_ctx is not None,
-                    parameter_index=i,
-                    has_default=param_ctx.expression() is not None,
-                    line_num=param_ctx.start.line if param_ctx.start is not None else 0,
-                )
-                # Track channel parameters for element type inference
-                # Store the list of all caller channels for this parameter
-                if param_type == BaseType.CHANNEL and i in func.arg_channel_infos:
-                    # Use first one as primary reference, but store all for updating
-                    all_chan_infos = func.arg_channel_infos[i]
-                    if all_chan_infos:
-                        self._channel_infos[param_name] = all_chan_infos[0]
-                        param_symbol.channel_info = self._copy_channel_info(all_chan_infos[0])
-                        # Store full list for updating all callers when element type is inferred
-                        self._channel_param_all_infos[param_name] = all_chan_infos
-                # Track array parameters for element type
-                if param_type == BaseType.ARRAY and i in func.arg_array_infos:
-                    self._apply_array_info_to_symbol(param_symbol, func.arg_array_infos[i])
-                if param_type == BaseType.DICT and i in func.arg_dict_infos:
-                    param_symbol.dict_info = self._copy_dict_info(func.arg_dict_infos[i])
-                if param_type == BaseType.SET and i in func.arg_set_infos:
-                    param_symbol.set_info = self._copy_set_info(func.arg_set_infos[i])
-                if param_type == BaseType.TUPLE and i in func.arg_tuple_infos:
-                    param_symbol.tuple_info = self._copy_tuple_info(func.arg_tuple_infos[i])
-                if param_type == BaseType.CALLABLE and i in func.arg_callable_infos:
-                    param_symbol.callable_info = self._copy_callable_info(func.arg_callable_infos[i])
-                if param_type == BaseType.RESULT and i in func.arg_result_infos:
-                    param_symbol.result_info = self._copy_result_info(func.arg_result_infos[i])
-                if param_type == BaseType.OPTION and i in func.arg_option_infos:
-                    param_symbol.option_info = self._copy_option_info(func.arg_option_infos[i])
-                if param_type == BaseType.STRUCT:
-                    if i in func.arg_struct_qualified_names:
-                        self._struct_symbol_bindings[param_symbol.unique_name] = func.arg_struct_qualified_names[i]
-                    if i in func.arg_anonymous_struct_infos:
-                        param_symbol.anonymous_struct_info = self._copy_anonymous_struct_info(func.arg_anonymous_struct_infos[i])
-                if type_ctx is not None:
-                    if annotated_type == BaseType.ARRAY:
-                        self._apply_array_info_to_symbol(param_symbol, annotated_array_info or func.arg_array_infos.get(i))
-                    if annotated_type == BaseType.CALLABLE and annotated_callable_info is not None:
-                        param_symbol.callable_info = self._merge_callable_info(
-                            annotated_callable_info,
-                            param_symbol.callable_info,
-                            f"parameter '{param_name}'",
-                        )
-                    if annotated_type == BaseType.STRUCT:
-                        if annotated_struct_qualified_name is not None:
-                            self._struct_symbol_bindings[param_symbol.unique_name] = annotated_struct_qualified_name
-                        if annotated_anonymous_struct_info is not None:
-                            param_symbol.anonymous_struct_info = self._copy_anonymous_struct_info(annotated_anonymous_struct_info)
-                    if annotated_type == BaseType.RESULT and annotated_result_info is not None:
-                        param_symbol.result_info = self._copy_result_info(annotated_result_info)
-                    if annotated_type == BaseType.OPTION and annotated_option_info is not None:
-                        param_symbol.option_info = self._copy_option_info(annotated_option_info)
+                        param_symbol.callable_info,
+                        f"parameter '{param_name}'",
+                    )
+                if annotated_type == BaseType.STRUCT:
+                    if annotated_struct_qualified_name is not None:
+                        self._struct_symbol_bindings[param_symbol.unique_name] = annotated_struct_qualified_name
+                    if annotated_anonymous_struct_info is not None:
+                        param_symbol.anonymous_struct_info = self._copy_anonymous_struct_info(annotated_anonymous_struct_info)
+                if annotated_type == BaseType.RESULT and annotated_result_info is not None:
+                    param_symbol.result_info = self._copy_result_info(annotated_result_info)
+                if annotated_type == BaseType.OPTION and annotated_option_info is not None:
+                    param_symbol.option_info = self._copy_option_info(annotated_option_info)
 
-        # Visit function body (skip parameter list since we handled it)
-        if hasattr(ctx, "block"):
+        # Visit function body (skip parameter list since we handled it).
+        arrow_body = arrow_lambda_body_expression(ctx)
+        if arrow_body is not None:
+            if isinstance(arrow_body, ZincParser.BlockExprContext):
+                raise ZincTypeError("arrow lambdas are expression-only; use fn(...) { ... } for block bodies")
+            self._record_return_expression(arrow_body)
+        elif hasattr(ctx, "block") and ctx.block() is not None:
             self.visit(ctx.block())
 
         if hasattr(ctx, "type_") and ctx.type_() is not None:
@@ -6035,13 +6098,14 @@ class SymbolTableVisitor(zincVisitor):
             return
 
         ctx = info.ctx
-        body_ctx = ctx.block() if hasattr(ctx, "block") else None
-        if body_ctx is None:
-            raise ZincTypeError("lexical functions require a block body")
+        body_node = arrow_lambda_body_expression(ctx)
+        if body_node is None:
+            body_node = ctx.block() if hasattr(ctx, "block") else None
+        if body_node is None:
+            raise ZincTypeError("lexical functions require a body")
 
         local_names: set[str] = set()
-        if hasattr(ctx, "parameterList") and ctx.parameterList():
-            local_names.update(param_ctx.IDENTIFIER().getText() for param_ctx in ctx.parameterList().parameter())
+        local_names.update(param.name for param in function_parameters(ctx))
 
         local_function_names: set[str] = set()
 
@@ -6054,7 +6118,8 @@ class SymbolTableVisitor(zincVisitor):
                 if stmt.asyncFunctionDeclaration():
                     local_function_names.add(stmt.asyncFunctionDeclaration().IDENTIFIER().getText())
 
-        predeclare_nested(body_ctx)
+        if isinstance(body_node, ZincParser.BlockContext):
+            predeclare_nested(body_node)
 
         captures: list[CaptureBindingInfo] = []
         seen_bindings: set[str] = set()
@@ -6159,7 +6224,7 @@ class SymbolTableVisitor(zincVisitor):
                     if isinstance(child, ParserRuleContext):
                         walk(child)
 
-        walk(body_ctx)
+        walk(body_node)
         info.captures = captures
         info.finalized = True
 
@@ -6185,59 +6250,59 @@ class SymbolTableVisitor(zincVisitor):
         param_anonymous_struct_infos: dict[int, AnonymousStructTypeInfo] = {}
         param_result_infos: dict[int, ResultTypeInfo] = {}
         param_option_infos: dict[int, OptionTypeInfo] = {}
-        if hasattr(ctx, "parameterList") and ctx.parameterList():
-            for i, param_ctx in enumerate(ctx.parameterList().parameter()):
-                param_names.append(param_ctx.IDENTIFIER().getText())
-                if param_ctx.expression() is not None:
-                    param_default_texts[i] = param_ctx.expression().getText()
-                    param_default_exprs[i] = param_ctx.expression()
-                    if target_module_id is not None:
-                        param_default_owner_modules[i] = target_module_id
-                type_ctx = self._single_type_ctx(param_ctx)
-                if type_ctx is not None:
-                    (
-                        param_type,
-                        param_array,
-                        param_dict,
-                        param_set,
-                        param_tuple,
-                        param_callable,
-                        param_struct_qualified_name,
-                        param_anonymous_struct_info,
-                        param_result_info,
-                        param_option_info,
-                    ) = self._type_metadata_from_type_ctx(type_ctx)
-                else:
-                    param_type = BaseType.UNKNOWN
-                    param_array = None
-                    param_dict = None
-                    param_set = None
-                    param_tuple = None
-                    param_callable = None
-                    param_struct_qualified_name = None
-                    param_anonymous_struct_info = None
-                    param_result_info = None
-                    param_option_info = None
-                param_types.append(param_type)
-                param_exact_types.append(self._exact_type_name_from_type_ctx(type_ctx))
-                if param_array is not None:
-                    param_array_infos[i] = param_array
-                if param_dict is not None:
-                    param_dict_infos[i] = param_dict
-                if param_set is not None:
-                    param_set_infos[i] = param_set
-                if param_tuple is not None:
-                    param_tuple_infos[i] = param_tuple
-                if param_callable is not None:
-                    param_callable_infos[i] = param_callable
-                if param_struct_qualified_name is not None:
-                    param_struct_qualified_names[i] = param_struct_qualified_name
-                if param_anonymous_struct_info is not None:
-                    param_anonymous_struct_infos[i] = param_anonymous_struct_info
-                if param_result_info is not None:
-                    param_result_infos[i] = param_result_info
-                if param_option_info is not None:
-                    param_option_infos[i] = param_option_info
+        for i, param in enumerate(function_parameters(ctx)):
+            param_ctx = param.ctx
+            param_names.append(param.name)
+            if param.default_expr is not None:
+                param_default_texts[i] = param.default_expr.getText()
+                param_default_exprs[i] = param.default_expr
+                if target_module_id is not None:
+                    param_default_owner_modules[i] = target_module_id
+            type_ctx = self._single_type_ctx(param_ctx) if param_ctx is not None else None
+            if type_ctx is not None:
+                (
+                    param_type,
+                    param_array,
+                    param_dict,
+                    param_set,
+                    param_tuple,
+                    param_callable,
+                    param_struct_qualified_name,
+                    param_anonymous_struct_info,
+                    param_result_info,
+                    param_option_info,
+                ) = self._type_metadata_from_type_ctx(type_ctx)
+            else:
+                param_type = BaseType.UNKNOWN
+                param_array = None
+                param_dict = None
+                param_set = None
+                param_tuple = None
+                param_callable = None
+                param_struct_qualified_name = None
+                param_anonymous_struct_info = None
+                param_result_info = None
+                param_option_info = None
+            param_types.append(param_type)
+            param_exact_types.append(self._exact_type_name_from_type_ctx(type_ctx))
+            if param_array is not None:
+                param_array_infos[i] = param_array
+            if param_dict is not None:
+                param_dict_infos[i] = param_dict
+            if param_set is not None:
+                param_set_infos[i] = param_set
+            if param_tuple is not None:
+                param_tuple_infos[i] = param_tuple
+            if param_callable is not None:
+                param_callable_infos[i] = param_callable
+            if param_struct_qualified_name is not None:
+                param_struct_qualified_names[i] = param_struct_qualified_name
+            if param_anonymous_struct_info is not None:
+                param_anonymous_struct_infos[i] = param_anonymous_struct_info
+            if param_result_info is not None:
+                param_result_infos[i] = param_result_info
+            if param_option_info is not None:
+                param_option_infos[i] = param_option_info
         declared_return_type = self._callable_return_hint(ctx)
         declared_return_exact_type = None
         declared_return_dict_info = None
@@ -6519,13 +6584,12 @@ class SymbolTableVisitor(zincVisitor):
         param_default_texts: dict[int, str] = {}
         param_default_exprs: dict[int, ParserRuleContext] = {}
         param_default_owner_modules: dict[int, str] = {}
-        if hasattr(func.ctx, "parameterList") and func.ctx.parameterList():
-            for index, param_ctx in enumerate(func.ctx.parameterList().parameter()):
-                param_names.append(param_ctx.IDENTIFIER().getText())
-                if param_ctx.expression() is not None:
-                    param_default_texts[index] = param_ctx.expression().getText()
-                    param_default_exprs[index] = param_ctx.expression()
-                    param_default_owner_modules[index] = func.module_id
+        for index, param in enumerate(function_parameters(func.ctx)):
+            param_names.append(param.name)
+            if param.default_expr is not None:
+                param_default_texts[index] = param.default_expr.getText()
+                param_default_exprs[index] = param.default_expr
+                param_default_owner_modules[index] = func.module_id
         return CallableTypeInfo(
             param_types=list(func.arg_types),
             param_exact_types=list(func.arg_exact_types),
@@ -6741,10 +6805,10 @@ class SymbolTableVisitor(zincVisitor):
         arg_anonymous_struct_infos: dict[int, AnonymousStructTypeInfo],
     ) -> None:
         """Validate exact annotated parameters before specializing a function call."""
-        if not hasattr(ctx, "parameterList") or ctx.parameterList() is None:
-            return
-
-        for i, param_ctx in enumerate(ctx.parameterList().parameter()):
+        for i, param in enumerate(function_parameters(ctx)):
+            param_ctx = param.ctx
+            if param_ctx is None:
+                continue
             type_ctx = self._single_type_ctx(param_ctx)
             if not self._type_alternative_ctxs(param_ctx) or i >= len(arg_types):
                 continue
@@ -6808,7 +6872,8 @@ class SymbolTableVisitor(zincVisitor):
                     option_info=actual_option_info,
                 ):
                     raise ZincTypeError(
-                        f"parameter '{param_ctx.IDENTIFIER().getText()}' expects a compatible '{param_ctx.typeAlternative().getText()}' value"
+                        f"parameter '{param_ctx.IDENTIFIER().getText()}' expects a compatible "
+                        f"'{param_ctx.typeAlternative().getText()}' value"
                     )
                 continue
 
@@ -7342,6 +7407,11 @@ class SymbolTableVisitor(zincVisitor):
         """Register a lambda as a lexical closure target."""
         if self._current_module is None or self._current_function is None:
             raise ZincTypeError("lambda expressions require a function context")
+        if is_arrow_lambda_context(ctx):
+            if any(param.default_expr is not None for param in function_parameters(ctx)):
+                raise ZincTypeError("arrow lambda parameters cannot have defaults")
+            if isinstance(arrow_lambda_body_expression(ctx), ZincParser.BlockExprContext):
+                raise ZincTypeError("arrow lambdas are expression-only; use fn(...) { ... } for block bodies")
         start, stop = ctx.getSourceInterval()
         owner_fragment = self._sanitize_generated_name(self._current_function)
         generated_name = f"__lambda_{owner_fragment}_{start}_{stop}"
@@ -8987,6 +9057,10 @@ class SymbolTableVisitor(zincVisitor):
                             arg_struct_qualified_names,
                             arg_anonymous_struct_infos,
                         )
+                        key = (self._current_function, ctx.getSourceInterval())
+                        self.callable_call_specialization_map.setdefault(key, [])
+                        if mangled not in self.callable_call_specialization_map[key]:
+                            self.callable_call_specialization_map[key].append(mangled)
                         func_instance = self.atlas.functions.get(mangled)
                         if func_instance:
                             candidate_type = func_instance.return_type
@@ -10584,79 +10658,83 @@ class SymbolTableVisitor(zincVisitor):
             interval=target.getSourceInterval(),
         )
 
-    def visitReturnStatement(self, ctx: ZincParser.ReturnStatementContext) -> None:
-        """Visit return statement and track return type."""
-        if ctx.expression():
-            return_type = self.visit(ctx.expression())
-            expr_symbol = self.symbols.lookup_by_interval(ctx.expression().getSourceInterval(), self._current_function)
-            return_exact_type = expr_symbol.exact_type if expr_symbol else self._resolved_exact_type(return_type, None)
-            if return_type == BaseType.DICT and expr_symbol:
-                self._current_return_dict_info = self._merge_dict_info(self._current_return_dict_info, expr_symbol.dict_info)
-            if return_type == BaseType.SET and expr_symbol:
-                self._current_return_set_info = self._merge_set_info(self._current_return_set_info, expr_symbol.set_info)
-            if return_type == BaseType.TUPLE and expr_symbol:
-                self._current_return_tuple_info = self._merge_tuple_info(self._current_return_tuple_info, expr_symbol.tuple_info)
-            if return_type == BaseType.CALLABLE and expr_symbol:
-                if self._current_return_callable_info is None:
-                    self._current_return_callable_info = expr_symbol.callable_info
-                else:
-                    self._current_return_callable_info = self._merge_callable_info(
-                        self._current_return_callable_info, expr_symbol.callable_info, "function return"
-                    )
-            if return_type == BaseType.RESULT and expr_symbol:
-                if self._current_return_result_info is None:
-                    self._current_return_result_info = self._copy_result_info(expr_symbol.result_info)
-                elif (
-                    expr_symbol.result_info is None
-                    or self._current_return_result_info.structural_key() != expr_symbol.result_info.structural_key()
-                ):
-                    raise ZincTypeError("function return paths use incompatible result types")
-            if return_type == BaseType.OPTION and expr_symbol:
-                if self._current_return_option_info is None:
-                    self._current_return_option_info = self._copy_option_info(expr_symbol.option_info)
-                elif (
-                    expr_symbol.option_info is None
-                    or self._current_return_option_info.structural_key() != expr_symbol.option_info.structural_key()
-                ):
-                    raise ZincTypeError("function return paths use incompatible option types")
-            if return_type == BaseType.STRUCT and expr_symbol:
-                expr_struct_qualified_name, expr_anonymous_struct_info = self._struct_metadata_for_symbol(expr_symbol)
-                if self._current_return_struct_qualified_name is None and self._current_return_anonymous_struct_info is None:
-                    self._current_return_struct_qualified_name = expr_struct_qualified_name
-                    self._current_return_anonymous_struct_info = self._copy_anonymous_struct_info(expr_anonymous_struct_info)
-                elif not self._structs_compatible(
-                    self._current_return_struct_qualified_name,
-                    self._current_return_anonymous_struct_info,
-                    expr_struct_qualified_name,
-                    expr_anonymous_struct_info,
-                ):
-                    raise ZincTypeError("function return paths use incompatible struct types")
-            if self._current_return_type == BaseType.VOID:
-                self._current_return_type = return_type
-                self._current_return_exact_type = return_exact_type
-            elif return_type != BaseType.UNKNOWN and return_type != self._current_return_type:
-                # Promote int+float -> float when return paths disagree
-                if {self._current_return_type, return_type} == {BaseType.INTEGER, BaseType.FLOAT}:
-                    self._current_return_type = BaseType.FLOAT
-                    self._current_return_exact_type = self._merge_exact_type_for_base(
-                        self._current_return_exact_type,
-                        return_exact_type,
-                        self._current_return_type,
-                        "function return paths",
-                    )
-                elif self._current_return_type == BaseType.CALLABLE and return_type == BaseType.CALLABLE:
-                    pass
-                else:
-                    raise ZincTypeError("function return paths use incompatible types")
-            elif self._current_return_exact_type is None:
-                self._current_return_exact_type = return_exact_type
+    def _record_return_expression(self, expr_ctx) -> None:
+        """Visit a return-value expression and merge it into current function metadata."""
+        return_type = self.visit(expr_ctx)
+        expr_symbol = self.symbols.lookup_by_interval(expr_ctx.getSourceInterval(), self._current_function)
+        return_exact_type = expr_symbol.exact_type if expr_symbol else self._resolved_exact_type(return_type, None)
+        if return_type == BaseType.DICT and expr_symbol:
+            self._current_return_dict_info = self._merge_dict_info(self._current_return_dict_info, expr_symbol.dict_info)
+        if return_type == BaseType.SET and expr_symbol:
+            self._current_return_set_info = self._merge_set_info(self._current_return_set_info, expr_symbol.set_info)
+        if return_type == BaseType.TUPLE and expr_symbol:
+            self._current_return_tuple_info = self._merge_tuple_info(self._current_return_tuple_info, expr_symbol.tuple_info)
+        if return_type == BaseType.CALLABLE and expr_symbol:
+            if self._current_return_callable_info is None:
+                self._current_return_callable_info = expr_symbol.callable_info
             else:
+                self._current_return_callable_info = self._merge_callable_info(
+                    self._current_return_callable_info, expr_symbol.callable_info, "function return"
+                )
+        if return_type == BaseType.RESULT and expr_symbol:
+            if self._current_return_result_info is None:
+                self._current_return_result_info = self._copy_result_info(expr_symbol.result_info)
+            elif (
+                expr_symbol.result_info is None
+                or self._current_return_result_info.structural_key() != expr_symbol.result_info.structural_key()
+            ):
+                raise ZincTypeError("function return paths use incompatible result types")
+        if return_type == BaseType.OPTION and expr_symbol:
+            if self._current_return_option_info is None:
+                self._current_return_option_info = self._copy_option_info(expr_symbol.option_info)
+            elif (
+                expr_symbol.option_info is None
+                or self._current_return_option_info.structural_key() != expr_symbol.option_info.structural_key()
+            ):
+                raise ZincTypeError("function return paths use incompatible option types")
+        if return_type == BaseType.STRUCT and expr_symbol:
+            expr_struct_qualified_name, expr_anonymous_struct_info = self._struct_metadata_for_symbol(expr_symbol)
+            if self._current_return_struct_qualified_name is None and self._current_return_anonymous_struct_info is None:
+                self._current_return_struct_qualified_name = expr_struct_qualified_name
+                self._current_return_anonymous_struct_info = self._copy_anonymous_struct_info(expr_anonymous_struct_info)
+            elif not self._structs_compatible(
+                self._current_return_struct_qualified_name,
+                self._current_return_anonymous_struct_info,
+                expr_struct_qualified_name,
+                expr_anonymous_struct_info,
+            ):
+                raise ZincTypeError("function return paths use incompatible struct types")
+        if self._current_return_type == BaseType.VOID:
+            self._current_return_type = return_type
+            self._current_return_exact_type = return_exact_type
+        elif return_type != BaseType.UNKNOWN and return_type != self._current_return_type:
+            # Promote int+float -> float when return paths disagree.
+            if {self._current_return_type, return_type} == {BaseType.INTEGER, BaseType.FLOAT}:
+                self._current_return_type = BaseType.FLOAT
                 self._current_return_exact_type = self._merge_exact_type_for_base(
                     self._current_return_exact_type,
                     return_exact_type,
                     self._current_return_type,
                     "function return paths",
                 )
+            elif self._current_return_type == BaseType.CALLABLE and return_type == BaseType.CALLABLE:
+                pass
+            else:
+                raise ZincTypeError("function return paths use incompatible types")
+        elif self._current_return_exact_type is None:
+            self._current_return_exact_type = return_exact_type
+        else:
+            self._current_return_exact_type = self._merge_exact_type_for_base(
+                self._current_return_exact_type,
+                return_exact_type,
+                self._current_return_type,
+                "function return paths",
+            )
+
+    def visitReturnStatement(self, ctx: ZincParser.ReturnStatementContext) -> None:
+        """Visit return statement and track return type."""
+        if ctx.expression():
+            self._record_return_expression(ctx.expression())
 
     def _define_match_field_binding(self, token, field: StructFieldInfo) -> None:
         """Define one binding introduced by an enum payload match pattern."""
