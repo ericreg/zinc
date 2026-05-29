@@ -1,0 +1,23 @@
+fn identity_i64(f: (i64) -> i64) -> (i64) -> i64 {
+    return f
+}
+
+fn identity_dec(f) {
+    return f
+}
+
+#[x in [i64]]
+@identity_dec
+fn constrained(x) {
+    return x + 1
+}
+
+@identity_i64
+fn annotated(x: i64) -> i64 {
+    return x * 2
+}
+
+fn main() {
+    print(constrained(4))
+    print(annotated(5))
+}

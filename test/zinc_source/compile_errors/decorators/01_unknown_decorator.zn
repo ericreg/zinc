@@ -1,0 +1,9 @@
+// expected-error: unknown decorator 'missing'
+@missing
+fn value() -> i64 {
+    return 1
+}
+
+fn main() {
+    print(value())
+}

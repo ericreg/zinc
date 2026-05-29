@@ -98,6 +98,15 @@ class zincListener(ParseTreeListener):
         pass
 
 
+    # Enter a parse tree produced by zincParser#decorator.
+    def enterDecorator(self, ctx:zincParser.DecoratorContext):
+        pass
+
+    # Exit a parse tree produced by zincParser#decorator.
+    def exitDecorator(self, ctx:zincParser.DecoratorContext):
+        pass
+
+
     # Enter a parse tree produced by zincParser#structComposition.
     def enterStructComposition(self, ctx:zincParser.StructCompositionContext):
         pass

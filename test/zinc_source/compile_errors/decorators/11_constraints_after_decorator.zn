@@ -1,0 +1,14 @@
+// expected-error: found .* syntax error
+fn identity_dec(f) {
+    return f
+}
+
+@identity_dec
+#[x in [i64]]
+fn value(x) {
+    return x
+}
+
+fn main() {
+    print(value(1))
+}

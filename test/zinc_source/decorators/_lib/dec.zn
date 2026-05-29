@@ -1,0 +1,8 @@
+fn identity_i64(f: (i64) -> i64) -> (i64) -> i64 {
+    return f
+}
+
+fn tag(label: string) -> ((i64) -> i64) -> (i64) -> i64 {
+    print(label)
+    return identity_i64
+}

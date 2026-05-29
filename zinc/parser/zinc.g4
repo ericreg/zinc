@@ -58,15 +58,19 @@ constDeclaration
 
 // --- Struct Declaration ---
 structDeclaration
-    : attributeBlock* 'struct' IDENTIFIER structComposition? '{' structBody '}'
+    : attributeBlock* decorator* 'struct' IDENTIFIER structComposition? '{' structBody '}'
     ;
 
 enumDeclaration
-    : 'enum' IDENTIFIER '{' enumBody '}'
+    : attributeBlock* decorator* 'enum' IDENTIFIER '{' enumBody '}'
     ;
 
 attributeBlock
     : '#[' (expression (',' expression)* ','?)? ']'
+    ;
+
+decorator
+    : '@' qualifiedName ('(' argumentList? ')')?
     ;
 
 structComposition
@@ -110,11 +114,11 @@ enumVariantFieldType
 
 // --- Function Declaration ---
 functionDeclaration
-    : attributeBlock* 'fn' IDENTIFIER '(' parameterList? ')' ('->' type)? block
+    : attributeBlock* decorator* 'fn' IDENTIFIER '(' parameterList? ')' ('->' type)? block
     ;
 
 asyncFunctionDeclaration
-    : attributeBlock* 'async' IDENTIFIER '(' parameterList? ')' ('->' type)? block
+    : attributeBlock* decorator* 'async' IDENTIFIER '(' parameterList? ')' ('->' type)? block
     ;
 
 parameterList

@@ -59,6 +59,11 @@ class zincVisitor(ParseTreeVisitor):
         return self.visitChildren(ctx)
 
 
+    # Visit a parse tree produced by zincParser#decorator.
+    def visitDecorator(self, ctx:zincParser.DecoratorContext):
+        return self.visitChildren(ctx)
+
+
     # Visit a parse tree produced by zincParser#structComposition.
     def visitStructComposition(self, ctx:zincParser.StructCompositionContext):
         return self.visitChildren(ctx)

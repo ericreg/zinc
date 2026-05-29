@@ -375,6 +375,22 @@ name = "const_test"
 path = "src/const_test.rs"
 
 [[bin]]
+name = "decorators_01_stacked_and_generic"
+path = "src/decorators/01_stacked_and_generic.rs"
+
+[[bin]]
+name = "decorators_02_factory_arguments"
+path = "src/decorators/02_factory_arguments.rs"
+
+[[bin]]
+name = "decorators_03_constraints_and_annotations"
+path = "src/decorators/03_constraints_and_annotations.rs"
+
+[[bin]]
+name = "decorators_04_qualified_import"
+path = "src/decorators/04_qualified_import.rs"
+
+[[bin]]
 name = "dynamic_typing_01_rapid_shadow_chain"
 path = "src/dynamic_typing/01_rapid_shadow_chain.rs"
 

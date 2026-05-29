@@ -1,0 +1,16 @@
+// expected-error: decorator 'guarded' constraint failed: labelin\[i64\]
+#[label in [i64]]
+fn guarded(label) -> ((i64) -> i64) -> (i64) -> i64 {
+    return fn(f: (i64) -> i64) {
+        return f
+    }
+}
+
+@guarded("bad")
+fn value(x: i64) -> i64 {
+    return x
+}
+
+fn main() {
+    print(value(1))
+}

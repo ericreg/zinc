@@ -1,39 +1,36 @@
-Zinc roadmap
-=============
+# Zinc roadmap
 
-Implemented core pillars
-------------------------
-- [x] Modules and imports
-- [x] Dynamic variable rebinding
-- [x] Monomorphized functions
-- [x] Structs with methods
-- [x] Struct composition, forward and orthogonal
-- [x] First-class callables
-- [x] Channels, spawn, bounded channels, and select
-- [x] Arrays, dicts, sets, tuples
+## Implemented core pillars
+
+- [x] modules and imports
+- [x] dynamic variable rebinding
+- [x] monomorphized functions
+- [x] structs with methods
+- [x] struct composition, forward and orthogonal
+- [x] first-class callables
+- [x] channels, spawn, bounded channels, and select
+- [x] arrays, dicts, sets, tuples
 - [x] Base types
 - [x] Multiline strings
 - [x] Closure support
 - [x] strict type annotations
 - [x] enums
-- [x] metaprogramming model (seamless compile time)
+- [x] metaprogramming model
 - [x] component constraints ( basically generics-lite)
 - [x] return type annotations
 - [x] type alternatives, i32 | f32, numeric is sugar for i32 | f32 | u8 | ...
 - [x] rust like numerical literals
-- [x] math operators, +=, *=, -=, etc 
-- [x] default parameters
+- [x] default and names parameters
 - [x] arg matching
 - [x] bitwise operations
 - [x] multiple assignment, x, y, z = 1
 - [x] lambda expressions
+- [x] decorators
+- [] iterator stuff such as for i in (1..upper_bound).step_by(2) / linq / rayon
+- [] rust / c interop
 
-- [] decorators
-- [] iterator stuff such as for i in (1..upper_bound).step_by(2)
 
-
-Currently (possibly forever) unsupported
-------------------------------------------
+## Currently (possibly forever) unsupported
 - locking primitives (mutex, semaphore, etc) (use channels / lockfree data structures)
 - inheritance (use composition)
 - macros (Do not use the dark arts)
@@ -42,45 +39,25 @@ Currently (possibly forever) unsupported
 - https://benchmarksgame-team.pages.debian.net/benchmarksgame/
 
 
-Highest-priority language gaps
-------------------------------
-- [ ] Zinc stdlib
+## Highest-priority language gaps
 
+- [ ] zinc stdlib
 - more efficient/readable rust code generation
 - write the compilers in Zinc
 - language interop
 
-Language ergonomics
--------------------
 
-- [ ] Metadata/introspection surface
-      Possible shape:
-      - `fqn()`: fully qualified name
-      - `name()`: symbol name
-      - `fields()`:
-      - `type()`
-      - `components()`
-      - `line_num()`
-      - `has_component()`
-      - `implements_component()`
+## Docs 
+- [] Why Zinc?
+- [] Tutorial
+- [] Expand the guide into a small book / better language reference
 
-      ternary operators
-
-Docs that need to catch up to the implementation
-------------------------------------------------
-- [ ] Document first-class callables
-- [ ] Document struct composition
-- [ ] Expand the guide into a small book / better language reference
-
-Tooling and quality
--------------------
+## Tooling and quality
 - [ ] Add a formatter
-- [ ] Write `galv` build CLI
+- [ ] Write `galv` build CLI / or use cargo / (should probably be a rust package)
 - [ ] Add breakpoint debugging
 - [ ] Fuzz tests
-- [ ] Easy-win code reduction / simplification / cleanup pass
-- [ ] Scratch Docker image
-- [ ] performance testing comparison between languages, java, python, C/C++, Rust
+
 
 Research / design notes
 -----------------------
@@ -113,9 +90,11 @@ Measure
 
 Use rust benchmarks to optimize rust codegen
 
-Example Applications:
-- raytracing in one weekend
-- cli/ps1 todo app
-- kalman filter
-- webserver
-- math benchmarks
+## Example Applications
+- [] raytracing in one weekend
+- [] cli/ps1 todo app
+- [] kalman filter
+- [] webserver
+- [] math benchmarks
+
+

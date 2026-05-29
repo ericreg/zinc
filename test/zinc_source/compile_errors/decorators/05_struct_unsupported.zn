@@ -1,0 +1,10 @@
+// expected-error: struct decorator support is not implemented yet: 'Box'
+@model
+struct Box {
+    value: i64
+}
+
+fn main() {
+    item = Box { value: 1 }
+    print(item.value)
+}

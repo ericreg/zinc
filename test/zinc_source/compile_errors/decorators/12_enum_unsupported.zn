@@ -1,0 +1,10 @@
+// expected-error: enum decorator support is not implemented yet: 'Mode'
+@tag
+enum Mode {
+    On
+    Off
+}
+
+fn main() {
+    print(1)
+}

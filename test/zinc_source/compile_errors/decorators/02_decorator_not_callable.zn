@@ -1,0 +1,11 @@
+// expected-error: decorator 'marker' is not callable
+const marker = 1
+
+@marker
+fn value() -> i64 {
+    return 1
+}
+
+fn main() {
+    print(value())
+}

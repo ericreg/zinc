@@ -23,6 +23,7 @@ from zinc.ast.types import (
     normalize_exact_type,
     type_to_rust,
 )
+from zinc.decorators import ResolvedDecoratorApplication, decorators_from_ctx
 from zinc.modules import (
     ModuleGraph,
     enum_variant_path_from_ctx,
@@ -93,6 +94,7 @@ class FunctionInstance:
     return_anonymous_struct_info: AnonymousStructTypeInfo | None = None
     return_result_info: ResultTypeInfo | None = None
     return_option_info: OptionTypeInfo | None = None
+    decorator_applications: list[ResolvedDecoratorApplication] = field(default_factory=list)
 
 
 @dataclass
@@ -213,6 +215,7 @@ class StructMethodInfo:
     source_module_id: str | None = None
     constructor_owner_qualified_name: str | None = None
     line_num: int = 0
+    has_decorators: bool = False
 
 
 @dataclass
@@ -229,6 +232,7 @@ class StructInstance:
     composition_mode: CompositionMode | None = None
     composition_sources: tuple[str, ...] = ()
     infer_slot_names: tuple[str, ...] = ()
+    has_decorators: bool = False
 
 
 @dataclass
@@ -256,6 +260,7 @@ class EnumInstance:
     methods_used: SortedSet[str] = field(default_factory=SortedSet)
     variants: list[EnumVariantInfo] = field(default_factory=list)
     methods: list[StructMethodInfo] = field(default_factory=list)
+    has_decorators: bool = False
 
 
 @dataclass
@@ -527,6 +532,7 @@ class AtlasBuilder:
                     qualified_name=symbol.qualified_name,
                     module_id=symbol.module_id,
                     ctx=symbol.ctx,
+                    has_decorators=bool(decorators_from_ctx(symbol.ctx)),
                 )
             elif symbol.kind == "enum":
                 self._enum_defs[symbol.qualified_name] = EnumInstance(
@@ -534,6 +540,7 @@ class AtlasBuilder:
                     qualified_name=symbol.qualified_name,
                     module_id=symbol.module_id,
                     ctx=symbol.ctx,
+                    has_decorators=bool(decorators_from_ctx(symbol.ctx)),
                 )
             elif symbol.kind == "const":
                 self._const_defs[symbol.qualified_name] = ConstInstance(
@@ -619,6 +626,11 @@ class AtlasBuilder:
         if ctx is None or self._current_function is None or self._current_module is None:
             return
 
+        for decorator in decorators_from_ctx(ctx):
+            func_symbol = self.module_graph.resolve_function_path(self._current_module, list(decorator.path))
+            if func_symbol and func_symbol.name not in self.BUILTIN_FUNCTIONS:
+                self._calls[self._current_function].add(func_symbol.qualified_name)
+
         if isinstance(ctx, ZincParser.PrimaryExpressionContext) and ctx.IDENTIFIER():
             symbol = self.module_graph.resolve_const_path(self._current_module, [ctx.IDENTIFIER().getText()])
             if symbol:
@@ -703,6 +715,7 @@ class AtlasBuilder:
                 module_id=struct.module_id,
                 ctx=struct.ctx,
                 methods_used=SortedSet(),
+                has_decorators=struct.has_decorators,
             )
 
         if method_name:
@@ -726,6 +739,7 @@ class AtlasBuilder:
                 module_id=enum.module_id,
                 ctx=enum.ctx,
                 methods_used=SortedSet(),
+                has_decorators=enum.has_decorators,
             )
 
         if method_name:

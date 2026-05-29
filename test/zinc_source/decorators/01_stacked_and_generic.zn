@@ -1,0 +1,36 @@
+fn logged(f: (i64) -> i64) -> (i64) -> i64 {
+    return fn(x: i64) {
+        print("logged")
+        return f(x)
+    }
+}
+
+fn labeler(label: string) -> ((i64) -> i64) -> (i64) -> i64 {
+    return fn(f: (i64) -> i64) {
+        return fn(x: i64) {
+            print(label)
+            return f(x)
+        }
+    }
+}
+
+fn identity_dec(f) {
+    return f
+}
+
+@labeler("outer")
+@logged
+fn inc(x: i64) -> i64 {
+    return x + 1
+}
+
+@identity_dec
+fn echo(x) {
+    return x
+}
+
+fn main() {
+    print(inc(3))
+    print(echo(7))
+    print(echo("hi"))
+}

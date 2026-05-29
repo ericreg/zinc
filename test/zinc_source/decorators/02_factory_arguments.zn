@@ -1,0 +1,47 @@
+fn identity_i64(f: (i64) -> i64) -> (i64) -> i64 {
+    return f
+}
+
+fn announce(label: string, times: i64 = 1, suffix: string = "!") -> ((i64) -> i64) -> (i64) -> i64 {
+    print(label)
+    print(times)
+    print(suffix)
+    return identity_i64
+}
+
+fn direct_label(f: (i64) -> i64, label: string = "direct-default") -> (i64) -> i64 {
+    print(label)
+    return f
+}
+
+fn empty_factory() -> ((i64) -> i64) -> (i64) -> i64 {
+    print("empty")
+    return identity_i64
+}
+
+@announce(suffix = "?", label = "named")
+fn named(x: i64) -> i64 {
+    return x + 10
+}
+
+@announce("positional", 2)
+fn positional(x: i64) -> i64 {
+    return x + 20
+}
+
+@direct_label
+fn direct_default(x: i64) -> i64 {
+    return x + 100
+}
+
+@empty_factory()
+fn empty_value(x: i64) -> i64 {
+    return x + 30
+}
+
+fn main() {
+    print(named(1))
+    print(positional(2))
+    print(direct_default(3))
+    print(empty_value(4))
+}

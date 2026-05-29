@@ -1,0 +1,14 @@
+// expected-error: decorator 'needs_label' missing required argument 'label'
+fn needs_label(f: (i64) -> i64, label: string) -> (i64) -> i64 {
+    print(label)
+    return f
+}
+
+@needs_label
+fn value(x: i64) -> i64 {
+    return x
+}
+
+fn main() {
+    print(value(1))
+}

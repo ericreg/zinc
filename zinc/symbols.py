@@ -41,6 +41,7 @@ from zinc.atlas import (
     StructInstance,
     StructMethodInfo,
 )
+from zinc.decorators import DecoratorInfo, ResolvedDecoratorApplication, decorators_from_ctx
 from zinc.exceptions import ZincTypeError
 from zinc.meta_runtime import (
     BUILTIN_META_QNAME,
@@ -726,6 +727,7 @@ class SymbolTableVisitor(zincVisitor):
         concrete argument types. Then processes each specialization.
         """
         self._register_builtins()
+        self._validate_decorator_targets()
 
         for const in self.atlas.consts.values():
             self._resolve_const(const)
@@ -765,11 +767,33 @@ class SymbolTableVisitor(zincVisitor):
             for mangled_name in order:
                 func = self.atlas.functions[mangled_name]
                 self._resolve_function(func)
+            self._resolve_decorator_applications()
             after = tuple(self.atlas.functions.keys())
             if after == before:
                 break
 
         return self.symbols
+
+    def _validate_decorator_targets(self) -> None:
+        """Reject decorator forms that are parsed but not implemented yet."""
+        for symbol in self.module_graph.top_level_symbols.values():
+            has_decorators = bool(decorators_from_ctx(symbol.ctx))
+            if has_decorators:
+                if symbol.kind == "struct":
+                    raise ZincTypeError(f"struct decorator support is not implemented yet: '{symbol.name}'")
+                if symbol.kind == "enum":
+                    raise ZincTypeError(f"enum decorator support is not implemented yet: '{symbol.name}'")
+                if isinstance(symbol.ctx, ZincParser.AsyncFunctionDeclarationContext):
+                    raise ZincTypeError(f"async function decorator support is not implemented yet: '{symbol.name}'")
+            if isinstance(symbol.ctx, ZincParser.StructDeclarationContext):
+                for member_ctx in symbol.ctx.structBody().structMember():
+                    method_ctx = member_ctx.functionDeclaration()
+                    if method_ctx is not None and decorators_from_ctx(method_ctx):
+                        raise ZincTypeError(f"method decorator support is not implemented yet: '{method_ctx.IDENTIFIER().getText()}'")
+            if isinstance(symbol.ctx, ZincParser.EnumDeclarationContext):
+                for method_ctx in symbol.ctx.enumBody().functionDeclaration():
+                    if decorators_from_ctx(method_ctx):
+                        raise ZincTypeError(f"method decorator support is not implemented yet: '{method_ctx.IDENTIFIER().getText()}'")
 
     def _register_builtins(self) -> None:
         """Register built-in functions."""
@@ -808,12 +832,14 @@ class SymbolTableVisitor(zincVisitor):
         struct.methods = [self._copy_struct_method(method) for method in analyzed.methods]
         struct.composition_mode = analyzed.composition_mode
         struct.composition_sources = analyzed.composition_sources
+        struct.has_decorators = analyzed.has_decorators
 
     def _analyze_enum(self, enum) -> None:
         """Analyze an enum declaration and populate variants/methods."""
         analyzed = self._analyze_enum_by_qualified_name(enum.qualified_name)
         enum.variants = [self._copy_enum_variant(variant) for variant in analyzed.variants]
         enum.methods = [self._copy_struct_method(method) for method in analyzed.methods]
+        enum.has_decorators = analyzed.has_decorators
 
     def _analyze_struct_by_qualified_name(self, qualified_name: str) -> StructInstance:
         """Analyze a struct definition, including flattening any composition."""
@@ -832,6 +858,7 @@ class SymbolTableVisitor(zincVisitor):
             qualified_name=symbol.qualified_name,
             module_id=symbol.module_id,
             ctx=symbol.ctx,
+            has_decorators=bool(decorators_from_ctx(symbol.ctx)),
         )
 
         self._struct_analysis_stack.append(qualified_name)
@@ -942,6 +969,7 @@ class SymbolTableVisitor(zincVisitor):
             qualified_name=symbol.qualified_name,
             module_id=symbol.module_id,
             ctx=symbol.ctx,
+            has_decorators=bool(decorators_from_ctx(symbol.ctx)),
         )
 
         self._enum_analysis_stack.append(qualified_name)
@@ -1221,6 +1249,8 @@ class SymbolTableVisitor(zincVisitor):
     ) -> StructMethodInfo:
         """Analyze a struct method for static/instance and self mutability."""
         name = ctx.IDENTIFIER().getText()
+        if decorators_from_ctx(ctx):
+            raise ZincTypeError(f"method decorator support is not implemented yet: '{name}'")
         self._validate_parameter_defaults_for_ctx(ctx, f"method '{name}'", source_module_id)
 
         # Parse parameters
@@ -1277,6 +1307,7 @@ class SymbolTableVisitor(zincVisitor):
             source_module_id=source_module_id,
             constructor_owner_qualified_name=constructor_owner_qualified_name,
             line_num=ctx.start.line if ctx.start is not None else 0,
+            has_decorators=bool(decorators_from_ctx(ctx)),
         )
 
     def _track_self_usage(self, block_ctx) -> tuple[bool, bool]:
@@ -5701,6 +5732,128 @@ class SymbolTableVisitor(zincVisitor):
         finally:
             self._current_module = previous_module
 
+    def _callable_return_value_info(self, info: CallableTypeInfo) -> ResolvedValueInfo:
+        """Return the value metadata produced by a callable signature."""
+        return ResolvedValueInfo(
+            base_type=info.return_type,
+            exact_type=info.return_exact_type,
+            dict_info=self._copy_dict_info(info.return_dict_info),
+            set_info=self._copy_set_info(info.return_set_info),
+            tuple_info=self._copy_tuple_info(info.return_tuple_info),
+            callable_info=self._copy_callable_info(info.return_callable_info),
+            struct_qualified_name=info.return_struct_qualified_name,
+            anonymous_struct_info=self._copy_anonymous_struct_info(info.return_anonymous_struct_info),
+            result_info=self._copy_result_info(info.return_result_info),
+            option_info=self._copy_option_info(info.return_option_info),
+        )
+
+    def _callable_info_matches_function_instance(self, info: CallableTypeInfo, func: FunctionInstance) -> bool:
+        """Return True when callable metadata names this concrete function specialization."""
+        if not any(target.qualified_name == func.qualified_name for target in info.targets):
+            return False
+        if len(info.param_types) != len(func.arg_types):
+            return False
+        for index, param_type in enumerate(info.param_types):
+            func_type = func.arg_types[index]
+            if param_type != func_type:
+                return False
+            expected_exact = info.param_exact_types[index] if index < len(info.param_exact_types) else None
+            actual_exact = func.arg_exact_types[index] if index < len(func.arg_exact_types) else None
+            if (
+                expected_exact is not None
+                and actual_exact is not None
+                and not self._exact_types_compatible(
+                    param_type,
+                    func_type,
+                    expected_exact_type=expected_exact,
+                    actual_exact_type=actual_exact,
+                )
+            ):
+                return False
+        return True
+
+    def _expected_return_info_from_callable_target(
+        self,
+        func: FunctionInstance,
+    ) -> ResolvedValueInfo | None:
+        """Find a concrete expected return shape for a callable target specialization."""
+        seen: set[int] = set()
+
+        def inspect(info: CallableTypeInfo | None) -> ResolvedValueInfo | None:
+            if info is None:
+                return None
+            marker = id(info)
+            if marker in seen:
+                return None
+            seen.add(marker)
+            if info.return_type != BaseType.UNKNOWN and self._callable_info_matches_function_instance(info, func):
+                return self._callable_return_value_info(info)
+            for nested in info.param_callable_infos.values():
+                found = inspect(nested)
+                if found is not None:
+                    return found
+            return inspect(info.return_callable_info)
+
+        for candidate in self.atlas.functions.values():
+            found = inspect(candidate.return_callable_info)
+            if found is not None:
+                return found
+            for nested in candidate.arg_callable_infos.values():
+                found = inspect(nested)
+                if found is not None:
+                    return found
+        for symbol in self.symbols.all_symbols():
+            found = inspect(symbol.callable_info)
+            if found is not None:
+                return found
+        return None
+
+    def _apply_expected_return_info(self, func: FunctionInstance, expected: ResolvedValueInfo | None) -> None:
+        """Apply callable-target return expectations to an otherwise unannotated function."""
+        if expected is None or expected.base_type == BaseType.UNKNOWN:
+            return
+        if self._current_return_type != BaseType.UNKNOWN and not self._assignment_metadata_compatible(
+            expected.base_type,
+            self._current_return_type,
+            expected_exact_type=expected.exact_type,
+            actual_exact_type=self._current_return_exact_type,
+            expected_dict=expected.dict_info,
+            actual_dict=self._current_return_dict_info,
+            expected_set=expected.set_info,
+            actual_set=self._current_return_set_info,
+            expected_tuple=expected.tuple_info,
+            actual_tuple=self._current_return_tuple_info,
+            expected_callable=expected.callable_info,
+            actual_callable=self._current_return_callable_info,
+            expected_struct_qualified_name=expected.struct_qualified_name,
+            actual_struct_qualified_name=self._current_return_struct_qualified_name,
+            expected_anonymous_struct_info=expected.anonymous_struct_info,
+            actual_anonymous_struct_info=self._current_return_anonymous_struct_info,
+            expected_result=expected.result_info,
+            actual_result=self._current_return_result_info,
+            expected_option=expected.option_info,
+            actual_option=self._current_return_option_info,
+        ):
+            raise ZincTypeError(f"function '{func.name}' expects a compatible callable return value")
+
+        expected_callable = self._copy_callable_info(expected.callable_info)
+        if expected.base_type == BaseType.CALLABLE:
+            expected_callable = self._merge_callable_info(
+                expected_callable,
+                self._current_return_callable_info,
+                f"function '{func.name}' return",
+            )
+        self._current_return_type = expected.base_type
+        self._current_return_exact_type = expected.exact_type
+        self._current_return_dict_info = self._copy_dict_info(expected.dict_info)
+        self._current_return_set_info = self._copy_set_info(expected.set_info)
+        self._current_return_tuple_info = self._copy_tuple_info(expected.tuple_info)
+        self._current_return_callable_info = expected_callable
+        self._current_return_struct_qualified_name = expected.struct_qualified_name
+        self._current_return_anonymous_struct_info = self._copy_anonymous_struct_info(expected.anonymous_struct_info)
+        self._current_return_result_info = self._copy_result_info(expected.result_info)
+        self._current_return_option_info = self._copy_option_info(expected.option_info)
+
     def _resolve_function(self, func: FunctionInstance) -> None:
         """Resolve types within a function body for a specific specialization."""
         self._block_counters.clear()
@@ -5909,7 +6062,14 @@ class SymbolTableVisitor(zincVisitor):
         elif hasattr(ctx, "block") and ctx.block() is not None:
             self.visit(ctx.block())
 
-        if hasattr(ctx, "type_") and ctx.type_() is not None:
+        has_return_annotation = hasattr(ctx, "type_") and ctx.type_() is not None
+        if not has_return_annotation:
+            self._apply_expected_return_info(
+                func,
+                self._expected_return_info_from_callable_target(func),
+            )
+
+        if has_return_annotation:
             (
                 annotated_return_type,
                 annotated_return_array_info,
@@ -5947,6 +6107,12 @@ class SymbolTableVisitor(zincVisitor):
                 actual_option=self._current_return_option_info,
             ):
                 raise ZincTypeError(f"function '{func.name}' expects a compatible '{ctx.type_().getText()}' return value")
+            if annotated_return_type == BaseType.CALLABLE:
+                annotated_return_callable_info = self._merge_callable_info(
+                    annotated_return_callable_info,
+                    self._current_return_callable_info,
+                    f"function '{func.name}' return",
+                )
             self._current_return_type = annotated_return_type
             self._current_return_exact_type = self._exact_type_name_from_type_ctx(ctx.type_())
             self._current_return_dict_info = self._copy_dict_info(annotated_return_dict_info)
@@ -5971,6 +6137,9 @@ class SymbolTableVisitor(zincVisitor):
         func.return_anonymous_struct_info = self._copy_anonymous_struct_info(self._current_return_anonymous_struct_info)
         func.return_result_info = self._copy_result_info(self._current_return_result_info)
         func.return_option_info = self._copy_option_info(self._current_return_option_info)
+        if func.return_type == BaseType.CALLABLE:
+            self._materialize_callable_targets(func.return_callable_info)
+        self._discover_decorator_function_specializations(func)
 
         # Update array parameter mutation info
         for i, param_name in enumerate(param_names):
@@ -6645,6 +6814,317 @@ class SymbolTableVisitor(zincVisitor):
             return_result_info=self._copy_result_info(func.return_result_info),
             return_option_info=self._copy_option_info(func.return_option_info),
         )
+
+    def _decorated_impl_callable_info(self, func: FunctionInstance) -> CallableTypeInfo:
+        """Return the callable value that points at a decorated function's hidden implementation."""
+        return self._callable_return_info_from_function(func).with_target(
+            CallableTarget(
+                kind="decorated_impl",
+                qualified_name=func.qualified_name,
+                display_name=func.name,
+            )
+        )
+
+    def _decorator_symbol(self, decorator: DecoratorInfo, module_id: str):
+        """Resolve a decorator path and validate that it names a top-level function."""
+        symbol = self.module_graph.resolve_top_level_path(module_id, list(decorator.path))
+        if symbol is None:
+            raise ZincTypeError(f"unknown decorator '{decorator.display_name}'")
+        if symbol.kind != "function":
+            raise ZincTypeError(f"decorator '{decorator.display_name}' is not callable")
+        if isinstance(symbol.ctx, ZincParser.AsyncFunctionDeclarationContext):
+            raise ZincTypeError(f"async decorator function '{decorator.display_name}' is not supported yet")
+        return symbol
+
+    def _bind_direct_decorator_arguments(
+        self,
+        decorator: DecoratorInfo,
+        decorator_ctx,
+        decorator_module_id: str,
+        target_callable_info: CallableTypeInfo,
+        label: str,
+    ) -> tuple[list[BoundArgument], int]:
+        """Bind the synthetic target callable plus any decorator defaults."""
+        specs = self._parameter_specs_from_ctx(decorator_ctx, decorator_module_id)
+        if not specs:
+            raise ZincTypeError(f"{label} expects a callable parameter")
+        bound: list[BoundArgument] = [
+            BoundArgument(
+                expression=decorator.ctx,
+                parameter_name=specs[0].name,
+                parameter_index=0,
+                parameter_ctx=specs[0].ctx,
+                owner_module_id=specs[0].owner_module_id,
+                value_info=ResolvedValueInfo(
+                    BaseType.CALLABLE,
+                    callable_info=self._copy_callable_info(target_callable_info),
+                ),
+            )
+        ]
+        for index, spec in enumerate(specs[1:], start=1):
+            if spec.default_expr is None:
+                raise ZincTypeError(f"{label} missing required argument '{spec.name}'")
+            bound.append(
+                BoundArgument(
+                    expression=spec.default_expr,
+                    parameter_name=spec.name,
+                    parameter_index=index,
+                    parameter_ctx=spec.ctx,
+                    is_default=True,
+                    owner_module_id=spec.owner_module_id,
+                )
+            )
+        return bound, 0
+
+    def _specialize_decorator_function(
+        self,
+        symbol,
+        bound_args: list[BoundArgument],
+        label: str,
+        caller_mangled: str,
+    ) -> str:
+        """Validate and specialize one decorator/factory function call."""
+        (
+            arg_types,
+            arg_exact_types,
+            arg_exprs,
+            arg_channel_infos,
+            arg_array_infos,
+            arg_dict_infos,
+            arg_set_infos,
+            arg_tuple_infos,
+            arg_callable_infos,
+            arg_result_infos,
+            arg_option_infos,
+            arg_struct_qualified_names,
+            arg_anonymous_struct_infos,
+        ) = self._collect_bound_argument_info(bound_args)
+        if BaseType.UNKNOWN not in arg_types:
+            self._validate_constraints(
+                symbol.ctx,
+                self._constraint_slots_from_call(
+                    symbol.ctx,
+                    arg_types,
+                    arg_exact_types,
+                    arg_array_infos,
+                    arg_dict_infos,
+                    arg_set_infos,
+                    arg_tuple_infos,
+                    arg_callable_infos,
+                    arg_result_infos,
+                    arg_option_infos,
+                    arg_struct_qualified_names,
+                    arg_anonymous_struct_infos,
+                ),
+                label=label,
+            )
+            self._validate_annotated_parameters(
+                symbol.ctx,
+                arg_types,
+                arg_exact_types,
+                arg_exprs,
+                arg_array_infos,
+                arg_dict_infos,
+                arg_set_infos,
+                arg_tuple_infos,
+                arg_callable_infos,
+                arg_result_infos,
+                arg_option_infos,
+                arg_struct_qualified_names,
+                arg_anonymous_struct_infos,
+            )
+        return self.atlas.add_specialization(
+            symbol.qualified_name,
+            arg_types,
+            arg_exact_types,
+            symbol.ctx,
+            caller_mangled,
+            arg_channel_infos,
+            arg_array_infos,
+            arg_dict_infos,
+            arg_set_infos,
+            arg_tuple_infos,
+            arg_callable_infos,
+            arg_result_infos,
+            arg_option_infos,
+            arg_struct_qualified_names,
+            arg_anonymous_struct_infos,
+        )
+
+    def _discover_decorator_function_specializations(self, func: FunctionInstance) -> None:
+        """Add decorator function specializations to the atlas before validation."""
+        decorators = decorators_from_ctx(func.ctx)
+        if not decorators:
+            func.decorator_applications = []
+            return
+        if func.return_type == BaseType.UNKNOWN or BaseType.UNKNOWN in func.arg_types:
+            return
+        target_callable_info = self._decorated_impl_callable_info(func)
+        for decorator in reversed(decorators):
+            symbol = self._decorator_symbol(decorator, func.module_id)
+            label = f"decorator '{decorator.display_name}'"
+            if not decorator.has_call:
+                bound_args, _target_index = self._bind_direct_decorator_arguments(
+                    decorator,
+                    symbol.ctx,
+                    symbol.module_id,
+                    target_callable_info,
+                    label,
+                )
+            else:
+                bound_args = self._bind_call_arguments(decorator.ctx, self._parameter_specs_from_ctx(symbol.ctx, symbol.module_id), label)
+            self._specialize_decorator_function(symbol, bound_args, label, func.mangled_name)
+
+    def _callable_info_accepts(
+        self,
+        expected: CallableTypeInfo | None,
+        actual: CallableTypeInfo | None,
+        label: str,
+    ) -> bool:
+        """Return True when a callable can be used where another callable is expected."""
+        try:
+            self._merge_callable_info(expected, actual, label)
+        except ZincTypeError:
+            return False
+        return expected is not None and actual is not None
+
+    def _require_signature_preserving_result(
+        self,
+        decorator: DecoratorInfo,
+        result_info: CallableTypeInfo | None,
+        target_info: CallableTypeInfo,
+    ) -> CallableTypeInfo:
+        """Validate that a decorator result preserves the decorated function signature."""
+        if result_info is None:
+            raise ZincTypeError(f"decorator '{decorator.display_name}' must return a callable")
+        if not self._callable_info_accepts(target_info, result_info, f"decorator '{decorator.display_name}'"):
+            raise ZincTypeError(f"decorator '{decorator.display_name}' changes the decorated function signature")
+        if result_info.structural_key() != target_info.structural_key():
+            raise ZincTypeError(f"decorator '{decorator.display_name}' changes the decorated function signature")
+        return result_info
+
+    def _factory_result_callable(
+        self,
+        decorator: DecoratorInfo,
+        factory_info: CallableTypeInfo | None,
+        current_info: CallableTypeInfo,
+        target_info: CallableTypeInfo,
+    ) -> CallableTypeInfo:
+        """Validate a decorator factory's returned callable and return its result callable."""
+        if factory_info is None:
+            raise ZincTypeError(f"decorator factory '{decorator.display_name}' must return a callable")
+        if len(factory_info.param_types) != 1 or factory_info.param_types[0] != BaseType.CALLABLE:
+            raise ZincTypeError(f"decorator factory '{decorator.display_name}' must return a callable that accepts the target function")
+        expected_target = factory_info.param_callable_infos.get(0)
+        if not self._callable_info_accepts(expected_target, current_info, f"decorator factory '{decorator.display_name}'"):
+            raise ZincTypeError(f"decorator factory '{decorator.display_name}' does not accept the decorated function signature")
+        if factory_info.return_type != BaseType.CALLABLE:
+            raise ZincTypeError(f"decorator factory '{decorator.display_name}' must return a callable")
+        return self._require_signature_preserving_result(
+            decorator,
+            factory_info.return_callable_info,
+            target_info,
+        )
+
+    def _resolve_decorator_applications(self) -> None:
+        """Resolve and store type-checked decorator chains for every decorated specialization."""
+        for func in list(self.atlas.functions.values()):
+            decorators = decorators_from_ctx(func.ctx)
+            if not decorators:
+                func.decorator_applications = []
+                continue
+            if func.return_type == BaseType.UNKNOWN or BaseType.UNKNOWN in func.arg_types:
+                continue
+            if func.name == "main":
+                raise ZincTypeError("decorators on main() are not supported yet")
+
+            self._current_function = func.mangled_name
+            self._current_module = func.module_id
+            self.symbols.enter_scope(func.mangled_name)
+            try:
+                target_info = self._decorated_impl_callable_info(func)
+                current_info = target_info
+                applications: list[ResolvedDecoratorApplication] = []
+                pending = False
+                for decorator in reversed(decorators):
+                    symbol = self._decorator_symbol(decorator, func.module_id)
+                    label = f"decorator '{decorator.display_name}'"
+                    if not decorator.has_call:
+                        bound_args, target_index = self._bind_direct_decorator_arguments(
+                            decorator,
+                            symbol.ctx,
+                            symbol.module_id,
+                            current_info,
+                            label,
+                        )
+                        mangled = self._specialize_decorator_function(symbol, bound_args, label, func.mangled_name)
+                        decorator_func = self.atlas.functions.get(mangled)
+                        if decorator_func is None or decorator_func.return_type == BaseType.UNKNOWN:
+                            pending = True
+                            break
+                        result_info = self._require_signature_preserving_result(
+                            decorator,
+                            decorator_func.return_callable_info,
+                            target_info,
+                        )
+                        self._materialize_callable_targets(result_info)
+                        applications.append(
+                            ResolvedDecoratorApplication(
+                                info=decorator,
+                                kind="direct",
+                                result_callable_info=result_info,
+                                decorator_mangled_name=mangled,
+                                decorator_bound_args=bound_args,
+                                target_parameter_index=target_index,
+                            )
+                        )
+                        current_info = result_info
+                        continue
+
+                    factory_bound_args = self._bind_call_arguments(
+                        decorator.ctx,
+                        self._parameter_specs_from_ctx(symbol.ctx, symbol.module_id),
+                        label,
+                    )
+                    factory_mangled = self._specialize_decorator_function(
+                        symbol,
+                        factory_bound_args,
+                        label,
+                        func.mangled_name,
+                    )
+                    factory_func = self.atlas.functions.get(factory_mangled)
+                    if factory_func is None or factory_func.return_type == BaseType.UNKNOWN:
+                        pending = True
+                        break
+                    if factory_func.return_type != BaseType.CALLABLE:
+                        raise ZincTypeError(f"decorator factory '{decorator.display_name}' must return a callable")
+                    factory_callable_info = factory_func.return_callable_info
+                    result_info = self._factory_result_callable(
+                        decorator,
+                        factory_callable_info,
+                        current_info,
+                        target_info,
+                    )
+                    self._materialize_callable_targets(factory_callable_info)
+                    self._materialize_callable_targets(result_info)
+                    applications.append(
+                        ResolvedDecoratorApplication(
+                            info=decorator,
+                            kind="factory",
+                            result_callable_info=result_info,
+                            factory_mangled_name=factory_mangled,
+                            factory_bound_args=factory_bound_args,
+                            factory_callable_info=factory_callable_info,
+                        )
+                    )
+                    current_info = result_info
+                if pending:
+                    continue
+                func.decorator_applications = applications
+            finally:
+                self.symbols.exit_scope()
+                self._current_function = None
+                self._current_module = None
 
     def _refine_callable_signature(
         self,
@@ -9020,7 +9500,7 @@ class SymbolTableVisitor(zincVisitor):
 
                 if target.kind == "context_cancel":
                     candidate_type = BaseType.VOID
-                elif target.kind in {"function", "lambda", "closure"}:
+                elif target.kind in {"function", "lambda", "closure", "decorated_impl"}:
                     func_def = self.atlas.function_defs.get(target.qualified_name)
                     if func_def is None:
                         raise ZincTypeError(f"unknown callable target '{target.display_name}'")
@@ -11237,6 +11717,8 @@ class SymbolTableVisitor(zincVisitor):
 
     def visitFunctionDeclaration(self, ctx: ZincParser.FunctionDeclarationContext) -> None:
         """Finalize a nested sync function declaration without visiting its body here."""
+        if decorators_from_ctx(ctx):
+            raise ZincTypeError(f"nested function decorator support is not implemented yet: '{ctx.IDENTIFIER().getText()}'")
         info = self._current_lexical_function(ctx.IDENTIFIER().getText())
         if info is None:
             info = self._register_lexical_function_stub(
@@ -11249,6 +11731,8 @@ class SymbolTableVisitor(zincVisitor):
 
     def visitAsyncFunctionDeclaration(self, ctx: ZincParser.AsyncFunctionDeclarationContext) -> None:
         """Finalize a nested async function declaration without visiting its body here."""
+        if decorators_from_ctx(ctx):
+            raise ZincTypeError(f"async function decorator support is not implemented yet: '{ctx.IDENTIFIER().getText()}'")
         info = self._current_lexical_function(ctx.IDENTIFIER().getText())
         if info is None:
             info = self._register_lexical_function_stub(

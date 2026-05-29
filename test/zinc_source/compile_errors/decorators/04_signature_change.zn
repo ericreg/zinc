@@ -1,0 +1,15 @@
+// expected-error: decorator 'bad' changes the decorated function signature
+fn bad(f: (i64) -> i64) -> (string) -> string {
+    return fn(value: string) {
+        return value
+    }
+}
+
+@bad
+fn value(x: i64) -> i64 {
+    return x
+}
+
+fn main() {
+    print(value(1))
+}

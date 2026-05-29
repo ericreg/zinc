@@ -37,6 +37,7 @@ COMPILE_ERROR_GROUPS = (
     "control_flow",
     "functions",
     "operators",
+    "decorators",
 )
 
 

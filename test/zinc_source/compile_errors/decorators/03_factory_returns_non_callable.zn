@@ -1,0 +1,13 @@
+// expected-error: decorator factory 'bad' must return a callable
+fn bad(label: string) -> i64 {
+    return 1
+}
+
+@bad("x")
+fn value(x: i64) -> i64 {
+    return x
+}
+
+fn main() {
+    print(value(1))
+}

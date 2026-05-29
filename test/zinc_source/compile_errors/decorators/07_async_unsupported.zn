@@ -1,0 +1,9 @@
+// expected-error: async function decorator support is not implemented yet: 'work'
+@trace
+async work() {
+    print(1)
+}
+
+fn main() {
+    print(1)
+}

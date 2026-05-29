@@ -1,0 +1,14 @@
+// expected-error: method decorator support is not implemented yet: 'read'
+struct Box {
+    value: i64
+
+    @trace
+    fn read() {
+        return self.value
+    }
+}
+
+fn main() {
+    item = Box { value: 1 }
+    print(item.read())
+}

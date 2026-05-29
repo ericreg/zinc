@@ -1,0 +1,17 @@
+// expected-error: nested function decorator support is not implemented yet: 'inner'
+fn trace(f) {
+    return f
+}
+
+fn outer() {
+    @trace
+    fn inner() {
+        return 1
+    }
+
+    return inner()
+}
+
+fn main() {
+    print(outer())
+}

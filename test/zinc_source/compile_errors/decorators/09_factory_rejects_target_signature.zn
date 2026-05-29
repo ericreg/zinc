@@ -1,0 +1,15 @@
+// expected-error: decorator factory 'factory' does not accept the decorated function signature
+fn factory() -> ((string) -> string) -> (string) -> string {
+    return fn(f: (string) -> string) {
+        return f
+    }
+}
+
+@factory()
+fn value(x: i64) -> i64 {
+    return x
+}
+
+fn main() {
+    print(value(1))
+}

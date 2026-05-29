@@ -30,6 +30,7 @@ from zinc.atlas import (
     StructInstance,
     StructMethodInfo,
 )
+from zinc.exceptions import ZincTypeError
 from zinc.meta_runtime import (
     COMPONENT_ORDER_QNAME,
     MetaListValue,
@@ -1178,6 +1179,57 @@ class CodeGenVisitor(zincVisitor):
             for nested in info.return_tuple_info.element_callable_infos.values():
                 self._register_callable_info(nested)
 
+    def _callable_info_from_function_instance(self, func: FunctionInstance) -> CallableTypeInfo:
+        """Convert a resolved function specialization into callable metadata."""
+        param_names: list[str] = []
+        param_default_texts: dict[int, str] = {}
+        param_default_exprs: dict[int, ParserRuleContext] = {}
+        param_default_owner_modules: dict[int, str] = {}
+        for index, param in enumerate(function_parameters(func.ctx)):
+            param_names.append(param.name)
+            if param.default_expr is not None:
+                param_default_texts[index] = param.default_expr.getText()
+                param_default_exprs[index] = param.default_expr
+                param_default_owner_modules[index] = func.module_id
+
+        return CallableTypeInfo(
+            param_types=list(func.arg_types),
+            param_exact_types=list(func.arg_exact_types),
+            param_names=param_names,
+            param_default_texts=param_default_texts,
+            param_default_exprs=param_default_exprs,
+            param_default_owner_modules=param_default_owner_modules,
+            param_array_infos={index: info.copy() for index, info in func.arg_array_infos.items()},
+            param_dict_infos={index: info.copy() for index, info in func.arg_dict_infos.items()},
+            param_set_infos={index: info.copy() for index, info in func.arg_set_infos.items()},
+            param_tuple_infos={index: info.copy() for index, info in func.arg_tuple_infos.items()},
+            param_callable_infos={index: info.copy() for index, info in func.arg_callable_infos.items()},
+            param_struct_qualified_names=dict(func.arg_struct_qualified_names),
+            param_anonymous_struct_infos={index: info.copy() for index, info in func.arg_anonymous_struct_infos.items()},
+            param_result_infos={index: info.copy() for index, info in func.arg_result_infos.items()},
+            param_option_infos={index: info.copy() for index, info in func.arg_option_infos.items()},
+            return_type=func.return_type,
+            return_exact_type=func.return_exact_type,
+            return_dict_info=func.return_dict_info.copy() if func.return_dict_info else None,
+            return_set_info=func.return_set_info.copy() if func.return_set_info else None,
+            return_tuple_info=func.return_tuple_info.copy() if func.return_tuple_info else None,
+            return_callable_info=func.return_callable_info.copy() if func.return_callable_info else None,
+            return_struct_qualified_name=func.return_struct_qualified_name,
+            return_anonymous_struct_info=func.return_anonymous_struct_info.copy() if func.return_anonymous_struct_info else None,
+            return_result_info=func.return_result_info.copy() if func.return_result_info else None,
+            return_option_info=func.return_option_info.copy() if func.return_option_info else None,
+        )
+
+    def _decorated_impl_callable_info(self, func: FunctionInstance) -> CallableTypeInfo:
+        """Return a callable value targeting a decorated function's hidden implementation."""
+        return self._callable_info_from_function_instance(func).with_target(
+            CallableTarget(
+                kind="decorated_impl",
+                qualified_name=func.qualified_name,
+                display_name=func.name,
+            )
+        )
+
     def _collect_callable_signatures(self) -> None:
         """Collect every callable signature that needs a Rust enum."""
         self._callable_signatures = {}
@@ -1191,6 +1243,11 @@ class CodeGenVisitor(zincVisitor):
             for channel_infos in func.arg_channel_infos.values():
                 for channel_info in channel_infos:
                     self._register_callable_info(channel_info.element_callable_info)
+            if func.decorator_applications:
+                self._register_callable_info(self._decorated_impl_callable_info(func))
+                for application in func.decorator_applications:
+                    self._register_callable_info(application.result_callable_info)
+                    self._register_callable_info(application.factory_callable_info)
         for symbol in self.symbols.all_symbols():
             if symbol.kind not in {SymbolKind.VARIABLE, SymbolKind.PARAMETER, SymbolKind.TEMPORARY}:
                 continue
@@ -1508,8 +1565,30 @@ class CodeGenVisitor(zincVisitor):
             as_reference=False,
         )
 
+    def _decorated_impl_rust_name_for_target(self, info: CallableTypeInfo, target: CallableTarget) -> str:
+        """Return the hidden Rust implementation name for a decorated function target."""
+        return (
+            self.atlas._mangle_name(
+                target.qualified_name,
+                info.param_types,
+                info.param_exact_types,
+                arg_array_infos=info.param_array_infos,
+                arg_dict_infos=info.param_dict_infos,
+                arg_set_infos=info.param_set_infos,
+                arg_tuple_infos=info.param_tuple_infos,
+                arg_callable_infos=info.param_callable_infos,
+                arg_result_infos=info.param_result_infos,
+                arg_option_infos=info.param_option_infos,
+                arg_struct_qualified_names=info.param_struct_qualified_names,
+                arg_anonymous_struct_infos=info.param_anonymous_struct_infos,
+            )
+            + "__zinc_impl"
+        )
+
     def _callable_dispatch_target(self, info: CallableTypeInfo, target: CallableTarget) -> str:
         """Render the Rust callable target for a dispatcher arm."""
+        if target.kind == "decorated_impl":
+            return self._decorated_impl_rust_name_for_target(info, target)
         if target.kind in {"function", "lambda", "closure"}:
             return self.atlas._mangle_name(
                 target.qualified_name,
@@ -1788,6 +1867,9 @@ class CodeGenVisitor(zincVisitor):
                 self._uses_async = True
             elif name in self.atlas.functions:
                 self.atlas.functions[name].is_async = True
+        for func in self.atlas.functions.values():
+            if func.decorator_applications and func.is_async:
+                raise ZincTypeError(f"async function decorator support is not implemented yet: '{func.name}'")
 
     def _struct_rust_name(self, struct: StructInstance) -> str:
         """Return the flattened Rust name for a struct."""
@@ -2205,9 +2287,74 @@ class CodeGenVisitor(zincVisitor):
                 return self._named_enum_rust_name(enum_symbol.qualified_name)
         return zinc_type
 
+    def _function_param_rust_type(self, func: FunctionInstance, index: int) -> str:
+        """Render one function parameter type using resolved metadata."""
+        if index in func.arg_channel_infos and func.arg_channel_infos[index]:
+            return func.arg_channel_infos[index][0].to_rust_type()
+        if index in func.arg_array_infos:
+            return func.arg_array_infos[index].to_rust_type()
+        if index in func.arg_dict_infos:
+            return func.arg_dict_infos[index].to_rust_type()
+        if index in func.arg_set_infos:
+            return func.arg_set_infos[index].to_rust_type()
+        if index in func.arg_tuple_infos:
+            return func.arg_tuple_infos[index].to_rust_type()
+        if index in func.arg_callable_infos:
+            return func.arg_callable_infos[index].rust_type_name()
+        if func.arg_types[index] == BaseType.STRUCT:
+            return self._type_with_metadata_to_rust(
+                BaseType.STRUCT,
+                struct_qualified_name=func.arg_struct_qualified_names.get(index),
+                anonymous_struct_info=func.arg_anonymous_struct_infos.get(index),
+                as_reference=False,
+            )
+        return self._type_with_metadata_to_rust(
+            func.arg_types[index],
+            exact_type=func.arg_exact_types[index] if index < len(func.arg_exact_types) else None,
+        )
+
+    def _function_return_type_suffix(self, func: FunctionInstance) -> str:
+        """Render a Rust function return suffix."""
+        if func.return_type == BaseType.VOID:
+            return ""
+        if func.return_type == BaseType.DICT and func.return_dict_info:
+            return f" -> {func.return_dict_info.to_rust_type(as_reference=False)}"
+        if func.return_type == BaseType.SET and func.return_set_info:
+            return f" -> {func.return_set_info.to_rust_type(as_reference=False)}"
+        if func.return_type == BaseType.TUPLE and func.return_tuple_info:
+            return f" -> {func.return_tuple_info.to_rust_type()}"
+        if func.return_type == BaseType.CALLABLE and func.return_callable_info:
+            return f" -> {func.return_callable_info.rust_type_name()}"
+        if func.return_type == BaseType.STRUCT:
+            return " -> " + self._type_with_metadata_to_rust(
+                BaseType.STRUCT,
+                struct_qualified_name=func.return_struct_qualified_name,
+                anonymous_struct_info=func.return_anonymous_struct_info,
+                as_reference=False,
+            )
+        if func.return_type == BaseType.RESULT and func.return_result_info:
+            return f" -> {func.return_result_info.to_rust_type()}"
+        if func.return_type == BaseType.OPTION and func.return_option_info:
+            return f" -> {func.return_option_info.to_rust_type()}"
+        return " -> " + self._type_with_metadata_to_rust(
+            func.return_type,
+            exact_type=func.return_exact_type,
+        )
+
+    def _decorated_impl_rust_name(self, func: FunctionInstance) -> str:
+        """Return the hidden Rust symbol for a decorated function implementation."""
+        return f"{func.mangled_name}__zinc_impl"
+
     def _generate_function(self, func: FunctionInstance) -> str:
         """Generate a function definition using mangled name."""
-        return self._generate_function_with_name(func, func.mangled_name)
+        if not func.decorator_applications:
+            return self._generate_function_with_name(func, func.mangled_name)
+        return "\n\n".join(
+            [
+                self._generate_function_with_name(func, self._decorated_impl_rust_name(func)),
+                self._generate_decorated_function_wrapper(func),
+            ]
+        )
 
     def _generate_function_with_name(
         self,
@@ -2234,37 +2381,8 @@ class CodeGenVisitor(zincVisitor):
             if i < len(func.arg_types):
                 # Check if this is a channel parameter with type info
                 if i in func.arg_channel_infos and func.arg_channel_infos[i]:
-                    # Use first channel info (all should have same element type)
-                    chan_info = func.arg_channel_infos[i][0]
-                    type_str = chan_info.to_rust_type()
                     self._current_channel_params.add(param_name)
-                # Check if this is an array parameter with element type info
-                elif i in func.arg_array_infos:
-                    arr_info = func.arg_array_infos[i]
-                    type_str = arr_info.to_rust_type()
-                elif i in func.arg_dict_infos:
-                    dict_info = func.arg_dict_infos[i]
-                    type_str = dict_info.to_rust_type()
-                elif i in func.arg_set_infos:
-                    set_info = func.arg_set_infos[i]
-                    type_str = set_info.to_rust_type()
-                elif i in func.arg_tuple_infos:
-                    tuple_info = func.arg_tuple_infos[i]
-                    type_str = tuple_info.to_rust_type()
-                elif i in func.arg_callable_infos:
-                    type_str = func.arg_callable_infos[i].rust_type_name()
-                elif func.arg_types[i] == BaseType.STRUCT:
-                    type_str = self._type_with_metadata_to_rust(
-                        BaseType.STRUCT,
-                        struct_qualified_name=func.arg_struct_qualified_names.get(i),
-                        anonymous_struct_info=func.arg_anonymous_struct_infos.get(i),
-                        as_reference=False,
-                    )
-                else:
-                    type_str = self._type_with_metadata_to_rust(
-                        func.arg_types[i],
-                        exact_type=func.arg_exact_types[i] if i < len(func.arg_exact_types) else None,
-                    )
+                type_str = self._function_param_rust_type(func, i)
                 params.append(f"{param_name}: {type_str}")
             else:
                 params.append(param_name)
@@ -2289,35 +2407,7 @@ class CodeGenVisitor(zincVisitor):
                 self._declared_vars.add(capture.name)
             body_stmts = [*prelude, *body_stmts]
         param_str = ", ".join(params)
-
-        # Build return type suffix if not void
-        if func.return_type != BaseType.VOID:
-            if func.return_type == BaseType.DICT and func.return_dict_info:
-                return_type_str = f" -> {func.return_dict_info.to_rust_type(as_reference=False)}"
-            elif func.return_type == BaseType.SET and func.return_set_info:
-                return_type_str = f" -> {func.return_set_info.to_rust_type(as_reference=False)}"
-            elif func.return_type == BaseType.TUPLE and func.return_tuple_info:
-                return_type_str = f" -> {func.return_tuple_info.to_rust_type()}"
-            elif func.return_type == BaseType.CALLABLE and func.return_callable_info:
-                return_type_str = f" -> {func.return_callable_info.rust_type_name()}"
-            elif func.return_type == BaseType.STRUCT:
-                return_type_str = " -> " + self._type_with_metadata_to_rust(
-                    BaseType.STRUCT,
-                    struct_qualified_name=func.return_struct_qualified_name,
-                    anonymous_struct_info=func.return_anonymous_struct_info,
-                    as_reference=False,
-                )
-            elif func.return_type == BaseType.RESULT and func.return_result_info:
-                return_type_str = f" -> {func.return_result_info.to_rust_type()}"
-            elif func.return_type == BaseType.OPTION and func.return_option_info:
-                return_type_str = f" -> {func.return_option_info.to_rust_type()}"
-            else:
-                return_type_str = " -> " + self._type_with_metadata_to_rust(
-                    func.return_type,
-                    exact_type=func.return_exact_type,
-                )
-        else:
-            return_type_str = ""
+        return_type_str = self._function_return_type_suffix(func)
 
         async_kw = "async " if (func.is_async if force_async is None else force_async) else ""
         lines = [f"{async_kw}fn {rust_name}({param_str}){return_type_str} {{"]
@@ -2327,6 +2417,103 @@ class CodeGenVisitor(zincVisitor):
                 lines.append(f"    {line}")
         lines.append("}")
 
+        return "\n".join(lines)
+
+    def _render_decorator_bound_function_args(
+        self,
+        mangled_name: str,
+        bound_args: list[BoundArgument],
+        synthetic_args: dict[int, str] | None = None,
+    ) -> list[str]:
+        """Render bound decorator/factory arguments in declaration order."""
+        func = self.atlas.functions.get(mangled_name)
+        synthetic_args = synthetic_args or {}
+        if func is None:
+            return [
+                synthetic_args[arg.parameter_index] if arg.parameter_index in synthetic_args else self._visit_call_arg(arg)
+                for arg in bound_args
+            ]
+
+        rendered: list[str] = []
+        arg_ctxs: list[object | None] = []
+        for arg in bound_args:
+            i = arg.parameter_index
+            if i in synthetic_args:
+                rendered.append(synthetic_args[i])
+                arg_ctxs.append(None)
+                continue
+            rendered.append(
+                self._visit_call_arg_with_expectations(
+                    arg,
+                    expected_type=func.arg_types[i] if i < len(func.arg_types) else None,
+                    dict_info=func.arg_dict_infos.get(i),
+                    set_info=func.arg_set_infos.get(i),
+                    tuple_info=func.arg_tuple_infos.get(i),
+                    callable_info=func.arg_callable_infos.get(i),
+                    coerce_scalar=False,
+                    coerce_callable=False,
+                )
+            )
+            arg_ctxs.append(arg.expression)
+        return self._process_function_args(mangled_name, rendered, arg_ctxs)
+
+    def _generate_decorated_function_wrapper(self, func: FunctionInstance) -> str:
+        """Generate the public wrapper that applies a function's decorator chain."""
+        self._current_function = func.mangled_name
+        self._current_module = func.module_id
+        self._declared_vars.clear()
+        self._current_channel_params = set()
+
+        params: list[str] = []
+        param_names: list[str] = []
+        for i, param in enumerate(function_parameters(func.ctx)):
+            param_name = param.name
+            param_names.append(param_name)
+            if i < len(func.arg_types):
+                if i in func.arg_channel_infos and func.arg_channel_infos[i]:
+                    self._current_channel_params.add(param_name)
+                params.append(f"{param_name}: {self._function_param_rust_type(func, i)}")
+            else:
+                params.append(param_name)
+            self._declared_vars.add(param_name)
+
+        target_info = self._decorated_impl_callable_info(func)
+        current_var = "__zinc_decorated_0"
+        initial_callable = self._render_callable_value_for_signature(target_info, target_info)
+        lines = [f"fn {func.mangled_name}({', '.join(params)}){self._function_return_type_suffix(func)} {{"]
+        lines.append(f"    let {current_var} = {initial_callable};")
+
+        for index, application in enumerate(func.decorator_applications, start=1):
+            next_var = f"__zinc_decorated_{index}"
+            if application.kind == "direct":
+                if application.decorator_mangled_name is None or application.target_parameter_index is None:
+                    raise RuntimeError("internal error: incomplete direct decorator application")
+                args = self._render_decorator_bound_function_args(
+                    application.decorator_mangled_name,
+                    application.decorator_bound_args,
+                    {application.target_parameter_index: current_var},
+                )
+                lines.append(f"    let {next_var} = {application.decorator_mangled_name}({', '.join(args)});")
+                current_var = next_var
+                continue
+
+            if application.kind != "factory" or application.factory_mangled_name is None:
+                raise RuntimeError("internal error: incomplete decorator factory application")
+            factory_var = f"__zinc_decorator_factory_{index}"
+            factory_args = self._render_decorator_bound_function_args(
+                application.factory_mangled_name,
+                application.factory_bound_args,
+            )
+            lines.append(f"    let {factory_var} = {application.factory_mangled_name}({', '.join(factory_args)});")
+            lines.append(f"    let {next_var} = {factory_var}.call({current_var}.clone());")
+            current_var = next_var
+
+        final_call = f"{current_var}.call({', '.join(param_names)})"
+        if func.return_type == BaseType.VOID:
+            lines.append(f"    {final_call};")
+        else:
+            lines.append(f"    return {final_call};")
+        lines.append("}")
         return "\n".join(lines)
 
     def _generate_result_main_wrapper_body(self) -> list[str]:

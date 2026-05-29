@@ -1227,8 +1227,59 @@ fn area_structural(shape) {
 }
 ```
 
-`#[...]` is intentionally separate from future decorator syntax. Zinc reserves
-`@decorator` and `@decorator(...)` for declaration decorators later.
+## Declaration Decorators
+
+Decorators wrap top-level sync functions with Python-like declaration syntax:
+
+```zinc
+fn logged(f: (i64) -> i64) -> (i64) -> i64 {
+    return fn(x: i64) {
+        print("logged")
+        return f(x)
+    }
+}
+
+@logged
+fn inc(x: i64) -> i64 {
+    return x + 1
+}
+```
+
+`@decorator` means `decorator(target_function)`. `@decorator(args...)` means
+`decorator(args...)(target_function)`, so factory arguments use ordinary Zinc
+call binding, type checking, defaults, named arguments, and spread rules.
+
+Stacked decorators apply bottom-up:
+
+```zinc
+@outer()
+@inner
+fn value(x: i64) -> i64 {
+    return x
+}
+```
+
+This wraps `value` as if `inner` receives the implementation first, then
+`outer()` receives that wrapped callable.
+
+Decorators are signature-preserving in v1. The callable returned by each
+decorator must have the same parameter and return types as the decorated
+function. Function annotations and `#[...]` constraints are checked before the
+decorator chain is applied, and decorator functions or factories are checked
+like ordinary calls.
+
+Constraints must appear before decorators:
+
+```zinc
+#[x in [i64]]
+@logged
+fn checked(x) {
+    return x
+}
+```
+
+Decorators on structs, enums, methods, and async functions are parsed, but v1
+reports a clear unsupported-feature error for those targets.
 
 ## Channels And Spawn
 
