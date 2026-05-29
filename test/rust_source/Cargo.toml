@@ -139,6 +139,10 @@ name = "callables_22_arrow_lambda"
 path = "src/callables/22_arrow_lambda.rs"
 
 [[bin]]
+name = "callables_23_arrow_lambda_edges"
+path = "src/callables/23_arrow_lambda_edges.rs"
+
+[[bin]]
 name = "closures_01_lambda_capture_read"
 path = "src/closures/01_lambda_capture_read.rs"
 

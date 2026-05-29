@@ -1,0 +1,7 @@
+// expected-error: arrow lambdas are expression-only
+fn main() {
+    f = (x) -> {
+        y = x + 1
+        y
+    }
+}

@@ -1,0 +1,70 @@
+fn apply_twice(f, x) {
+    return f(f(x))
+}
+
+fn choose(flag) {
+    if flag {
+        return x -> x + 1
+    }
+    return x -> x + 2
+}
+
+fn make_chain(x) {
+    return y -> z -> x + y + z
+}
+
+fn call_binary(f, left, right) {
+    return f(left, right)
+}
+
+fn main() {
+    print((x -> x + 1 * 2)(3))
+
+    use_i32_right: (i64, i32) -> i64 = (x, y: i32) -> x + 1
+    print(use_i32_right(5, 2i32))
+
+    use_i32_left: (i32, i64) -> i64 = (x: i32, y) -> y + 1
+    print(use_i32_left(3i32, 4))
+
+    ignore_first: (string, i32) -> i64 = (x, y: i32) -> 1
+    print(ignore_first("wide", 1i32))
+
+    seed = 9
+    get = () -> seed + 1
+    print(get())
+
+    offset = 6
+    print((x -> x + offset)(4))
+
+    print(apply_twice(x -> x + 3, 1))
+
+    inc_or_step = choose(false)
+    print(inc_or_step(10))
+
+    nested = make_chain(2)
+    plus_five = nested(3)
+    print(plus_five(4))
+
+    curried = x -> y -> x * y
+    times3 = curried(3)
+    print(times3(4))
+
+    branch = (flag, value) -> if flag {
+        value + 1
+    } else {
+        value + 2
+    }
+    print(branch(true, 4))
+    print(branch(false, 4))
+
+    direct_slot: (i64) -> i64 = x -> x * 5
+    print(direct_slot(2))
+
+    named = (left, right) -> left - right
+    print(named(right=3, left=10))
+
+    trailing = (x, y,) -> x - y
+    print(trailing(10, 4,))
+
+    print(call_binary((x, y: i32) -> x * 4, 3, 4i32))
+}

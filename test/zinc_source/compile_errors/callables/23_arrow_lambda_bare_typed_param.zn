@@ -1,0 +1,4 @@
+// expected-error: syntax error
+fn main() {
+    f = x: i32 -> x
+}

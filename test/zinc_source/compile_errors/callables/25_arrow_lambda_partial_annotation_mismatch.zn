@@ -1,0 +1,5 @@
+// expected-error: parameter 'y' expects a compatible 'i32' value
+fn main() {
+    f = (x, y: i32) -> x + y
+    print(f(1, 2.5))
+}

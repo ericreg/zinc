@@ -1,0 +1,5 @@
+// expected-error: indirect call missing required argument 'y'
+fn main() {
+    f = (x, y) -> x + y
+    print(f(1))
+}

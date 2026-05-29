@@ -197,3 +197,73 @@ def test_arrow_lambda_forms_parse() -> None:
     assert partial_lambda.parameterList().parameter(1).typeAlternative().getText() == "i32"
     assert zero_lambda.parameterList() is None
     assert isinstance(curried_body, zincParser.LambdaExprContext)
+
+
+def test_arrow_lambda_precedence_and_direct_calls_parse() -> None:
+    """Arrow lambdas bind loosely and can be parenthesized for immediate calls."""
+    tree, errors = parse_program(
+        """
+        fn main() {
+            loose = x -> x + 1 * 2
+            grouped = (x -> x + 1)(2)
+            nested_call = ((x -> y -> x * y)(3))(4)
+            branch = (flag, value) -> if flag {
+                value + 1
+            } else {
+                value + 2
+            }
+        }
+        """
+    )
+
+    assert errors == []
+    statements = tree.statement(0).functionDeclaration().block().statement()
+    loose_body = statements[0].variableAssignment().expression().lambdaExpression().expression()
+    grouped_expr = statements[1].variableAssignment().expression()
+    nested_outer = statements[2].variableAssignment().expression()
+    branch_body = statements[3].variableAssignment().expression().lambdaExpression().expression()
+
+    assert isinstance(loose_body, zincParser.AdditiveExprContext)
+    assert isinstance(grouped_expr, zincParser.FunctionCallExprContext)
+    assert isinstance(grouped_expr.expression(), zincParser.ParenExprContext)
+    assert isinstance(nested_outer, zincParser.FunctionCallExprContext)
+    assert isinstance(branch_body, zincParser.IfExprContext)
+
+
+def test_arrow_lambda_parameter_edge_forms_parse() -> None:
+    """Parenthesized arrow parameters allow annotations and trailing commas."""
+    tree, errors = parse_program(
+        """
+        fn main() {
+            typed_first = (x: i32, y) -> x + y
+            typed_second = (x, y: i32,) -> x + y
+            empty = () -> ()
+            defaulted = (x = 1) -> x
+        }
+        """
+    )
+
+    assert errors == []
+    statements = tree.statement(0).functionDeclaration().block().statement()
+    typed_first = statements[0].variableAssignment().expression().lambdaExpression()
+    typed_second = statements[1].variableAssignment().expression().lambdaExpression()
+    empty_lambda = statements[2].variableAssignment().expression().lambdaExpression()
+    defaulted = statements[3].variableAssignment().expression().lambdaExpression()
+
+    assert typed_first.parameterList().parameter(0).typeAlternative().getText() == "i32"
+    assert typed_second.parameterList().parameter(1).typeAlternative().getText() == "i32"
+    assert empty_lambda.parameterList() is None
+    assert defaulted.parameterList().parameter(0).expression().getText() == "1"
+
+
+def test_arrow_lambda_bare_typed_parameter_is_rejected() -> None:
+    """Bare arrow parameters stay identifier-only; typed params require parens."""
+    _, errors = parse_program(
+        """
+        fn main() {
+            f = x: i32 -> x
+        }
+        """
+    )
+
+    assert errors

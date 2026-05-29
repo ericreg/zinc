@@ -49,6 +49,24 @@ def test_lambda_capture_order_is_stable(tmp_path: Path) -> None:
     assert [capture.name for capture in closure.captures] == ["x", "y"]
 
 
+def test_arrow_lambda_capture_order_is_stable(tmp_path: Path) -> None:
+    """Arrow lambda capture ordering should match block lambda capture ordering."""
+    visitor = resolve_source(
+        tmp_path,
+        """
+        fn main() {
+            x = 1
+            y = 2
+            f = z -> x + y + z + x
+            print(f(3))
+        }
+        """,
+    )
+
+    closure = next(iter(visitor.lexical_functions.values()))
+    assert [capture.name for capture in closure.captures] == ["x", "y"]
+
+
 def test_zero_capture_lambda_keeps_empty_env(tmp_path: Path) -> None:
     """No-capture lambdas should still resolve as closures with no captures."""
     visitor = resolve_source(
