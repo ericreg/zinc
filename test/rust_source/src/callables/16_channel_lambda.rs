@@ -1,4 +1,4 @@
-use zinc_internal::{__ZincChannel};
+use zinc_internal::{Channel};
 
 #[derive(Clone)]
 struct __ZincClosureEnv_callables_16_channel_lambda___lambda_callables_16_channel_lambda__main_12_23 {
@@ -31,7 +31,7 @@ fn callables_16_channel_lambda____lambda_callables_16_channel_lambda__main_12_23
 
 #[tokio::main]
 async fn main() {
-    let jobs = __ZincChannel::<__ZincCallable_i64_to_i64>::unbounded();
+    let jobs = Channel::<__ZincCallable_i64_to_i64>::unbounded();
     jobs.send(__ZincCallable_i64_to_i64::V0(__ZincClosureEnv_callables_16_channel_lambda___lambda_callables_16_channel_lambda__main_12_23 {})).await;
     let f = jobs.recv().await;
     println!("{}", f.call(3));

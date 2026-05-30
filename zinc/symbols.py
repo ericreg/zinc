@@ -3096,7 +3096,7 @@ class SymbolTableVisitor(zincVisitor):
 
     def _struct_type_kind_name(self, exact_type: str | None) -> str:
         """Return a TypeMeta kind label for a scalar-like exact type."""
-        if exact_type == "__ZincContext":
+        if exact_type == "Context":
             return "context"
         return "primitive"
 

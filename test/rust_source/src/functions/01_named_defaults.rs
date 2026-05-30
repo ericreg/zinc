@@ -1,4 +1,4 @@
-use zinc_internal::{__ZincChannel};
+use zinc_internal::{Channel};
 
 const FUNCTIONS_01_NAMED_DEFAULTS__DEFAULT_COUNT: i32 = 7i32;
 
@@ -84,7 +84,7 @@ fn functions_01_named_defaults__order3_i64_i64_i64(a: i64, b: i64, c: i64) -> i6
     return (((a * 10000) + (b * 100)) + c);
 }
 
-async fn functions_01_named_defaults__send_value_Channel_i64(out: __ZincChannel<i64>, value: i64) {
+async fn functions_01_named_defaults__send_value_Channel_i64(out: Channel<i64>, value: i64) {
     out.send(value).await;
 }
 
@@ -114,10 +114,10 @@ async fn main() {
     println!("{}", functions_01_named_defaults__tag_String_i32(String::from("id"), FUNCTIONS_01_NAMED_DEFAULTS__DEFAULT_COUNT));
     println!("{}", functions_01_named_defaults__tag_String_i32(String::from("item"), FUNCTIONS_01_NAMED_DEFAULTS__DEFAULT_COUNT));
     println!("{}", functions_01_named_defaults__tag_String_i32(String::from("row"), 9));
-    let ch = __ZincChannel::<i64>::unbounded();
+    let ch = Channel::<i64>::unbounded();
     __zinc_spawn_handles.push(tokio::spawn({ let __zinc_spawn_arg_0 = ch.clone(); async move { functions_01_named_defaults__send_value_Channel_i64(__zinc_spawn_arg_0.clone(), 8).await; } }));
     println!("{}", ch.recv().await);
-    let ch2 = __ZincChannel::<i64>::unbounded();
+    let ch2 = Channel::<i64>::unbounded();
     __zinc_spawn_handles.push(tokio::spawn({ let __zinc_spawn_arg_0 = ch2.clone(); async move { functions_01_named_defaults__send_value_Channel_i64(__zinc_spawn_arg_0.clone(), 13).await; } }));
     println!("{}", ch2.recv().await);
     let lambda = __ZincCallable_i64_to_i64::V0(__ZincClosureEnv_functions_01_named_defaults___lambda_functions_01_named_defaults__main_414_427 {});

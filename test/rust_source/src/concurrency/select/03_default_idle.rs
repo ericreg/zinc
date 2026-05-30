@@ -1,9 +1,9 @@
-use zinc_internal::{__ZincChannel, __ZincTrySend};
+use zinc_internal::{Channel, TrySend};
 
 #[tokio::main]
 async fn main() {
-    let primary = __ZincChannel::<i64>::bounded(1);
-    let backup = __ZincChannel::<i64>::bounded(1);
+    let primary = Channel::<i64>::bounded(1);
+    let backup = Channel::<i64>::bounded(1);
     primary.send(1).await;
     backup.send(2).await;
     static __ZINC_SELECT_STATE_0: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -13,22 +13,22 @@ async fn main() {
             match (__zinc_select_start_0 + __zinc_select_offset_0) % 2 {
                 0 => {
                     match primary.try_send(3) {
-                        __ZincTrySend::Sent => {
+                        TrySend::Sent => {
                             println!("primary");
                             break '__zinc_select_0;
                         },
-                        __ZincTrySend::Full(_) => {},
-                        __ZincTrySend::Closed(_) => panic!("select send on closed channel"),
+                        TrySend::Full(_) => {},
+                        TrySend::Closed(_) => panic!("select send on closed channel"),
                     }
                 }
                 1 => {
                     match backup.try_send(4) {
-                        __ZincTrySend::Sent => {
+                        TrySend::Sent => {
                             println!("backup");
                             break '__zinc_select_0;
                         },
-                        __ZincTrySend::Full(_) => {},
-                        __ZincTrySend::Closed(_) => panic!("select send on closed channel"),
+                        TrySend::Full(_) => {},
+                        TrySend::Closed(_) => panic!("select send on closed channel"),
                     }
                 }
                 _ => unreachable!(),

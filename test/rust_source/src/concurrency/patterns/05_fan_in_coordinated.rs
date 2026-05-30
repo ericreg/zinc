@@ -1,19 +1,19 @@
-use zinc_internal::{__ZincChannel};
+use zinc_internal::{Channel};
 
-async fn concurrency_patterns_05_fan_in_coordinated__send_left_Channel(out: __ZincChannel<i64>) {
+async fn concurrency_patterns_05_fan_in_coordinated__send_left_Channel(out: Channel<i64>) {
     out.send(1).await;
 }
 
-async fn concurrency_patterns_05_fan_in_coordinated__send_right_Channel(out: __ZincChannel<i64>) {
+async fn concurrency_patterns_05_fan_in_coordinated__send_right_Channel(out: Channel<i64>) {
     out.send(2).await;
 }
 
 #[tokio::main]
 async fn main() {
     let mut __zinc_spawn_handles = Vec::new();
-    let left = __ZincChannel::<i64>::unbounded();
-    let right = __ZincChannel::<i64>::unbounded();
-    let merged = __ZincChannel::<i64>::unbounded();
+    let left = Channel::<i64>::unbounded();
+    let right = Channel::<i64>::unbounded();
+    let merged = Channel::<i64>::unbounded();
     __zinc_spawn_handles.push(tokio::spawn({ let __zinc_spawn_arg_0 = left.clone(); async move { concurrency_patterns_05_fan_in_coordinated__send_left_Channel(__zinc_spawn_arg_0.clone()).await; } }));
     __zinc_spawn_handles.push(tokio::spawn({ let __zinc_spawn_arg_0 = right.clone(); async move { concurrency_patterns_05_fan_in_coordinated__send_right_Channel(__zinc_spawn_arg_0.clone()).await; } }));
     let left_value = left.recv().await;

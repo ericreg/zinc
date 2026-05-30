@@ -42,10 +42,10 @@ COMPILE_ERROR_GROUPS = (
     "rust_interop",
 )
 INLINE_RUNTIME_DEFINITIONS = (
-    "enum __ZincTryRecv",
-    "enum __ZincTrySend",
-    "struct __ZincChannel",
-    "struct __ZincContext",
+    "enum TryRecv",
+    "enum TrySend",
+    "struct Channel",
+    "struct Context",
 )
 
 
@@ -303,19 +303,19 @@ def test_runtime_imports_are_feature_scoped() -> None:
     channel = compile_zinc_program(ZINC_SOURCE_DIR / "concurrency/channels/01_local_round_trip.zn")
     channel_code = channel.render()
     assert channel.runtime_features == {"channel"}
-    assert "use zinc_internal::{__ZincChannel};" in channel_code
+    assert "use zinc_internal::{Channel};" in channel_code
     assert_no_inline_runtime_helpers(channel_code)
 
     context = compile_zinc_program(ZINC_SOURCE_DIR / "concurrency/select/08_context_done.zn")
     context_code = context.render()
     assert context.runtime_features == {"context"}
-    assert "use zinc_internal::{__ZincContext};" in context_code
+    assert "use zinc_internal::{Context};" in context_code
     assert_no_inline_runtime_helpers(context_code)
 
     metadata = compile_zinc_program(ZINC_SOURCE_DIR / "metadata/03_constraints_and_orders.zn")
     metadata_code = metadata.render()
     assert metadata.runtime_features == {"metadata"}
-    assert "__ZincTypeMeta" in metadata_code
+    assert "TypeMeta" in metadata_code
     assert "use zinc_internal::{" in metadata_code
     assert_no_inline_runtime_helpers(metadata_code)
 

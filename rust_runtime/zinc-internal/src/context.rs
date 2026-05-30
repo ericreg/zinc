@@ -1,22 +1,24 @@
-use crate::__ZincChannel;
+use crate::Channel;
 
 #[derive(Clone)]
-pub struct __ZincContext {
-    done: __ZincChannel<bool>,
+pub struct Context {
+    done: Channel<bool>,
 }
 
-impl Default for __ZincContext {
+impl Default for Context {
     fn default() -> Self {
         Self::background()
     }
 }
 
-impl __ZincContext {
+impl Context {
     pub fn background() -> Self {
-        Self { done: __ZincChannel::unbounded() }
+        Self {
+            done: Channel::unbounded(),
+        }
     }
 
-    pub fn done(&self) -> __ZincChannel<bool> {
+    pub fn done(&self) -> Channel<bool> {
         self.done.clone()
     }
 

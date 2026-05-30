@@ -89,8 +89,8 @@ def type_to_rust(base_type: BaseType) -> str:
         BaseType.FLOAT: "f64",
         BaseType.STRING: "String",
         BaseType.BOOLEAN: "bool",
-        BaseType.CHANNEL: "__ZincChannel",  # Generic, element type handled separately
-        BaseType.CONTEXT: "__ZincContext",
+        BaseType.CHANNEL: "Channel",  # Generic, element type handled separately
+        BaseType.CONTEXT: "Context",
         BaseType.ARRAY: "Vec",  # Generic, element type handled separately
         BaseType.DICT: "HashMap",  # Generic, key/value handled separately
         BaseType.SET: "HashSet",  # Generic, element type handled separately
@@ -132,8 +132,8 @@ def normalize_exact_type(type_name: str | None) -> str | None:
         "string": "String",
         "String": "String",
         "bool": "bool",
-        "Context": "__ZincContext",
-        "context": "__ZincContext",
+        "Context": "Context",
+        "context": "Context",
     }
     return mapping.get(type_name, type_name)
 
@@ -161,7 +161,7 @@ def exact_type_to_base(type_name: str | None) -> BaseType:
         "f128": BaseType.FLOAT,
         "String": BaseType.STRING,
         "bool": BaseType.BOOLEAN,
-        "__ZincContext": BaseType.CONTEXT,
+        "Context": BaseType.CONTEXT,
     }
     return mapping.get(normalized, BaseType.UNKNOWN)
 
@@ -173,7 +173,7 @@ def default_exact_type(base_type: BaseType) -> str | None:
         BaseType.FLOAT: "f64",
         BaseType.STRING: "String",
         BaseType.BOOLEAN: "bool",
-        BaseType.CONTEXT: "__ZincContext",
+        BaseType.CONTEXT: "Context",
     }
     return mapping.get(base_type)
 
@@ -432,7 +432,7 @@ class ChannelTypeInfo:
 
     def to_rust_type(self) -> str:
         """Generate the shared Rust channel-wrapper type."""
-        return f"__ZincChannel<{self.element_rust_type()}>"
+        return f"Channel<{self.element_rust_type()}>"
 
     def to_rust_type_suffix(self) -> str:
         """Generate type suffix for mangled names (no special chars)."""

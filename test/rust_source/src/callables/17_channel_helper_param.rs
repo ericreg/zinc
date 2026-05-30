@@ -1,4 +1,4 @@
-use zinc_internal::{__ZincChannel};
+use zinc_internal::{Channel};
 
 #[derive(Clone)]
 enum __ZincCallable_i64_to_i64 {
@@ -25,25 +25,25 @@ fn callables_17_channel_helper_param__inc_i64(x: i64) -> i64 {
     return (x + 1);
 }
 
-async fn callables_17_channel_helper_param__publish_Channel(out: __ZincChannel<__ZincCallable_i64_to_i64>) {
+async fn callables_17_channel_helper_param__publish_Channel(out: Channel<__ZincCallable_i64_to_i64>) {
     out.send(__ZincCallable_i64_to_i64::V0).await;
 }
 
-async fn callables_17_channel_helper_param__publish_Channel_i64_to_i64(out: __ZincChannel<__ZincCallable_i64_to_i64>) {
+async fn callables_17_channel_helper_param__publish_Channel_i64_to_i64(out: Channel<__ZincCallable_i64_to_i64>) {
     out.send(__ZincCallable_i64_to_i64::V0).await;
 }
 
-async fn callables_17_channel_helper_param__publish_Channel_i64_to_unknown(out: __ZincChannel<__ZincCallable_i64_to_i64>) {
+async fn callables_17_channel_helper_param__publish_Channel_i64_to_unknown(out: Channel<__ZincCallable_i64_to_i64>) {
     out.send(__ZincCallable_i64_to_i64::V0).await;
 }
 
-async fn callables_17_channel_helper_param__publish_Channel_unknown_to_unknown(out: __ZincChannel<__ZincCallable_i64_to_i64>) {
+async fn callables_17_channel_helper_param__publish_Channel_unknown_to_unknown(out: Channel<__ZincCallable_i64_to_i64>) {
     out.send(__ZincCallable_i64_to_i64::V0).await;
 }
 
 #[tokio::main]
 async fn main() {
-    let jobs = __ZincChannel::<__ZincCallable_i64_to_i64>::unbounded();
+    let jobs = Channel::<__ZincCallable_i64_to_i64>::unbounded();
     callables_17_channel_helper_param__publish_Channel_i64_to_i64(jobs.clone()).await;
     let f = jobs.recv().await;
     println!("{}", f.call(4));

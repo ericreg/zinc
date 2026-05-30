@@ -1,4 +1,4 @@
-use zinc_internal::{__ZincChannel};
+use zinc_internal::{Channel};
 
 #[derive(Clone)]
 enum __ZincCallable_i64_to_i64 {
@@ -38,7 +38,7 @@ impl callables_15_channel_static_method__Math {
 
 #[tokio::main]
 async fn main() {
-    let jobs = __ZincChannel::<__ZincCallable_i64_to_i64>::unbounded();
+    let jobs = Channel::<__ZincCallable_i64_to_i64>::unbounded();
     jobs.send(__ZincCallable_i64_to_i64::V0).await;
     let f = jobs.recv().await;
     println!("{}", f.call(3));

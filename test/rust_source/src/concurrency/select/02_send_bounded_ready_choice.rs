@@ -1,9 +1,9 @@
-use zinc_internal::{__ZincChannel};
+use zinc_internal::{Channel};
 
 #[tokio::main]
 async fn main() {
-    let primary = __ZincChannel::<i64>::bounded(1);
-    let backup = __ZincChannel::<i64>::bounded(1);
+    let primary = Channel::<i64>::bounded(1);
+    let backup = Channel::<i64>::bounded(1);
     primary.send(1).await;
     tokio::select! {
         __zinc_select_result_0_0 = async { primary.send(2).await } => {

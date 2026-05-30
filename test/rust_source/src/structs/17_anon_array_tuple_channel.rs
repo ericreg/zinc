@@ -1,4 +1,4 @@
-use zinc_internal::{__ZincChannel};
+use zinc_internal::{Channel};
 
 #[derive(Clone, Default)]
 struct __ZincAnonStruct_AnonStruct_id_i64_name_String {
@@ -16,7 +16,7 @@ async fn main() {
     let items = vec![__ZincAnonStruct_AnonStruct_id_i64_name_String { id: 1, name: String::from("one") }, __ZincAnonStruct_AnonStruct_id_i64_name_String { id: 2, name: String::from("two") }];
     let pair = (__ZincAnonStruct_AnonStruct_id_i64_name_String { id: 3, name: String::from("three") }, __ZincAnonStruct_AnonStruct_ready_bool { ready: true });
     let (first, status) = pair;
-    let jobs = __ZincChannel::<__ZincAnonStruct_AnonStruct_id_i64_name_String>::unbounded();
+    let jobs = Channel::<__ZincAnonStruct_AnonStruct_id_i64_name_String>::unbounded();
     jobs.send(__ZincAnonStruct_AnonStruct_id_i64_name_String { id: 4, name: String::from("four") }).await;
     let received = jobs.recv().await;
     println!("{}", items[0].id);

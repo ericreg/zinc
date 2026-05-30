@@ -1,4 +1,4 @@
-use zinc_internal::{__ZincChannel};
+use zinc_internal::{Channel};
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone)]
@@ -35,7 +35,7 @@ fn closures_10_select_received_closure____lambda_closures_10_select_received_clo
 #[tokio::main]
 async fn main() {
     let __zv_closures_10_select_received_closure__main_base_i64 = Arc::new(Mutex::new(8));
-    let jobs = __ZincChannel::<__ZincCallable_i64_to_i64>::unbounded();
+    let jobs = Channel::<__ZincCallable_i64_to_i64>::unbounded();
     jobs.send(__ZincCallable_i64_to_i64::V0(__ZincClosureEnv_closures_10_select_received_closure___lambda_closures_10_select_received_closure__main_15_24 { base: __zv_closures_10_select_received_closure__main_base_i64.clone() })).await;
     jobs.close();
     tokio::select! {

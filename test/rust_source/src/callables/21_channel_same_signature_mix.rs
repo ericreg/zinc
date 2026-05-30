@@ -1,4 +1,4 @@
-use zinc_internal::{__ZincChannel};
+use zinc_internal::{Channel};
 
 #[derive(Clone)]
 enum __ZincCallable_i64_to_i64 {
@@ -33,7 +33,7 @@ fn callables_21_channel_same_signature_mix__inc_i64(x: i64) -> i64 {
 
 #[tokio::main]
 async fn main() {
-    let jobs = __ZincChannel::<__ZincCallable_i64_to_i64>::unbounded();
+    let jobs = Channel::<__ZincCallable_i64_to_i64>::unbounded();
     jobs.send(__ZincCallable_i64_to_i64::V1).await;
     jobs.send(__ZincCallable_i64_to_i64::V0).await;
     let first = jobs.recv().await;

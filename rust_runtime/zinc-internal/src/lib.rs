@@ -1,5 +1,3 @@
-#![allow(non_camel_case_types)]
-
 #[cfg(feature = "channel")]
 mod channel;
 #[cfg(feature = "context")]
@@ -8,12 +6,12 @@ mod context;
 mod metadata;
 
 #[cfg(feature = "channel")]
-pub use channel::{__ZincChannel, __ZincTryRecv, __ZincTrySend};
+pub use channel::{Channel, TryRecv, TrySend};
 #[cfg(feature = "context")]
-pub use context::__ZincContext;
+pub use context::Context;
 #[cfg(feature = "metadata")]
 pub use metadata::{
-    __ZincBuiltinMeta, __ZincComponentOrder, __ZincConstMeta, __ZincEnumMeta, __ZincFieldMeta,
-    __ZincFunctionMeta, __ZincFunctionParameterMeta, __ZincMethodMeta, __ZincMethodParameterMeta, __ZincStructMeta,
-    __ZincTypeMeta, __ZincVariableMeta, __ZincVariantMeta,
+    BuiltinMeta, ComponentOrder, ConstMeta, EnumMeta, FieldMeta, FunctionMeta,
+    FunctionParameterMeta, MethodMeta, MethodParameterMeta, StructMeta, TypeMeta, VariableMeta,
+    VariantMeta,
 };

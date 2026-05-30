@@ -1,4 +1,4 @@
-use zinc_internal::{__ZincChannel};
+use zinc_internal::{Channel};
 
 #[derive(Clone)]
 enum enums_04_channel_flow__Signal {
@@ -8,7 +8,7 @@ enum enums_04_channel_flow__Signal {
 
 #[tokio::main]
 async fn main() {
-    let updates = __ZincChannel::<enums_04_channel_flow__Signal>::unbounded();
+    let updates = Channel::<enums_04_channel_flow__Signal>::unbounded();
     updates.send(enums_04_channel_flow__Signal::Start).await;
     updates.send(enums_04_channel_flow__Signal::Stop).await;
     let first = updates.recv().await;

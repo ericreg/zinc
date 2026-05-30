@@ -56,23 +56,23 @@ from zinc.symbols import (
 
 BITWISE_VALUE_ASSIGNMENT_OPERATORS = frozenset({"&=", "|=", "^="})
 RUNTIME_SYMBOL_FEATURES = {
-    "__ZincChannel": "channel",
-    "__ZincTryRecv": "channel",
-    "__ZincTrySend": "channel",
-    "__ZincContext": "context",
-    "__ZincTypeMeta": "metadata",
-    "__ZincStructMeta": "metadata",
-    "__ZincEnumMeta": "metadata",
-    "__ZincVariantMeta": "metadata",
-    "__ZincFieldMeta": "metadata",
-    "__ZincFunctionMeta": "metadata",
-    "__ZincBuiltinMeta": "metadata",
-    "__ZincMethodMeta": "metadata",
-    "__ZincFunctionParameterMeta": "metadata",
-    "__ZincMethodParameterMeta": "metadata",
-    "__ZincVariableMeta": "metadata",
-    "__ZincConstMeta": "metadata",
-    "__ZincComponentOrder": "metadata",
+    "Channel": "channel",
+    "TryRecv": "channel",
+    "TrySend": "channel",
+    "Context": "context",
+    "TypeMeta": "metadata",
+    "StructMeta": "metadata",
+    "EnumMeta": "metadata",
+    "VariantMeta": "metadata",
+    "FieldMeta": "metadata",
+    "FunctionMeta": "metadata",
+    "BuiltinMeta": "metadata",
+    "MethodMeta": "metadata",
+    "FunctionParameterMeta": "metadata",
+    "MethodParameterMeta": "metadata",
+    "VariableMeta": "metadata",
+    "ConstMeta": "metadata",
+    "ComponentOrder": "metadata",
 }
 
 
@@ -202,21 +202,21 @@ class CodeGenVisitor(zincVisitor):
             if symbol.kind not in {SymbolKind.VARIABLE, SymbolKind.PARAMETER}:
                 continue
             if symbol.resolved_type == BaseType.CHANNEL:
-                self._require_runtime_symbol("__ZincChannel")
+                self._require_runtime_symbol("Channel")
             elif symbol.resolved_type == BaseType.CONTEXT:
-                self._require_runtime_symbol("__ZincContext")
+                self._require_runtime_symbol("Context")
         for func in self.atlas.functions.values():
             for arg_type in func.arg_types:
                 if arg_type == BaseType.CHANNEL:
-                    self._require_runtime_symbol("__ZincChannel")
+                    self._require_runtime_symbol("Channel")
                 elif arg_type == BaseType.CONTEXT:
-                    self._require_runtime_symbol("__ZincContext")
+                    self._require_runtime_symbol("Context")
             if func.return_type == BaseType.CHANNEL:
-                self._require_runtime_symbol("__ZincChannel")
+                self._require_runtime_symbol("Channel")
             elif func.return_type == BaseType.CONTEXT:
-                self._require_runtime_symbol("__ZincContext")
+                self._require_runtime_symbol("Context")
         if self._channel_infos:
-            self._require_runtime_symbol("__ZincChannel")
+            self._require_runtime_symbol("Channel")
 
     def generate(self) -> RustProgram:
         """Main entry point - generate Rust code for all reachable code."""
@@ -1019,8 +1019,8 @@ class CodeGenVisitor(zincVisitor):
                 "breadth_first": "BreadthFirst",
                 "topological": "Topological",
             }.get(name, "DepthFirst")
-            self._require_runtime_symbol("__ZincComponentOrder")
-            return f"__ZincComponentOrder::{variant}"
+            self._require_runtime_symbol("ComponentOrder")
+            return f"ComponentOrder::{variant}"
         rust_name = meta_struct_rust_name(value.struct_qualified_name)
         self._require_runtime_symbol(rust_name)
         fields = []
@@ -1380,9 +1380,9 @@ class CodeGenVisitor(zincVisitor):
         if base_type == BaseType.CALLABLE and callable_info:
             return callable_info.rust_type_name()
         if base_type == BaseType.CHANNEL:
-            self._require_runtime_symbol("__ZincChannel")
+            self._require_runtime_symbol("Channel")
         if base_type == BaseType.CONTEXT:
-            self._require_runtime_symbol("__ZincContext")
+            self._require_runtime_symbol("Context")
         if base_type == BaseType.STRUCT:
             if is_meta_struct_qname(struct_qualified_name):
                 rust_name = meta_struct_rust_name(struct_qualified_name)
@@ -1515,8 +1515,8 @@ class CodeGenVisitor(zincVisitor):
     def _callable_variant_payload_type(self, target: CallableTarget) -> str | None:
         """Return the Rust payload type for a callable enum variant."""
         if target.kind == "context_cancel":
-            self._require_runtime_symbol("__ZincContext")
-            return "__ZincContext"
+            self._require_runtime_symbol("Context")
+            return "Context"
         if target.kind == "closure":
             info = self._closure_info(target.qualified_name)
             if info is None:
@@ -2170,12 +2170,12 @@ class CodeGenVisitor(zincVisitor):
             "f128": "f128",
             "string": "String",
             "bool": "bool",
-            "context": "__ZincContext",
+            "context": "Context",
         }
         lowered = zinc_type.lower()
         if lowered in mapping:
-            if mapping[lowered] == "__ZincContext":
-                self._require_runtime_symbol("__ZincContext")
+            if mapping[lowered] == "Context":
+                self._require_runtime_symbol("Context")
             return mapping[lowered]
         if zinc_type == "Self":
             return "Self"
@@ -2195,7 +2195,7 @@ class CodeGenVisitor(zincVisitor):
     def _function_param_rust_type(self, func: FunctionInstance, index: int) -> str:
         """Render one function parameter type using resolved metadata."""
         if index in func.arg_channel_infos and func.arg_channel_infos[index]:
-            self._require_runtime_symbol("__ZincChannel")
+            self._require_runtime_symbol("Channel")
             return func.arg_channel_infos[index][0].to_rust_type()
         if index in func.arg_array_infos:
             return func.arg_array_infos[index].to_rust_type()
@@ -3595,10 +3595,10 @@ class CodeGenVisitor(zincVisitor):
 
         path = extract_identifier_path(callee_ctx) if self._current_module is not None else None
         if path == ["Context", "background"]:
-            self._require_runtime_symbol("__ZincContext")
-            return finish("__ZincContext::background()")
+            self._require_runtime_symbol("Context")
+            return finish("Context::background()")
         if path == ["Context", "with_cancel"]:
-            self._require_runtime_symbol("__ZincContext")
+            self._require_runtime_symbol("Context")
             parent = args[0] if args else "__zinc_missing_context"
             cancel_info = CallableTypeInfo(param_types=[], return_type=BaseType.VOID)
             expr_symbol = self._get_expr_symbol(ctx)
@@ -3620,7 +3620,7 @@ class CodeGenVisitor(zincVisitor):
                     [
                         "{",
                         f"    let __zinc_parent_ctx = {parent}.clone();",
-                        "    let __zinc_child_ctx = __ZincContext::background();",
+                        "    let __zinc_child_ctx = Context::background();",
                         "    let __zinc_child_for_task = __zinc_child_ctx.clone();",
                         "    tokio::spawn(async move {",
                         "        let _ = __zinc_parent_ctx.done().recv_option().await;",
@@ -3686,7 +3686,7 @@ class CodeGenVisitor(zincVisitor):
             receiver_ctx = callee_ctx.expression()
             method_name = callee_ctx.IDENTIFIER().getText()
             if self._get_expr_type(receiver_ctx) == BaseType.CONTEXT:
-                self._require_runtime_symbol("__ZincContext")
+                self._require_runtime_symbol("Context")
                 if method_name == "done":
                     return finish(f"{self.visit(receiver_ctx)}.done()")
                 if method_name == "cancel":
@@ -4662,7 +4662,7 @@ class CodeGenVisitor(zincVisitor):
             if isinstance(callee, ZincParser.PrimaryExprContext):
                 primary = callee.primaryExpression()
                 if primary and primary.IDENTIFIER() and primary.IDENTIFIER().getText() == "chan":
-                    self._require_runtime_symbol("__ZincChannel")
+                    self._require_runtime_symbol("Channel")
                     var_name = target
                     capacity = None
                     chan_args = self._call_args_for_ctx(expr)
@@ -4671,9 +4671,9 @@ class CodeGenVisitor(zincVisitor):
                     # Look up channel info to get element type
                     if var_name in self._channel_infos:
                         chan_info = self._channel_infos[var_name]
-                        constructor = "__ZincChannel"
+                        constructor = "Channel"
                         if chan_info.element_type != BaseType.UNKNOWN:
-                            constructor = f"__ZincChannel::<{chan_info.element_rust_type()}>"
+                            constructor = f"Channel::<{chan_info.element_rust_type()}>"
                         self._declared_vars.add(var_name)
                         if chan_info.is_bounded and capacity is not None:
                             return f"let {var_name} = {constructor}::bounded({capacity});"
@@ -4682,8 +4682,8 @@ class CodeGenVisitor(zincVisitor):
                         # Fallback - unknown element type
                         self._declared_vars.add(var_name)
                         if capacity is not None:
-                            return f"let {var_name} = __ZincChannel::bounded({capacity});"
-                        return f"let {var_name} = __ZincChannel::unbounded();"
+                            return f"let {var_name} = Channel::bounded({capacity});"
+                        return f"let {var_name} = Channel::unbounded();"
 
         target_symbol = None
         if target_ctx.IDENTIFIER():
@@ -5140,39 +5140,39 @@ class CodeGenVisitor(zincVisitor):
         for branch_index, case_ctx in enumerate(case_ctxs):
             lines.append(f"            {branch_index} => {{")
             if isinstance(case_ctx, ZincParser.SelectReceiveCaseContext):
-                self._require_runtime_symbol("__ZincTryRecv")
+                self._require_runtime_symbol("TryRecv")
                 value_name = f"__zinc_select_value_{select_id}_{branch_index}"
                 receiver = self.visit(case_ctx.expression())
                 mode, _ = self._select_receive_binding(case_ctx)
                 body_with_value = self._render_select_receive_case_body(case_ctx, f"Some({value_name})")
                 body_closed = self._render_select_receive_case_body(case_ctx, "None")
                 lines.append(f"                match {receiver}.try_recv() {{")
-                lines.append(f"                    __ZincTryRecv::Value({value_name}) => {{")
+                lines.append(f"                    TryRecv::Value({value_name}) => {{")
                 self._append_block_lines(lines, body_with_value, 6)
                 lines.append(f"                        break {label};")
                 lines.append("                    },")
-                lines.append("                    __ZincTryRecv::Empty => {},")
+                lines.append("                    TryRecv::Empty => {},")
                 if mode == "single":
-                    lines.append('                    __ZincTryRecv::Closed => panic!("select receive on closed channel"),')
+                    lines.append('                    TryRecv::Closed => panic!("select receive on closed channel"),')
                 else:
-                    lines.append("                    __ZincTryRecv::Closed => {")
+                    lines.append("                    TryRecv::Closed => {")
                     self._append_block_lines(lines, body_closed, 6)
                     lines.append(f"                        break {label};")
                     lines.append("                    },")
                 lines.append("                }")
             else:
-                self._require_runtime_symbol("__ZincTrySend")
+                self._require_runtime_symbol("TrySend")
                 channel_name = case_ctx.IDENTIFIER().getText()
                 sender = self._channel_sender_expr(channel_name)
                 value = self._render_channel_value(channel_name, case_ctx.expression())
                 body = self._render_select_case_body(case_ctx.block())
                 lines.append(f"                match {sender}.try_send({value}) {{")
-                lines.append("                    __ZincTrySend::Sent => {")
+                lines.append("                    TrySend::Sent => {")
                 self._append_block_lines(lines, body, 6)
                 lines.append(f"                        break {label};")
                 lines.append("                    },")
-                lines.append("                    __ZincTrySend::Full(_) => {},")
-                lines.append('                    __ZincTrySend::Closed(_) => panic!("select send on closed channel"),')
+                lines.append("                    TrySend::Full(_) => {},")
+                lines.append('                    TrySend::Closed(_) => panic!("select send on closed channel"),')
                 lines.append("                }")
             lines.append("            }")
 

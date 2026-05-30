@@ -1,9 +1,9 @@
-use zinc_internal::{__ZincContext};
+use zinc_internal::{Context};
 
 #[derive(Clone)]
 enum __ZincCallable_Unit_to_Unit {
     Closed,
-    V0(__ZincContext),
+    V0(Context),
 }
 
 impl Default for __ZincCallable_Unit_to_Unit {
@@ -23,10 +23,10 @@ impl __ZincCallable_Unit_to_Unit {
 
 #[tokio::main]
 async fn main() {
-    let root = __ZincContext::background();
+    let root = Context::background();
     let (child, cancel) = {
         let __zinc_parent_ctx = root.clone();
-        let __zinc_child_ctx = __ZincContext::background();
+        let __zinc_child_ctx = Context::background();
         let __zinc_child_for_task = __zinc_child_ctx.clone();
         tokio::spawn(async move {
             let _ = __zinc_parent_ctx.done().recv_option().await;

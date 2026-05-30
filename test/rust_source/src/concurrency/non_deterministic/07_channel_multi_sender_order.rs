@@ -1,6 +1,6 @@
-use zinc_internal::{__ZincChannel};
+use zinc_internal::{Channel};
 
-async fn concurrency_non_deterministic_07_channel_multi_sender_order__send_value_Channel_i64(ch: __ZincChannel<i64>, x: i64) {
+async fn concurrency_non_deterministic_07_channel_multi_sender_order__send_value_Channel_i64(ch: Channel<i64>, x: i64) {
     ch.send(x).await;
     println!("sent {}", x);
 }
@@ -8,7 +8,7 @@ async fn concurrency_non_deterministic_07_channel_multi_sender_order__send_value
 #[tokio::main]
 async fn main() {
     let mut __zinc_spawn_handles = Vec::new();
-    let values = __ZincChannel::<i64>::unbounded();
+    let values = Channel::<i64>::unbounded();
     __zinc_spawn_handles.push(tokio::spawn({ let __zinc_spawn_arg_0 = values.clone(); async move { concurrency_non_deterministic_07_channel_multi_sender_order__send_value_Channel_i64(__zinc_spawn_arg_0.clone(), 1).await; } }));
     __zinc_spawn_handles.push(tokio::spawn({ let __zinc_spawn_arg_0 = values.clone(); async move { concurrency_non_deterministic_07_channel_multi_sender_order__send_value_Channel_i64(__zinc_spawn_arg_0.clone(), 2).await; } }));
     let a = values.recv().await;

@@ -59,22 +59,22 @@ def is_type_meta_qname(qualified_name: str | None) -> bool:
 def meta_struct_rust_name(qualified_name: str | None) -> str:
     """Return the generated Rust type name for a metadata struct."""
     mapping = {
-        TYPE_META_QNAME: "__ZincTypeMeta",
-        CHANNEL_META_QNAME: "__ZincTypeMeta",
-        STRUCT_META_QNAME: "__ZincStructMeta",
-        ENUM_META_QNAME: "__ZincEnumMeta",
-        VARIANT_META_QNAME: "__ZincVariantMeta",
-        FIELD_META_QNAME: "__ZincFieldMeta",
-        FUNCTION_META_QNAME: "__ZincFunctionMeta",
-        BUILTIN_META_QNAME: "__ZincBuiltinMeta",
-        METHOD_META_QNAME: "__ZincMethodMeta",
-        FUNCTION_PARAM_META_QNAME: "__ZincFunctionParameterMeta",
-        METHOD_PARAM_META_QNAME: "__ZincMethodParameterMeta",
-        VARIABLE_META_QNAME: "__ZincVariableMeta",
-        CONST_META_QNAME: "__ZincConstMeta",
-        COMPONENT_ORDER_QNAME: "__ZincComponentOrder",
+        TYPE_META_QNAME: "TypeMeta",
+        CHANNEL_META_QNAME: "TypeMeta",
+        STRUCT_META_QNAME: "StructMeta",
+        ENUM_META_QNAME: "EnumMeta",
+        VARIANT_META_QNAME: "VariantMeta",
+        FIELD_META_QNAME: "FieldMeta",
+        FUNCTION_META_QNAME: "FunctionMeta",
+        BUILTIN_META_QNAME: "BuiltinMeta",
+        METHOD_META_QNAME: "MethodMeta",
+        FUNCTION_PARAM_META_QNAME: "FunctionParameterMeta",
+        METHOD_PARAM_META_QNAME: "MethodParameterMeta",
+        VARIABLE_META_QNAME: "VariableMeta",
+        CONST_META_QNAME: "ConstMeta",
+        COMPONENT_ORDER_QNAME: "ComponentOrder",
     }
-    return mapping.get(qualified_name, "__ZincMetaUnknown")
+    return mapping.get(qualified_name, "MetaUnknown")
 
 
 @dataclass

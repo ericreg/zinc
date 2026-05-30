@@ -1,18 +1,18 @@
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct __ZincTypeMeta {
+pub struct TypeMeta {
     pub kind: String,
     pub name: String,
     pub fqn: String,
     pub family_name: String,
     pub family_fqn: String,
-    pub args: Vec<__ZincTypeMeta>,
+    pub args: Vec<TypeMeta>,
     pub is_named: bool,
     pub is_bounded: bool,
     pub infer_slots: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct __ZincStructMeta {
+pub struct StructMeta {
     pub kind: String,
     pub name: String,
     pub fqn: String,
@@ -20,11 +20,11 @@ pub struct __ZincStructMeta {
     pub file: String,
     pub line_num: u32,
     pub is_public: bool,
-    pub type_info: __ZincTypeMeta,
+    pub type_info: TypeMeta,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct __ZincEnumMeta {
+pub struct EnumMeta {
     pub kind: String,
     pub name: String,
     pub fqn: String,
@@ -32,11 +32,11 @@ pub struct __ZincEnumMeta {
     pub file: String,
     pub line_num: u32,
     pub is_public: bool,
-    pub type_info: __ZincTypeMeta,
+    pub type_info: TypeMeta,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct __ZincVariantMeta {
+pub struct VariantMeta {
     pub kind: String,
     pub name: String,
     pub fqn: String,
@@ -48,7 +48,7 @@ pub struct __ZincVariantMeta {
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct __ZincFieldMeta {
+pub struct FieldMeta {
     pub kind: String,
     pub name: String,
     pub fqn: String,
@@ -56,7 +56,7 @@ pub struct __ZincFieldMeta {
     pub file: String,
     pub line_num: u32,
     pub is_public: bool,
-    pub value_type: __ZincTypeMeta,
+    pub value_type: TypeMeta,
     pub index: u32,
     pub is_const: bool,
     pub has_default: bool,
@@ -65,7 +65,7 @@ pub struct __ZincFieldMeta {
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct __ZincFunctionParameterMeta {
+pub struct FunctionParameterMeta {
     pub kind: String,
     pub name: String,
     pub fqn: String,
@@ -74,14 +74,14 @@ pub struct __ZincFunctionParameterMeta {
     pub line_num: u32,
     pub is_public: bool,
     pub index: u32,
-    pub value_type: __ZincTypeMeta,
-    pub declared_type: __ZincTypeMeta,
+    pub value_type: TypeMeta,
+    pub declared_type: TypeMeta,
     pub has_declared_type: bool,
     pub has_default: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct __ZincMethodParameterMeta {
+pub struct MethodParameterMeta {
     pub kind: String,
     pub name: String,
     pub fqn: String,
@@ -90,14 +90,14 @@ pub struct __ZincMethodParameterMeta {
     pub line_num: u32,
     pub is_public: bool,
     pub index: u32,
-    pub value_type: __ZincTypeMeta,
-    pub declared_type: __ZincTypeMeta,
+    pub value_type: TypeMeta,
+    pub declared_type: TypeMeta,
     pub has_declared_type: bool,
     pub has_default: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct __ZincFunctionMeta {
+pub struct FunctionMeta {
     pub kind: String,
     pub name: String,
     pub fqn: String,
@@ -105,13 +105,13 @@ pub struct __ZincFunctionMeta {
     pub file: String,
     pub line_num: u32,
     pub is_public: bool,
-    pub params: Vec<__ZincFunctionParameterMeta>,
-    pub return_type: __ZincTypeMeta,
+    pub params: Vec<FunctionParameterMeta>,
+    pub return_type: TypeMeta,
     pub is_async: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct __ZincBuiltinMeta {
+pub struct BuiltinMeta {
     pub kind: String,
     pub name: String,
     pub fqn: String,
@@ -119,13 +119,13 @@ pub struct __ZincBuiltinMeta {
     pub file: String,
     pub line_num: u32,
     pub is_public: bool,
-    pub params: Vec<__ZincFunctionParameterMeta>,
-    pub return_type: __ZincTypeMeta,
+    pub params: Vec<FunctionParameterMeta>,
+    pub return_type: TypeMeta,
     pub is_async: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct __ZincMethodMeta {
+pub struct MethodMeta {
     pub kind: String,
     pub name: String,
     pub fqn: String,
@@ -133,15 +133,15 @@ pub struct __ZincMethodMeta {
     pub file: String,
     pub line_num: u32,
     pub is_public: bool,
-    pub params: Vec<__ZincMethodParameterMeta>,
-    pub return_type: __ZincTypeMeta,
+    pub params: Vec<MethodParameterMeta>,
+    pub return_type: TypeMeta,
     pub is_async: bool,
     pub is_static: bool,
     pub is_declared: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct __ZincVariableMeta {
+pub struct VariableMeta {
     pub kind: String,
     pub name: String,
     pub fqn: String,
@@ -149,14 +149,14 @@ pub struct __ZincVariableMeta {
     pub file: String,
     pub line_num: u32,
     pub is_public: bool,
-    pub value_type: __ZincTypeMeta,
+    pub value_type: TypeMeta,
     pub has_declared_type: bool,
     pub is_mutated: bool,
     pub is_shadow: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct __ZincConstMeta {
+pub struct ConstMeta {
     pub kind: String,
     pub name: String,
     pub fqn: String,
@@ -164,12 +164,12 @@ pub struct __ZincConstMeta {
     pub file: String,
     pub line_num: u32,
     pub is_public: bool,
-    pub value_type: __ZincTypeMeta,
+    pub value_type: TypeMeta,
     pub value_text: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum __ZincComponentOrder {
+pub enum ComponentOrder {
     DepthFirst,
     BreadthFirst,
     Topological,

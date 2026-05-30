@@ -1,9 +1,9 @@
-use zinc_internal::{__ZincChannel};
+use zinc_internal::{Channel};
 
 #[tokio::main]
 async fn main() {
-    let ready = __ZincChannel::<i64>::unbounded();
-    let full = __ZincChannel::<i64>::bounded(1);
+    let ready = Channel::<i64>::unbounded();
+    let full = Channel::<i64>::bounded(1);
     ready.send(7).await;
     full.send(9).await;
     tokio::select! {

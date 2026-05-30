@@ -1,9 +1,9 @@
-use zinc_internal::{__ZincChannel};
+use zinc_internal::{Channel};
 
 #[tokio::main]
 async fn main() {
-    let ready = __ZincChannel::<i64>::unbounded();
-    let blocked = __ZincChannel::<i64>::unbounded();
+    let ready = Channel::<i64>::unbounded();
+    let blocked = Channel::<i64>::unbounded();
     blocked.send(0).await;
     let ignored = blocked.recv().await;
     ready.send(7).await;

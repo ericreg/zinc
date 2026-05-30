@@ -1,6 +1,6 @@
-use zinc_internal::{__ZincChannel};
+use zinc_internal::{Channel};
 
-async fn concurrency_select_04_binding_shadow__emit_Channel(ch: __ZincChannel<String>) {
+async fn concurrency_select_04_binding_shadow__emit_Channel(ch: Channel<String>) {
     ch.send(String::from("inner")).await;
 }
 
@@ -8,7 +8,7 @@ async fn concurrency_select_04_binding_shadow__emit_Channel(ch: __ZincChannel<St
 async fn main() {
     let mut __zinc_spawn_handles = Vec::new();
     let value = "outer";
-    let values = __ZincChannel::<String>::unbounded();
+    let values = Channel::<String>::unbounded();
     __zinc_spawn_handles.push(tokio::spawn({ let __zinc_spawn_arg_0 = values.clone(); async move { concurrency_select_04_binding_shadow__emit_Channel(__zinc_spawn_arg_0.clone()).await; } }));
     tokio::select! {
         __zinc_select_value_0_0 = async { values.recv_option().await } => {

@@ -1,6 +1,6 @@
 # Zinc
 
-Zinc is a modern programming language that compiles to Rust. It combines Go-like concurrency primitives with dynamic typing, type inference, and object-oriented programming through structs.
+Zinc is a research programming language that compiles to Rust. It combines Go-like concurrency primitives with dynamic typing, type inference, and object-oriented programming through structs. It is highly experimental and not intended for production use. It is primarily a playground for exploring language design and hopefully a source of ideas for other languages.
 
 ## Key Features
 
@@ -33,38 +33,13 @@ Generated Rust that uses Zinc runtime features (channels, contexts, or compile-t
 zinc-internal = { path = ".../rust_runtime/zinc-internal", default-features = false, features = ["channel"] }
 ```
 
+## Roadmap
+
+see [ROADMAP.md](./ROADMAP.md)
+
 ## Language Guide
 
 see [USER_GUIDE.md](./USER_GUIDE.md)
-
-
-## Roadmap
-
-- [x] Modules and imports
-- [x] Dynamic variable rebinding
-- [x] Monomorphized functions
-- [x] Structs and Struct composition
-- [x] Enums
-- [x] Callables and function vars/args
-- [x] Closure support
-- [x] Channels, spawn, close, and select
-- [x] Arrays (with list auto promotion) and Tuples
-- [x] Associative collections: dict, set, sort_dict, sort_set
-- [x] Multiline strings
-- [x] Strict type annotations
-- [x] Compile Time Metaprogramming
-- [x] Pattern matching
-- [x] Generic-emulation with `infer` and type constraints
-- [x] String interpolation
-- [x] Basic control flow: if/else, for loops, while loops, match expressions  
-- [x] Error handling: `try`, `match`, `fail`
-- [x] Modules and imports
-- [ ] Decorators
-- [x] Lambda expressions
-- [ ] Bimaps
-- [ ] Priority queues
-- [ ] Even more tests
-- [ ] mdbook documentation
 
 ## Development
 

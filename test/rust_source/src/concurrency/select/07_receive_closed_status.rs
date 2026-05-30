@@ -1,8 +1,8 @@
-use zinc_internal::{__ZincChannel};
+use zinc_internal::{Channel};
 
 #[tokio::main]
 async fn main() {
-    let values = __ZincChannel::<i64>::unbounded();
+    let values = Channel::<i64>::unbounded();
     values.send(7).await;
     values.close();
     let first = values.recv().await;
