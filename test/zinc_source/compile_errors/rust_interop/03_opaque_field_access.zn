@@ -1,0 +1,15 @@
+// expected-error: opaque extern type has no member 'display'
+extern rust {
+    use std::path::PathBuf;
+
+    type PathBuf;
+
+    impl PathBuf {
+        fn from(path: string) -> PathBuf;
+    }
+}
+
+fn main() {
+    path = PathBuf.from("notes.txt")
+    print(path.display)
+}

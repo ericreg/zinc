@@ -17,6 +17,7 @@ from zinc.ast.types import (
     SetTypeInfo,
     TupleTypeInfo,
     ValueTypeSpec,
+    exact_type_to_base,
     exact_type_to_rust,
     normalize_exact_type,
     type_to_rust,
@@ -574,6 +575,24 @@ class CodeGenVisitor(zincVisitor):
             callee_name = self._function_call_name(node)
             if callee_name == "close":
                 return False
+            module_id = self._module_id_for_function_name(function_name)
+            path = extract_identifier_path(node.expression()) if module_id is not None else None
+            if path:
+                extern_function = self.module_graph.resolve_extern_function_path(module_id, path)
+                extern_static = self.module_graph.resolve_extern_static_method_path(module_id, path)
+                if (extern_function and extern_function.is_async) or (extern_static and extern_static.is_async):
+                    return True
+                if isinstance(node.expression(), ZincParser.MemberAccessExprContext):
+                    receiver_ctx = node.expression().expression()
+                    struct_qname = self._struct_qualified_name_for_expr(receiver_ctx, function_name)
+                    if struct_qname is not None:
+                        extern_method = self.module_graph.resolve_extern_instance_method(
+                            module_id,
+                            struct_qname,
+                            node.expression().IDENTIFIER().getText(),
+                        )
+                        if extern_method is not None and extern_method.is_async:
+                            return True
             key = (function_name, node.getSourceInterval())
             mangled = self._specialization_map.get(key)
             if mangled and mangled in self.atlas.functions and self.atlas.functions[mangled].is_async:
@@ -585,6 +604,31 @@ class CodeGenVisitor(zincVisitor):
                 if isinstance(child, ParserRuleContext) and self._node_requires_async(child, function_name):
                     return True
         return False
+
+    def _module_id_for_function_name(self, function_name: str | None) -> str | None:
+        """Return the module id for an analyzed function name."""
+        if function_name is None:
+            return self._current_module
+        func = self.atlas.functions.get(function_name)
+        return func.module_id if func is not None else self._current_module
+
+    def _struct_qualified_name_for_expr(self, expr_ctx, function_name: str | None = None) -> str | None:
+        """Return named struct metadata recorded for an expression, if any."""
+        symbol = self.symbols.lookup_by_interval(expr_ctx.getSourceInterval(), function_name or self._current_function)
+        return self._struct_qualified_name_for_symbol(symbol)
+
+    def _struct_qualified_name_for_symbol(self, symbol) -> str | None:
+        """Return named struct metadata carried directly or through a copied binding."""
+        if symbol is None:
+            return None
+        struct_qualified_name = getattr(symbol, "struct_qualified_name", None)
+        if struct_qualified_name is not None:
+            return struct_qualified_name
+        binding_unique_name = getattr(symbol, "binding_unique_name", None)
+        if binding_unique_name is None:
+            return None
+        binding = self.symbols.lookup_by_unique_name(binding_unique_name)
+        return getattr(binding, "struct_qualified_name", None) if binding is not None else None
 
     def _channel_sender_expr(self, name: str, clone: bool = False) -> str:
         """Render the Rust channel value used for sends."""
@@ -842,6 +886,12 @@ class CodeGenVisitor(zincVisitor):
     def _generate_imports(self) -> list[str]:
         """Generate import statements based on what's used."""
         imports = []
+        seen_imports: set[str] = set()
+        for module_id in sorted(self.module_graph.modules):
+            for rust_use in self.module_graph.modules[module_id].rust_uses:
+                if rust_use not in seen_imports:
+                    imports.append(rust_use)
+                    seen_imports.add(rust_use)
         collections: set[str] = set()
         needs_rc_refcell = bool(self._boxed_struct_vars)
         needs_arc_mutex = bool(self._captured_binding_names)
@@ -1883,6 +1933,9 @@ class CodeGenVisitor(zincVisitor):
         """Return the flattened Rust name for a named struct qualified name."""
         if qualified_name is None:
             return "Struct"
+        extern_name = self.module_graph.extern_type_rust_name(qualified_name)
+        if extern_name is not None:
+            return extern_name
         if is_meta_struct_qname(qualified_name):
             self._needs_metadata_runtime = True
             return meta_struct_rust_name(qualified_name)
@@ -2279,6 +2332,9 @@ class CodeGenVisitor(zincVisitor):
             return "Self"
         if self._current_module is not None:
             parts = zinc_type.split(".")
+            extern_type = self.module_graph.resolve_extern_type_path(self._current_module, parts)
+            if extern_type is not None:
+                return extern_type.rust_name
             struct_symbol = self.module_graph.resolve_struct_path(self._current_module, parts)
             if struct_symbol is not None:
                 return self._named_struct_rust_name(struct_symbol.qualified_name)
@@ -3604,6 +3660,10 @@ class CodeGenVisitor(zincVisitor):
                             return f"{self._enum_rust_name(enum)}::{method_name}"
                     return f"{self.module_graph.rust_base_name(owner_symbol.qualified_name)}::{method_name}"
 
+                extern_static = self.module_graph.resolve_extern_static_method_path(self._current_module, path)
+                if extern_static is not None:
+                    return f"{extern_static.owner_type}::{extern_static.name}"
+
                 enum_variant = self.module_graph.resolve_enum_variant_path(self._current_module, path)
                 if enum_variant:
                     enum_symbol, variant_name = enum_variant
@@ -3719,6 +3779,35 @@ class CodeGenVisitor(zincVisitor):
                     ]
                 )
             )
+
+        if path and self._current_module is not None:
+            extern_function = self.module_graph.resolve_extern_function_path(self._current_module, path)
+            if extern_function is not None and not (len(path) == 1 and path[0] in self._declared_vars):
+                args = self._render_extern_args(extern_function, call_args, arg_ctxs)
+                call = f"{extern_function.name}({', '.join(args)})"
+                return finish(f"{call}.await" if extern_function.is_async else call)
+
+            extern_static = self.module_graph.resolve_extern_static_method_path(self._current_module, path)
+            if extern_static is not None:
+                args = self._render_extern_args(extern_static, call_args, arg_ctxs)
+                call = f"{extern_static.owner_type}::{extern_static.name}({', '.join(args)})"
+                return finish(f"{call}.await" if extern_static.is_async else call)
+
+            if isinstance(callee_ctx, ZincParser.MemberAccessExprContext):
+                receiver_ctx = callee_ctx.expression()
+                receiver_symbol = self._get_expr_symbol(receiver_ctx)
+                receiver_struct = self._struct_qualified_name_for_symbol(receiver_symbol)
+                if receiver_struct and self.module_graph.is_extern_type_qualified_name(receiver_struct):
+                    extern_method = self.module_graph.resolve_extern_instance_method(
+                        self._current_module,
+                        receiver_struct,
+                        callee_ctx.IDENTIFIER().getText(),
+                    )
+                    if extern_method is not None:
+                        args = self._render_extern_args(extern_method, call_args, arg_ctxs)
+                        receiver = self.visit(receiver_ctx)
+                        call = f"{receiver}.{extern_method.name}({', '.join(args)})"
+                        return finish(f"{call}.await" if extern_method.is_async else call)
 
         # Get callee text first to check for static method
         callee = self.visit(callee_ctx)
@@ -4007,6 +4096,32 @@ class CodeGenVisitor(zincVisitor):
                     coerce_callable=False,
                 )
             )
+        return rendered
+
+    def _extern_param_base_type(self, type_text: str | None) -> BaseType | None:
+        """Return the scalar base type for a simple extern parameter annotation."""
+        if type_text is None:
+            return None
+        if type_text == "()":
+            return BaseType.VOID
+        return exact_type_to_base(type_text)
+
+    def _render_extern_args(self, function, call_args: list, arg_ctxs: list | None = None) -> list[str]:
+        """Render extern Rust call arguments using the extern signature as context."""
+        rendered: list[str] = []
+        for i, arg in enumerate(call_args):
+            param = function.params[i] if i < len(function.params) else None
+            expected_type = self._extern_param_base_type(param.type_text if param is not None else None)
+            value = self._visit_call_arg_with_expectations(
+                arg,
+                expected_type=expected_type,
+                coerce_scalar=False,
+                coerce_callable=False,
+            )
+            arg_ctx = arg_ctxs[i] if arg_ctxs and i < len(arg_ctxs) else self._call_arg_expr(arg)
+            if expected_type == BaseType.STRING and (self._expr_is_string_literal(arg_ctx) or self._looks_like_rust_string_literal(value)):
+                value = f"String::from({value})"
+            rendered.append(value)
         return rendered
 
     def _process_function_args(

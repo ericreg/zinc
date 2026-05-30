@@ -1,0 +1,10 @@
+// expected-error: extern rust impl references unknown type 'FileHandle'
+extern rust {
+    impl FileHandle {
+        fn open(path: string) -> FileHandle;
+    }
+}
+
+fn main() {
+    print("unreachable")
+}

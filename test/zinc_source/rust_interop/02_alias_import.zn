@@ -1,0 +1,9 @@
+extern rust {
+    use std::cmp::min as rust_min;
+
+    fn rust_min(a: i64, b: i64) -> i64;
+}
+
+fn main() {
+    print(rust_min(9, 4))
+}

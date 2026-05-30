@@ -1,0 +1,21 @@
+extern rust {
+    use std::ffi::OsString;
+    use std::mem::drop;
+    use std::path::PathBuf;
+
+    type OsString;
+    type PathBuf;
+    fn drop(value: OsString) -> ();
+
+    impl PathBuf {
+        fn from(path: string) -> PathBuf;
+        fn into_os_string(self) -> OsString;
+    }
+}
+
+fn main() {
+    path = PathBuf.from("notes.txt")
+    name = path.into_os_string()
+    drop(name)
+    print("ok")
+}

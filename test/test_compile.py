@@ -38,6 +38,7 @@ COMPILE_ERROR_GROUPS = (
     "functions",
     "operators",
     "decorators",
+    "rust_interop",
 )
 
 

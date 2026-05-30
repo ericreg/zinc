@@ -1,0 +1,12 @@
+// expected-error: extern rust name 'triple' conflicts with a local declaration
+extern rust {
+    fn triple(x: i64) -> i64;
+}
+
+fn triple(x: i64) {
+    return x
+}
+
+fn main() {
+    print(triple(8))
+}

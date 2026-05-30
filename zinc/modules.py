@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import tomllib
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -30,6 +31,47 @@ class ImportSpec:
 
 
 @dataclass(frozen=True)
+class RustExternParameter:
+    """A parameter declared in an extern Rust function signature."""
+
+    name: str
+    type_text: str | None = None
+    is_self: bool = False
+
+
+@dataclass(frozen=True)
+class RustExternFunction:
+    """A Rust function or method declaration visible to Zinc."""
+
+    name: str
+    params: tuple[RustExternParameter, ...]
+    return_type: str | None = None
+    is_async: bool = False
+    owner_type: str | None = None
+    is_static: bool = True
+    display_name: str | None = None
+
+
+@dataclass(frozen=True)
+class RustExternType:
+    """An opaque Rust-owned type visible to Zinc."""
+
+    name: str
+    qualified_name: str
+    module_id: str
+    rust_name: str
+
+
+@dataclass(frozen=True)
+class RustExternBlock:
+    """Rust interop declarations extracted from one extern rust block."""
+
+    uses: tuple[str, ...] = ()
+    types: tuple[str, ...] = ()
+    functions: tuple[RustExternFunction, ...] = ()
+
+
+@dataclass(frozen=True)
 class TopLevelSymbol:
     """A top-level declaration inside a module."""
 
@@ -49,6 +91,10 @@ class LoadedModule:
     path: Path
     tree: ZincParser.ProgramContext
     imports: list[ImportSpec]
+    rust_uses: list[str]
+    rust_extern_types: dict[str, RustExternType]
+    rust_extern_functions: dict[str, RustExternFunction]
+    rust_extern_methods: dict[tuple[str, str], RustExternFunction]
     symbols: dict[str, TopLevelSymbol]
     exports: dict[str, TopLevelSymbol]
     injected_symbols: dict[str, str] = field(default_factory=dict)
@@ -74,6 +120,11 @@ class ModuleGraph:
     top_level_symbols: dict[str, TopLevelSymbol]
     package_name: str
     package_version: str
+
+    @staticmethod
+    def extern_type_qualified_name(module_id: str, name: str) -> str:
+        """Build a canonical opaque Rust type id."""
+        return f"{module_id}::extern::{name}"
 
     @staticmethod
     def qualified_name(module_id: str, name: str) -> str:
@@ -102,6 +153,27 @@ class ModuleGraph:
     def get_symbol(self, qualified_name: str) -> TopLevelSymbol:
         """Look up a top-level symbol by qualified id."""
         return self.top_level_symbols[qualified_name]
+
+    def is_extern_type_qualified_name(self, qualified_name: str | None) -> bool:
+        """Return True if a qualified name refers to an opaque Rust type."""
+        if qualified_name is None:
+            return False
+        return self.extern_type_by_qualified_name(qualified_name) is not None
+
+    def extern_type_by_qualified_name(self, qualified_name: str) -> RustExternType | None:
+        """Look up an opaque Rust type by canonical id."""
+        for module in self.modules.values():
+            for extern_type in module.rust_extern_types.values():
+                if extern_type.qualified_name == qualified_name:
+                    return extern_type
+        return None
+
+    def extern_type_rust_name(self, qualified_name: str | None) -> str | None:
+        """Return the Rust spelling for an opaque Rust type."""
+        if qualified_name is None:
+            return None
+        extern_type = self.extern_type_by_qualified_name(qualified_name)
+        return extern_type.rust_name if extern_type is not None else None
 
     def resolve_local_or_imported(self, module_id: str, name: str, kinds: set[TopLevelKind] | None = None) -> TopLevelSymbol | None:
         """Resolve a bare top-level symbol within a module."""
@@ -159,6 +231,41 @@ class ModuleGraph:
     def resolve_function_path(self, module_id: str, path: list[str]) -> TopLevelSymbol | None:
         """Resolve a top-level function path."""
         return self.resolve_top_level_path(module_id, path, {"function"})
+
+    def resolve_extern_type_path(self, module_id: str, path: list[str]) -> RustExternType | None:
+        """Resolve an opaque Rust type visible from a module."""
+        if len(path) != 1:
+            return None
+        return self.modules[module_id].rust_extern_types.get(path[0])
+
+    def resolve_extern_function_path(self, module_id: str, path: list[str]) -> RustExternFunction | None:
+        """Resolve a free Rust function visible from a module."""
+        if len(path) != 1:
+            return None
+        return self.modules[module_id].rust_extern_functions.get(path[0])
+
+    def rust_use_imports_name(self, module_id: str, name: str) -> bool:
+        """Return True when a raw extern Rust use appears to introduce a name."""
+        return any(_rust_use_imports_name(rust_use, name) for rust_use in self.modules[module_id].rust_uses)
+
+    def resolve_extern_static_method_path(self, module_id: str, path: list[str]) -> RustExternFunction | None:
+        """Resolve an opaque Rust associated function like ['FileHandle', 'open']."""
+        if len(path) != 2:
+            return None
+        owner = self.resolve_extern_type_path(module_id, [path[0]])
+        if owner is None:
+            return None
+        func = self.modules[module_id].rust_extern_methods.get((owner.qualified_name, path[1]))
+        if func is not None and func.is_static:
+            return func
+        return None
+
+    def resolve_extern_instance_method(self, module_id: str, owner_qualified_name: str, method_name: str) -> RustExternFunction | None:
+        """Resolve an opaque Rust instance method for a known receiver type."""
+        func = self.modules[module_id].rust_extern_methods.get((owner_qualified_name, method_name))
+        if func is not None and not func.is_static:
+            return func
+        return None
 
     def resolve_static_method_target(self, module_id: str, path: list[str]) -> tuple[TopLevelSymbol, str] | None:
         """Resolve a struct/enum static-method target like ['Counter', 'new'] or ['fb', 'Counter', 'new']."""
@@ -232,15 +339,49 @@ def build_module_graph(entry_file: Path) -> ModuleGraph:
 
         loading_stack.append(module_id)
         try:
-            tree = _parse_program(module_file)
+            tree, extern_block = _parse_program(module_file)
             imports = _collect_imports(tree)
             symbols = _collect_top_level_symbols(tree, module_id)
             exports = {name: symbol for name, symbol in symbols.items() if symbol.is_public}
+            duplicate_extern_types = {name for name in extern_block.types if extern_block.types.count(name) > 1}
+            if duplicate_extern_types:
+                duplicate = sorted(duplicate_extern_types)[0]
+                raise ZincModuleError(f"duplicate extern rust type '{duplicate}' in module '{module_id}'")
+            rust_extern_types = {
+                name: RustExternType(
+                    name=name,
+                    qualified_name=ModuleGraph.extern_type_qualified_name(module_id, name),
+                    module_id=module_id,
+                    rust_name=name,
+                )
+                for name in extern_block.types
+            }
+            rust_extern_functions: dict[str, RustExternFunction] = {}
+            rust_extern_methods: dict[tuple[str, str], RustExternFunction] = {}
+            for function in extern_block.functions:
+                if function.owner_type is None:
+                    if function.name in rust_extern_functions:
+                        raise ZincModuleError(f"duplicate extern rust function '{function.name}' in module '{module_id}'")
+                    rust_extern_functions[function.name] = function
+                    continue
+                owner = rust_extern_types.get(function.owner_type)
+                if owner is None:
+                    raise ZincModuleError(f"extern rust impl references unknown type '{function.owner_type}'")
+                key = (owner.qualified_name, function.name)
+                if key in rust_extern_methods:
+                    raise ZincModuleError(
+                        f"duplicate extern rust method '{function.owner_type}.{function.name}' in module '{module_id}'"
+                    )
+                rust_extern_methods[key] = function
             module = LoadedModule(
                 module_id=module_id,
                 path=module_file.resolve(),
                 tree=tree,
                 imports=imports,
+                rust_uses=list(extern_block.uses),
+                rust_extern_types=rust_extern_types,
+                rust_extern_functions=rust_extern_functions,
+                rust_extern_methods=rust_extern_methods,
                 symbols=symbols,
                 exports=exports,
             )
@@ -391,17 +532,310 @@ def _module_file_from_import(package_root: Path, module_path: str) -> Path:
     return target
 
 
-def _parse_program(module_file: Path) -> ZincParser.ProgramContext:
-    """Parse a Zinc source file into a program tree."""
+def _parse_program(module_file: Path) -> tuple[ZincParser.ProgramContext, RustExternBlock]:
+    """Parse a Zinc source file into a program tree and extracted Rust extern metadata."""
     source_text = module_file.read_text()
-    input_stream = InputStream(source_text)
+    stripped_text, extern_block = _extract_rust_extern_blocks(source_text)
+    input_stream = InputStream(stripped_text)
     lexer = ZincLexer(input_stream)
     stream = CommonTokenStream(lexer)
     parser = ZincParser(stream)
     tree = parser.program()
     if parser.getNumberOfSyntaxErrors() > 0:
         raise ZincModuleError(f"found {parser.getNumberOfSyntaxErrors()} syntax error(s) while parsing {module_file}")
-    return tree
+    return tree, extern_block
+
+
+def _extract_rust_extern_blocks(source_text: str) -> tuple[str, RustExternBlock]:
+    """Extract extern rust blocks and replace them with whitespace for normal Zinc parsing."""
+    uses: list[str] = []
+    types: list[str] = []
+    functions: list[RustExternFunction] = []
+    replacements = list(source_text)
+    cursor = 0
+
+    while True:
+        match = re.search(r"\bextern\s+rust\s*\{", source_text[cursor:])
+        if match is None:
+            break
+        start = cursor + match.start()
+        open_brace = cursor + match.end() - 1
+        close_brace = _find_matching_brace(source_text, open_brace)
+        if close_brace is None:
+            raise ZincModuleError("unterminated extern rust block")
+        body = source_text[open_brace + 1 : close_brace]
+        block = _parse_rust_extern_body(body)
+        uses.extend(block.uses)
+        types.extend(block.types)
+        functions.extend(block.functions)
+        for index in range(start, close_brace + 1):
+            replacements[index] = "\n" if source_text[index] == "\n" else " "
+        cursor = close_brace + 1
+
+    return "".join(replacements), RustExternBlock(uses=tuple(uses), types=tuple(types), functions=tuple(functions))
+
+
+def _find_matching_brace(text: str, open_index: int) -> int | None:
+    """Find a matching brace while ignoring strings and comments."""
+    depth = 0
+    i = open_index
+    quote: str | None = None
+    while i < len(text):
+        char = text[i]
+        nxt = text[i + 1] if i + 1 < len(text) else ""
+        if quote is not None:
+            if char == "\\":
+                i += 2
+                continue
+            if quote == "`" and char == "`" and nxt == "`":
+                i += 2
+                continue
+            if char == quote:
+                quote = None
+            i += 1
+            continue
+        if char in {'"', "'", "`"}:
+            quote = char
+            i += 1
+            continue
+        if char == "/" and nxt == "/":
+            newline = text.find("\n", i + 2)
+            if newline == -1:
+                return None
+            i = newline + 1
+            continue
+        if char == "/" and nxt == "*":
+            end = text.find("*/", i + 2)
+            if end == -1:
+                return None
+            i = end + 2
+            continue
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    return None
+
+
+def _parse_rust_extern_body(body: str) -> RustExternBlock:
+    """Parse the supported declarations inside an extern rust block."""
+    uses: list[str] = []
+    types: list[str] = []
+    functions: list[RustExternFunction] = []
+    cursor = 0
+
+    while cursor < len(body):
+        cursor = _skip_extern_ws(body, cursor)
+        if cursor >= len(body):
+            break
+        if _body_startswith_kw(body, cursor, "use"):
+            statement, cursor = _read_semicolon_item(body, cursor)
+            uses.append(statement.strip())
+            continue
+        if _body_startswith_kw(body, cursor, "type"):
+            statement, cursor = _read_semicolon_item(body, cursor)
+            match = re.fullmatch(r"type\s+([A-Za-z_][A-Za-z0-9_]*)\s*;", statement.strip())
+            if match is None:
+                raise ZincModuleError(f"invalid extern rust type declaration: {statement.strip()}")
+            types.append(match.group(1))
+            continue
+        if _body_startswith_kw(body, cursor, "fn") or _body_startswith_kw(body, cursor, "async"):
+            statement, cursor = _read_semicolon_item(body, cursor)
+            functions.append(_parse_rust_extern_function(statement))
+            continue
+        if _body_startswith_kw(body, cursor, "impl"):
+            impl_functions, cursor = _parse_rust_extern_impl(body, cursor)
+            functions.extend(impl_functions)
+            continue
+        raise ZincModuleError(f"unsupported extern rust item near: {body[cursor:cursor + 40].strip()}")
+
+    return RustExternBlock(uses=tuple(uses), types=tuple(types), functions=tuple(functions))
+
+
+def _skip_extern_ws(text: str, cursor: int) -> int:
+    """Skip whitespace and comments in an extern rust block."""
+    while cursor < len(text):
+        if text[cursor].isspace():
+            cursor += 1
+            continue
+        if text.startswith("//", cursor):
+            newline = text.find("\n", cursor + 2)
+            return len(text) if newline == -1 else _skip_extern_ws(text, newline + 1)
+        if text.startswith("/*", cursor):
+            end = text.find("*/", cursor + 2)
+            if end == -1:
+                raise ZincModuleError("unterminated comment in extern rust block")
+            cursor = end + 2
+            continue
+        break
+    return cursor
+
+
+def _body_startswith_kw(text: str, cursor: int, keyword: str) -> bool:
+    """Return True when text starts with a whole keyword at cursor."""
+    if not text.startswith(keyword, cursor):
+        return False
+    end = cursor + len(keyword)
+    return end >= len(text) or not (text[end].isalnum() or text[end] == "_")
+
+
+def _read_semicolon_item(text: str, cursor: int) -> tuple[str, int]:
+    """Read one top-level semicolon-terminated extern item."""
+    depth = 0
+    i = cursor
+    while i < len(text):
+        char = text[i]
+        if char in "({[":
+            depth += 1
+        elif char in ")}]":
+            depth -= 1
+        elif char == ";" and depth == 0:
+            return text[cursor : i + 1], i + 1
+        i += 1
+    raise ZincModuleError("unterminated extern rust item")
+
+
+def _parse_rust_extern_impl(text: str, cursor: int) -> tuple[list[RustExternFunction], int]:
+    """Parse an extern impl block."""
+    match = re.match(r"impl\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{", text[cursor:])
+    if match is None:
+        raise ZincModuleError(f"invalid extern rust impl near: {text[cursor:cursor + 40].strip()}")
+    owner_type = match.group(1)
+    open_brace = cursor + match.end() - 1
+    close_brace = _find_matching_brace(text, open_brace)
+    if close_brace is None:
+        raise ZincModuleError(f"unterminated extern rust impl for '{owner_type}'")
+    body = text[open_brace + 1 : close_brace]
+    functions: list[RustExternFunction] = []
+    inner_cursor = 0
+    while inner_cursor < len(body):
+        inner_cursor = _skip_extern_ws(body, inner_cursor)
+        if inner_cursor >= len(body):
+            break
+        if not (_body_startswith_kw(body, inner_cursor, "fn") or _body_startswith_kw(body, inner_cursor, "async")):
+            raise ZincModuleError(f"unsupported extern rust impl item near: {body[inner_cursor:inner_cursor + 40].strip()}")
+        statement, inner_cursor = _read_semicolon_item(body, inner_cursor)
+        function = _parse_rust_extern_function(statement, owner_type=owner_type)
+        functions.append(function)
+    return functions, close_brace + 1
+
+
+def _parse_rust_extern_function(statement: str, owner_type: str | None = None) -> RustExternFunction:
+    """Parse a Rust extern function signature."""
+    text = statement.strip()
+    if not text.endswith(";"):
+        raise ZincModuleError(f"extern rust function must end with ';': {text}")
+    text = text[:-1].strip()
+    is_async = False
+    if text.startswith("async "):
+        is_async = True
+        text = text[len("async ") :].lstrip()
+    match = re.match(r"fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", text)
+    if match is None:
+        raise ZincModuleError(f"invalid extern rust function declaration: {statement.strip()}")
+    name = match.group(1)
+    open_paren = match.end() - 1
+    close_paren = _find_matching_paren(text, open_paren)
+    if close_paren is None:
+        raise ZincModuleError(f"unterminated parameter list for extern rust function '{name}'")
+    params_text = text[open_paren + 1 : close_paren].strip()
+    rest = text[close_paren + 1 :].strip()
+    return_type = None
+    if rest:
+        if not rest.startswith("->"):
+            raise ZincModuleError(f"invalid extern rust return annotation for function '{name}'")
+        return_type = rest[2:].strip()
+        if not return_type:
+            raise ZincModuleError(f"missing extern rust return type for function '{name}'")
+    params = tuple(_parse_rust_extern_params(params_text))
+    is_static = not params or not params[0].is_self
+    visible_params = params[1:] if owner_type is not None and params and params[0].is_self else params
+    return RustExternFunction(
+        name=name,
+        params=tuple(visible_params),
+        return_type=return_type,
+        is_async=is_async,
+        owner_type=owner_type,
+        is_static=is_static,
+        display_name=f"{owner_type}.{name}" if owner_type else name,
+    )
+
+
+def _find_matching_paren(text: str, open_index: int) -> int | None:
+    """Find a matching parenthesis in a signature string."""
+    depth = 0
+    for i in range(open_index, len(text)):
+        if text[i] == "(":
+            depth += 1
+        elif text[i] == ")":
+            depth -= 1
+            if depth == 0:
+                return i
+    return None
+
+
+def _parse_rust_extern_params(params_text: str) -> list[RustExternParameter]:
+    """Parse extern function parameters."""
+    if not params_text:
+        return []
+    params: list[RustExternParameter] = []
+    for raw_param in _split_top_level_commas(params_text):
+        param = raw_param.strip()
+        if not param:
+            continue
+        if param == "self":
+            params.append(RustExternParameter(name="self", is_self=True))
+            continue
+        name, separator, type_text = param.partition(":")
+        if separator != ":" or not name.strip() or not type_text.strip():
+            raise ZincModuleError(f"invalid extern rust parameter '{param}'")
+        params.append(RustExternParameter(name=name.strip(), type_text=type_text.strip()))
+    return params
+
+
+def _split_top_level_commas(text: str) -> list[str]:
+    """Split a comma-delimited string while respecting nested type syntax."""
+    parts: list[str] = []
+    depth = 0
+    start = 0
+    for i, char in enumerate(text):
+        if char in "([{<":
+            depth += 1
+        elif char in ")]}>":
+            depth -= 1
+        elif char == "," and depth == 0:
+            parts.append(text[start:i])
+            start = i + 1
+    parts.append(text[start:])
+    return parts
+
+
+def _rust_use_imports_name(statement: str, name: str) -> bool:
+    """Best-effort check for whether a Rust use statement imports a visible name."""
+    text = statement.strip()
+    if text.startswith("use "):
+        text = text[len("use ") :].strip()
+    if text.endswith(";"):
+        text = text[:-1].strip()
+    if "::{" in text and text.endswith("}"):
+        inner = text[text.rfind("{") + 1 : -1]
+        for item in _split_top_level_commas(inner):
+            imported = item.strip()
+            alias_match = re.search(r"\bas\s+([A-Za-z_][A-Za-z0-9_]*)$", imported)
+            if alias_match:
+                if alias_match.group(1) == name:
+                    return True
+                continue
+            if imported.rsplit("::", 1)[-1].strip() == name:
+                return True
+        return False
+    alias_match = re.search(r"\bas\s+([A-Za-z_][A-Za-z0-9_]*)$", text)
+    if alias_match:
+        return alias_match.group(1) == name
+    return text.rsplit("::", 1)[-1].strip() == name
 
 
 def _collect_imports(tree: ZincParser.ProgramContext) -> list[ImportSpec]:
@@ -499,6 +933,17 @@ def _resolve_module_import_scope(graph: ModuleGraph, module: LoadedModule) -> No
     injected: dict[str, str] = {}
     aliases: dict[str, str] = {}
     local_names = set(module.symbols.keys())
+    extern_names = set(module.rust_extern_types.keys()) | set(module.rust_extern_functions.keys())
+
+    for name in extern_names:
+        if name in RESERVED_ERROR_NAMES:
+            raise ZincModuleError(f"'{name}' is a reserved builtin name")
+        if name in local_names:
+            raise ZincModuleError(f"extern rust name '{name}' conflicts with a local declaration in module '{module.module_id}'")
+
+    for function in module.rust_extern_methods.values():
+        if function.owner_type not in module.rust_extern_types:
+            raise ZincModuleError(f"extern rust impl references unknown type '{function.owner_type}'")
 
     for import_spec in module.imports:
         target = graph.get_module(import_spec.module_path)
@@ -509,7 +954,7 @@ def _resolve_module_import_scope(graph: ModuleGraph, module: LoadedModule) -> No
                 raise ZincModuleError(f"'{alias}' is a reserved builtin name")
             if alias in aliases:
                 raise ZincModuleError(f"duplicate import alias '{alias}' in module '{module.module_id}'")
-            if alias in injected or alias in local_names:
+            if alias in injected or alias in local_names or alias in extern_names:
                 raise ZincModuleError(f"alias '{alias}' conflicts with an existing name in module '{module.module_id}'")
             aliases[alias] = target.module_id
             continue
@@ -521,7 +966,7 @@ def _resolve_module_import_scope(graph: ModuleGraph, module: LoadedModule) -> No
             export = target.exports.get(name)
             if export is None:
                 raise ZincModuleError(f"module '{target.module_id}' does not export '{name}'")
-            if name in local_names:
+            if name in local_names or name in extern_names:
                 raise ZincModuleError(f"imported name '{name}' conflicts with a local declaration in module '{module.module_id}'")
             if name in injected and injected[name] != export.qualified_name:
                 raise ZincModuleError(f"duplicate imported name '{name}' in module '{module.module_id}'")

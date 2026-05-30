@@ -1,0 +1,10 @@
+extern rust {
+    use tokio::task::yield_now;
+
+    async fn yield_now() -> ();
+}
+
+fn main() {
+    yield_now()
+    print("done")
+}

@@ -8,6 +8,7 @@
     { "include": "#attributes" },
     { "include": "#strings" },
     { "include": "#numbers" },
+    { "include": "#extern_rust" },
     { "include": "#imports" },
     { "include": "#struct_compositions" },
     { "include": "#anonymous_structs" },
@@ -84,7 +85,7 @@
           "beginCaptures": {
             "0": { "name": "punctuation.definition.string.begin.zinc" }
           },
-          "end": "(?<!`)`(?!`)",
+          "end": "(?<!`)`(?:``)*(?!`)",
           "endCaptures": {
             "0": { "name": "punctuation.definition.string.end.zinc" }
           },
@@ -183,8 +184,17 @@
     "declarations": {
       "patterns": [
         {
+          "name": "meta.function.async.zinc",
+          "match": "\\b(async)\\s+(fn)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+          "captures": {
+            "1": { "name": "keyword.declaration.async.zinc" },
+            "2": { "name": "keyword.declaration.function.zinc" },
+            "3": { "name": "entity.name.function.zinc" }
+          }
+        },
+        {
           "name": "meta.function.zinc",
-          "match": "\\b(fn|async)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+          "match": "\\b(fn)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
           "captures": {
             "1": { "name": "keyword.declaration.function.zinc" },
             "2": { "name": "entity.name.function.zinc" }
@@ -212,6 +222,71 @@
           "captures": {
             "1": { "name": "storage.modifier.const.zinc" },
             "2": { "name": "variable.other.constant.zinc" }
+          }
+        }
+      ]
+    },
+    "extern_rust": {
+      "patterns": [
+        {
+          "name": "meta.extern-rust.header.zinc",
+          "match": "\\b(extern)\\s+(rust)\\s*(\\{)",
+          "captures": {
+            "1": { "name": "keyword.declaration.extern.zinc" },
+            "2": { "name": "storage.modifier.extern-language.rust.zinc" },
+            "3": { "name": "punctuation.section.block.begin.zinc" }
+          }
+        },
+        {
+          "name": "meta.extern-rust.use.zinc",
+          "begin": "^(\\s*)(use)\\b",
+          "beginCaptures": {
+            "2": { "name": "keyword.control.import.rust.zinc" }
+          },
+          "end": ";",
+          "endCaptures": {
+            "0": { "name": "punctuation.terminator.statement.zinc" }
+          },
+          "patterns": [
+            { "include": "#comments" },
+            {
+              "name": "keyword.control.import.rust.zinc",
+              "match": "\\b(as)\\b"
+            },
+            {
+              "name": "punctuation.separator.path.rust.zinc",
+              "match": "::"
+            },
+            {
+              "name": "punctuation.section.braces.rust.zinc",
+              "match": "[{}]"
+            },
+            {
+              "name": "punctuation.separator.comma.zinc",
+              "match": ","
+            },
+            {
+              "name": "entity.name.namespace.rust.zinc",
+              "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b"
+            }
+          ]
+        },
+        {
+          "name": "meta.extern-rust.type.zinc",
+          "match": "\\b(type)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(;)",
+          "captures": {
+            "1": { "name": "keyword.declaration.type.zinc" },
+            "2": { "name": "entity.name.type.extern.rust.zinc" },
+            "3": { "name": "punctuation.terminator.statement.zinc" }
+          }
+        },
+        {
+          "name": "meta.extern-rust.impl.zinc",
+          "match": "\\b(impl)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(\\{)",
+          "captures": {
+            "1": { "name": "keyword.declaration.impl.zinc" },
+            "2": { "name": "entity.name.type.extern.rust.zinc" },
+            "3": { "name": "punctuation.section.block.begin.zinc" }
           }
         }
       ]
@@ -501,7 +576,7 @@
         },
         {
           "name": "keyword.declaration.zinc",
-          "match": "\\b(?:fn|async|struct|enum|const|import|as)\\b"
+          "match": "\\b(?:fn|async|struct|enum|const|import|as|extern|rust|use|impl)\\b"
         },
         {
           "name": "storage.type.special.zinc",

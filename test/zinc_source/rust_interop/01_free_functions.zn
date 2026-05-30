@@ -1,0 +1,10 @@
+extern rust {
+    use std::cmp::{max, min};
+
+    fn max(a: i64, b: i64) -> i64;
+    fn min(a: i64, b: i64) -> i64;
+}
+
+fn main() {
+    print(max(min(8, 10), 3))
+}

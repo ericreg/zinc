@@ -1,0 +1,10 @@
+// expected-error: call to extern 'max' parameter 'a' expects a compatible 'i64' value
+extern rust {
+    use std::cmp::max;
+
+    fn max(a: i64, b: i64) -> i64;
+}
+
+fn main() {
+    print(max("one", 2))
+}

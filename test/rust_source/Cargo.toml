@@ -767,6 +767,22 @@ name = "reassign_type"
 path = "src/reassign_type.rs"
 
 [[bin]]
+name = "rust_interop_01_free_functions"
+path = "src/rust_interop/01_free_functions.rs"
+
+[[bin]]
+name = "rust_interop_02_alias_import"
+path = "src/rust_interop/02_alias_import.rs"
+
+[[bin]]
+name = "rust_interop_03_opaque_type_methods"
+path = "src/rust_interop/03_opaque_type_methods.rs"
+
+[[bin]]
+name = "rust_interop_04_async_extern"
+path = "src/rust_interop/04_async_extern.rs"
+
+[[bin]]
 name = "strings_01_raw_multiline"
 path = "src/strings/01_raw_multiline.rs"
 

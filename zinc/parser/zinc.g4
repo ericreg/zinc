@@ -10,6 +10,7 @@ program
 
 statement
     : importStatement
+    | externRustBlock
     | constDeclaration
     | structDeclaration
     | enumDeclaration
@@ -45,6 +46,42 @@ importPath
 
 importNameList
     : IDENTIFIER (',' IDENTIFIER)* ','?
+    ;
+
+externRustBlock
+    : 'extern' 'rust' '{' externRustItem* '}'
+    ;
+
+externRustItem
+    : rustUseStatement
+    | externRustType
+    | externRustFunction
+    | externRustImpl
+    ;
+
+rustUseStatement
+    : 'use' .*? ';'
+    ;
+
+externRustType
+    : 'type' IDENTIFIER ';'
+    ;
+
+externRustFunction
+    : 'async'? 'fn' IDENTIFIER '(' externRustParameterList? ')' ('->' type)? ';'
+    ;
+
+externRustParameterList
+    : externRustParameter (',' externRustParameter)* ','?
+    ;
+
+externRustParameter
+    : 'self'
+    | IDENTIFIER ':' type
+    ;
+
+externRustImpl
+    : 'impl' IDENTIFIER '{' externRustFunction* '}'
     ;
 
 qualifiedName
@@ -483,6 +520,9 @@ lambdaExpression
 
 // --- Keywords ---
 USE         : 'use';
+EXTERN      : 'extern';
+RUST        : 'rust';
+IMPL        : 'impl';
 STRUCT      : 'struct';
 ENUM        : 'enum';
 CONST       : 'const';
