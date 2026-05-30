@@ -48,6 +48,12 @@ def compile(file: Path, output: Path | None):
     _, _, _, codegen = _compile_pipeline(file)
     program = codegen.generate()
     rust_code = program.render()
+    if program.runtime_features:
+        features = ", ".join(f'"{feature}"' for feature in sorted(program.runtime_features))
+        click.echo(
+            f"zinc-internal runtime required: default-features = false, features = [{features}]",
+            err=True,
+        )
 
     if output:
         output.write_text(rust_code)

@@ -27,12 +27,18 @@ python -m zinc.main tree program.zn
 python -m zinc.main check program.zn
 ```
 
+Generated Rust that uses Zinc runtime features (channels, contexts, or compile-time metadata) must be built in a Cargo project with the internal runtime crate enabled for the features the compiler reports:
+
+```toml
+zinc-internal = { path = ".../rust_runtime/zinc-internal", default-features = false, features = ["channel"] }
+```
+
 ## Language Guide
 
 see [USER_GUIDE.md](./USER_GUIDE.md)
 
 
-## TODO / Roadmap
+## Roadmap
 
 - [x] Modules and imports
 - [x] Dynamic variable rebinding

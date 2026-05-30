@@ -5508,7 +5508,9 @@ class SymbolTableVisitor(zincVisitor):
         for index, param in enumerate(function.params):
             if param.type_text is None:
                 raise ZincTypeError(f"extern function '{function.display_name or function.name}' has untyped parameter '{param.name}'")
-            type_ctx = self._parse_required_type_annotation_text(param.type_text, f"extern function '{function.display_name or function.name}'")
+            type_ctx = self._parse_required_type_annotation_text(
+                param.type_text, f"extern function '{function.display_name or function.name}'"
+            )
             (
                 param_type,
                 param_array,

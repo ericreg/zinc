@@ -16,6 +16,12 @@ Compile a Zinc source file to Rust:
 python -m zinc.main compile program.zn -o output.rs
 ```
 
+If the generated Rust uses channels, contexts, or compile-time metadata, build it in a Cargo project with the reported `zinc-internal` runtime features:
+
+```toml
+zinc-internal = { path = ".../rust_runtime/zinc-internal", default-features = false, features = ["channel"] }
+```
+
 Print the parse tree:
 
 ```sh

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import tomllib
 import re
+import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -369,9 +369,7 @@ def build_module_graph(entry_file: Path) -> ModuleGraph:
                     raise ZincModuleError(f"extern rust impl references unknown type '{function.owner_type}'")
                 key = (owner.qualified_name, function.name)
                 if key in rust_extern_methods:
-                    raise ZincModuleError(
-                        f"duplicate extern rust method '{function.owner_type}.{function.name}' in module '{module_id}'"
-                    )
+                    raise ZincModuleError(f"duplicate extern rust method '{function.owner_type}.{function.name}' in module '{module_id}'")
                 rust_extern_methods[key] = function
             module = LoadedModule(
                 module_id=module_id,
@@ -650,7 +648,7 @@ def _parse_rust_extern_body(body: str) -> RustExternBlock:
             impl_functions, cursor = _parse_rust_extern_impl(body, cursor)
             functions.extend(impl_functions)
             continue
-        raise ZincModuleError(f"unsupported extern rust item near: {body[cursor:cursor + 40].strip()}")
+        raise ZincModuleError(f"unsupported extern rust item near: {body[cursor : cursor + 40].strip()}")
 
     return RustExternBlock(uses=tuple(uses), types=tuple(types), functions=tuple(functions))
 
@@ -702,7 +700,7 @@ def _parse_rust_extern_impl(text: str, cursor: int) -> tuple[list[RustExternFunc
     """Parse an extern impl block."""
     match = re.match(r"impl\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{", text[cursor:])
     if match is None:
-        raise ZincModuleError(f"invalid extern rust impl near: {text[cursor:cursor + 40].strip()}")
+        raise ZincModuleError(f"invalid extern rust impl near: {text[cursor : cursor + 40].strip()}")
     owner_type = match.group(1)
     open_brace = cursor + match.end() - 1
     close_brace = _find_matching_brace(text, open_brace)
@@ -716,7 +714,7 @@ def _parse_rust_extern_impl(text: str, cursor: int) -> tuple[list[RustExternFunc
         if inner_cursor >= len(body):
             break
         if not (_body_startswith_kw(body, inner_cursor, "fn") or _body_startswith_kw(body, inner_cursor, "async")):
-            raise ZincModuleError(f"unsupported extern rust impl item near: {body[inner_cursor:inner_cursor + 40].strip()}")
+            raise ZincModuleError(f"unsupported extern rust impl item near: {body[inner_cursor : inner_cursor + 40].strip()}")
         statement, inner_cursor = _read_semicolon_item(body, inner_cursor)
         function = _parse_rust_extern_function(statement, owner_type=owner_type)
         functions.append(function)

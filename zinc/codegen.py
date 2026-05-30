@@ -38,7 +38,6 @@ from zinc.meta_runtime import (
     MetaValue,
     is_meta_struct_qname,
     meta_struct_rust_name,
-    metadata_runtime_definitions,
 )
 from zinc.modules import extract_identifier_path, struct_path_from_ctx
 from zinc.numeric_literals import is_numeric_literal, numeric_literal_value
@@ -56,6 +55,25 @@ from zinc.symbols import (
 )
 
 BITWISE_VALUE_ASSIGNMENT_OPERATORS = frozenset({"&=", "|=", "^="})
+RUNTIME_SYMBOL_FEATURES = {
+    "__ZincChannel": "channel",
+    "__ZincTryRecv": "channel",
+    "__ZincTrySend": "channel",
+    "__ZincContext": "context",
+    "__ZincTypeMeta": "metadata",
+    "__ZincStructMeta": "metadata",
+    "__ZincEnumMeta": "metadata",
+    "__ZincVariantMeta": "metadata",
+    "__ZincFieldMeta": "metadata",
+    "__ZincFunctionMeta": "metadata",
+    "__ZincBuiltinMeta": "metadata",
+    "__ZincMethodMeta": "metadata",
+    "__ZincFunctionParameterMeta": "metadata",
+    "__ZincMethodParameterMeta": "metadata",
+    "__ZincVariableMeta": "metadata",
+    "__ZincConstMeta": "metadata",
+    "__ZincComponentOrder": "metadata",
+}
 
 
 @dataclass
@@ -68,6 +86,7 @@ class RustProgram:
     functions: list[str] = field(default_factory=list)
     main_body: list[str] = field(default_factory=list)
     uses_async: bool = False
+    runtime_features: set[str] = field(default_factory=set)
 
     def render(self) -> str:
         """Assemble final Rust code."""
@@ -155,7 +174,8 @@ class CodeGenVisitor(zincVisitor):
         self._callable_signatures: dict[str, CallableTypeInfo] = {}
         self._anonymous_structs: dict[tuple, AnonymousStructTypeInfo] = {}
         self._captured_binding_names: set[str] = set()
-        self._needs_metadata_runtime = False
+        self._runtime_symbols: set[str] = set()
+        self._runtime_features: set[str] = set()
         self._spread_temp_stack: list[dict[tuple[int, int], str]] = []
 
     def visit(self, tree):
@@ -170,6 +190,34 @@ class CodeGenVisitor(zincVisitor):
             return f"({rendered})?"
         return rendered
 
+    def _require_runtime_symbol(self, rust_name: str) -> None:
+        """Record a Zinc runtime symbol that generated Rust references."""
+        feature = RUNTIME_SYMBOL_FEATURES[rust_name]
+        self._runtime_symbols.add(rust_name)
+        self._runtime_features.add(feature)
+
+    def _require_runtime_for_builtin_types(self) -> None:
+        """Record runtime symbols required by resolved Zinc channel/context types."""
+        for symbol in self.symbols.all_symbols():
+            if symbol.kind not in {SymbolKind.VARIABLE, SymbolKind.PARAMETER}:
+                continue
+            if symbol.resolved_type == BaseType.CHANNEL:
+                self._require_runtime_symbol("__ZincChannel")
+            elif symbol.resolved_type == BaseType.CONTEXT:
+                self._require_runtime_symbol("__ZincContext")
+        for func in self.atlas.functions.values():
+            for arg_type in func.arg_types:
+                if arg_type == BaseType.CHANNEL:
+                    self._require_runtime_symbol("__ZincChannel")
+                elif arg_type == BaseType.CONTEXT:
+                    self._require_runtime_symbol("__ZincContext")
+            if func.return_type == BaseType.CHANNEL:
+                self._require_runtime_symbol("__ZincChannel")
+            elif func.return_type == BaseType.CONTEXT:
+                self._require_runtime_symbol("__ZincContext")
+        if self._channel_infos:
+            self._require_runtime_symbol("__ZincChannel")
+
     def generate(self) -> RustProgram:
         """Main entry point - generate Rust code for all reachable code."""
         # Pre-scan to determine which struct vars need mut
@@ -180,8 +228,8 @@ class CodeGenVisitor(zincVisitor):
         self._collect_callable_signatures()
         self._collect_anonymous_struct_types()
         self._mark_async_functions()
+        self._require_runtime_for_builtin_types()
 
-        imports = self._generate_imports()
         consts = [self._generate_const(c) for c in self.atlas.consts.values()]
         callable_enums = [self._generate_callable_enum(info) for _, info in sorted(self._callable_signatures.items())]
         closure_envs = [self._generate_closure_env_struct(info) for _, info in sorted(self._lexical_functions.items()) if info.finalized]
@@ -210,15 +258,14 @@ class CodeGenVisitor(zincVisitor):
             else:
                 functions.append(self._generate_function(func))
 
-        runtime_helpers = self._generate_runtime_helpers()
         structs = [
-            *runtime_helpers,
             *closure_envs,
             *callable_enums,
             *anonymous_structs,
             *[self._generate_enum(e) for e in self.atlas.enums.values()],
             *[self._generate_struct(s) for s in self.atlas.structs.values()],
         ]
+        imports = self._generate_imports()
 
         return RustProgram(
             imports=imports,
@@ -227,6 +274,7 @@ class CodeGenVisitor(zincVisitor):
             functions=functions,
             main_body=main_body,
             uses_async=self._uses_async,
+            runtime_features=set(self._runtime_features),
         )
 
     def _callable_info_is_concrete(self, info: CallableTypeInfo | None) -> bool:
@@ -892,6 +940,8 @@ class CodeGenVisitor(zincVisitor):
                 if rust_use not in seen_imports:
                     imports.append(rust_use)
                     seen_imports.add(rust_use)
+        if self._runtime_symbols:
+            imports.append(f"use zinc_internal::{{{', '.join(sorted(self._runtime_symbols))}}};")
         collections: set[str] = set()
         needs_rc_refcell = bool(self._boxed_struct_vars)
         needs_arc_mutex = bool(self._captured_binding_names)
@@ -918,221 +968,6 @@ class CodeGenVisitor(zincVisitor):
             imports.append("use std::sync::{Arc, Mutex};")
         return imports
 
-    def _generate_runtime_helpers(self) -> list[str]:
-        """Generate built-in Rust helper types used by Zinc lowering."""
-        channel_helper = "\n".join(
-            [
-                "enum __ZincTryRecv<T> {",
-                "    Value(T),",
-                "    Empty,",
-                "    Closed,",
-                "}",
-                "",
-                "enum __ZincTrySend<T> {",
-                "    Sent,",
-                "    Full(T),",
-                "    Closed(T),",
-                "}",
-                "",
-                "enum __ZincChannelSender<T> {",
-                "    Bounded(tokio::sync::mpsc::Sender<T>),",
-                "    Unbounded(tokio::sync::mpsc::UnboundedSender<T>),",
-                "}",
-                "",
-                "enum __ZincChannelReceiver<T> {",
-                "    Bounded(tokio::sync::mpsc::Receiver<T>),",
-                "    Unbounded(tokio::sync::mpsc::UnboundedReceiver<T>),",
-                "}",
-                "",
-                "impl<T> __ZincChannelReceiver<T> {",
-                "    async fn recv(&mut self) -> Option<T> {",
-                "        match self {",
-                "            Self::Bounded(receiver) => receiver.recv().await,",
-                "            Self::Unbounded(receiver) => receiver.recv().await,",
-                "        }",
-                "    }",
-                "",
-                "    fn try_recv(&mut self) -> __ZincTryRecv<T> {",
-                "        match self {",
-                "            Self::Bounded(receiver) => match receiver.try_recv() {",
-                "                Ok(value) => __ZincTryRecv::Value(value),",
-                "                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => __ZincTryRecv::Empty,",
-                "                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => __ZincTryRecv::Closed,",
-                "            },",
-                "            Self::Unbounded(receiver) => match receiver.try_recv() {",
-                "                Ok(value) => __ZincTryRecv::Value(value),",
-                "                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => __ZincTryRecv::Empty,",
-                "                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => __ZincTryRecv::Closed,",
-                "            },",
-                "        }",
-                "    }",
-                "}",
-                "",
-                "impl<T> Clone for __ZincChannelSender<T> {",
-                "    fn clone(&self) -> Self {",
-                "        match self {",
-                "            Self::Bounded(sender) => Self::Bounded(sender.clone()),",
-                "            Self::Unbounded(sender) => Self::Unbounded(sender.clone()),",
-                "        }",
-                "    }",
-                "}",
-                "",
-                "struct __ZincChannel<T> {",
-                "    sender: __ZincChannelSender<T>,",
-                "    receiver: std::sync::Arc<tokio::sync::Mutex<__ZincChannelReceiver<T>>>,",
-                "    closed: std::sync::Arc<std::sync::atomic::AtomicBool>,",
-                "    close_notify: std::sync::Arc<tokio::sync::Notify>,",
-                "}",
-                "",
-                "impl<T> Clone for __ZincChannel<T> {",
-                "    fn clone(&self) -> Self {",
-                "        Self {",
-                "            sender: self.sender.clone(),",
-                "            receiver: self.receiver.clone(),",
-                "            closed: self.closed.clone(),",
-                "            close_notify: self.close_notify.clone(),",
-                "        }",
-                "    }",
-                "}",
-                "",
-                "impl<T: Send + 'static> __ZincChannel<T> {",
-                "    fn bounded(capacity: i64) -> Self {",
-                "        let (sender, receiver) = tokio::sync::mpsc::channel(capacity as usize);",
-                "        Self {",
-                "            sender: __ZincChannelSender::Bounded(sender),",
-                "            receiver: std::sync::Arc::new(tokio::sync::Mutex::new(__ZincChannelReceiver::Bounded(receiver))),",
-                "            closed: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),",
-                "            close_notify: std::sync::Arc::new(tokio::sync::Notify::new()),",
-                "        }",
-                "    }",
-                "",
-                "    fn unbounded() -> Self {",
-                "        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();",
-                "        Self {",
-                "            sender: __ZincChannelSender::Unbounded(sender),",
-                "            receiver: std::sync::Arc::new(tokio::sync::Mutex::new(__ZincChannelReceiver::Unbounded(receiver))),",
-                "            closed: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),",
-                "            close_notify: std::sync::Arc::new(tokio::sync::Notify::new()),",
-                "        }",
-                "    }",
-                "",
-                "    async fn send(&self, value: T) {",
-                "        if self.closed.load(std::sync::atomic::Ordering::SeqCst) {",
-                '            panic!("send on closed channel");',
-                "        }",
-                "        match &self.sender {",
-                "            __ZincChannelSender::Bounded(sender) => {",
-                "                if let Err(_) = sender.send(value).await {",
-                '                    panic!("send on closed channel");',
-                "                }",
-                "            },",
-                "            __ZincChannelSender::Unbounded(sender) => {",
-                "                if let Err(_) = sender.send(value) {",
-                '                    panic!("send on closed channel");',
-                "                }",
-                "            },",
-                "        }",
-                "    }",
-                "",
-                "    fn try_send(&self, value: T) -> __ZincTrySend<T> {",
-                "        if self.closed.load(std::sync::atomic::Ordering::SeqCst) {",
-                "            return __ZincTrySend::Closed(value);",
-                "        }",
-                "        match &self.sender {",
-                "            __ZincChannelSender::Bounded(sender) => match sender.try_send(value) {",
-                "                Ok(()) => __ZincTrySend::Sent,",
-                "                Err(tokio::sync::mpsc::error::TrySendError::Full(value)) => __ZincTrySend::Full(value),",
-                "                Err(tokio::sync::mpsc::error::TrySendError::Closed(value)) => __ZincTrySend::Closed(value),",
-                "            },",
-                "            __ZincChannelSender::Unbounded(sender) => match sender.send(value) {",
-                "                Ok(()) => __ZincTrySend::Sent,",
-                "                Err(err) => __ZincTrySend::Closed(err.0),",
-                "            },",
-                "        }",
-                "    }",
-                "",
-                "    fn close(&self) {",
-                "        if self.closed.swap(true, std::sync::atomic::Ordering::SeqCst) {",
-                '            panic!("double close");',
-                "        }",
-                "        self.close_notify.notify_waiters();",
-                "    }",
-                "",
-                "    async fn recv_option(&self) -> Option<T> {",
-                "        loop {",
-                "            match self.receiver.clone().try_lock_owned() {",
-                "                Ok(mut receiver) => match receiver.try_recv() {",
-                "                    __ZincTryRecv::Value(value) => return Some(value),",
-                "                    __ZincTryRecv::Closed => return None,",
-                "                    __ZincTryRecv::Empty => {",
-                "                        if self.closed.load(std::sync::atomic::Ordering::SeqCst) {",
-                "                            return None;",
-                "                        }",
-                "                        let notified = self.close_notify.notified();",
-                "                        drop(receiver);",
-                "                        tokio::select! {",
-                "                            value = async {",
-                "                                let mut receiver = self.receiver.clone().lock_owned().await;",
-                "                                receiver.recv().await",
-                "                            } => return value,",
-                "                            _ = notified => continue,",
-                "                        }",
-                "                    },",
-                "                },",
-                "                Err(_) => tokio::task::yield_now().await,",
-                "            }",
-                "        }",
-                "    }",
-                "",
-                "    async fn recv(&self) -> T {",
-                "        match self.recv_option().await {",
-                "            Some(value) => value,",
-                '            None => panic!("receive on closed channel"),',
-                "        }",
-                "    }",
-                "",
-                "    fn try_recv(&self) -> __ZincTryRecv<T> {",
-                "        match self.receiver.clone().try_lock_owned() {",
-                "            Ok(mut receiver) => match receiver.try_recv() {",
-                "                __ZincTryRecv::Empty if self.closed.load(std::sync::atomic::Ordering::SeqCst) => __ZincTryRecv::Closed,",
-                "                result => result,",
-                "            },",
-                "            Err(_) => __ZincTryRecv::Empty,",
-                "        }",
-                "    }",
-                "}",
-                "",
-                "#[derive(Clone)]",
-                "struct __ZincContext {",
-                "    done: __ZincChannel<bool>,",
-                "}",
-                "",
-                "impl Default for __ZincContext {",
-                "    fn default() -> Self {",
-                "        Self::background()",
-                "    }",
-                "}",
-                "",
-                "impl __ZincContext {",
-                "    fn background() -> Self {",
-                "        Self { done: __ZincChannel::unbounded() }",
-                "    }",
-                "",
-                "    fn done(&self) -> __ZincChannel<bool> {",
-                "        self.done.clone()",
-                "    }",
-                "",
-                "    fn cancel(&self) {",
-                "        self.done.close();",
-                "    }",
-                "}",
-            ]
-        )
-        helpers = [channel_helper]
-        if self._needs_metadata_runtime:
-            helpers.extend(metadata_runtime_definitions())
-        return helpers
-
     def _constant_value_for_expr(self, ctx):
         """Return the compile-time constant value recorded for an expression, if any."""
         symbol = self._get_expr_symbol(ctx)
@@ -1158,23 +993,25 @@ class CodeGenVisitor(zincVisitor):
     def _meta_list_element_rust_type(self, value: MetaListValue) -> str:
         """Return the Rust element type for a compile-time metadata list."""
         if is_meta_struct_qname(value.element_struct_qualified_name):
-            return meta_struct_rust_name(value.element_struct_qualified_name)
+            rust_name = meta_struct_rust_name(value.element_struct_qualified_name)
+            self._require_runtime_symbol(rust_name)
+            return rust_name
         if value.element_struct_qualified_name == COMPONENT_ORDER_QNAME:
-            return meta_struct_rust_name(value.element_struct_qualified_name)
+            rust_name = meta_struct_rust_name(value.element_struct_qualified_name)
+            self._require_runtime_symbol(rust_name)
+            return rust_name
         if value.element_exact_type is not None:
             return value.element_exact_type
         return type_to_rust(value.element_base_type)
 
     def _render_meta_list(self, value: MetaListValue) -> str:
         """Render a compile-time metadata list into a Rust Vec literal."""
-        self._needs_metadata_runtime = True
         if not value.items:
             return f"Vec::<{self._meta_list_element_rust_type(value)}>::new()"
         return f"vec![{', '.join(self._render_constant_value(item) for item in value.items)}]"
 
     def _render_meta_value(self, value: MetaValue) -> str:
         """Render a compile-time metadata object into a Rust struct literal."""
-        self._needs_metadata_runtime = True
         if value.struct_qualified_name == COMPONENT_ORDER_QNAME:
             name = str(value.fields.get("name", "depth_first"))
             variant = {
@@ -1182,8 +1019,10 @@ class CodeGenVisitor(zincVisitor):
                 "breadth_first": "BreadthFirst",
                 "topological": "Topological",
             }.get(name, "DepthFirst")
+            self._require_runtime_symbol("__ZincComponentOrder")
             return f"__ZincComponentOrder::{variant}"
         rust_name = meta_struct_rust_name(value.struct_qualified_name)
+        self._require_runtime_symbol(rust_name)
         fields = []
         for field_name, field_value in value.fields.items():
             fields.append(f"{field_name}: {self._render_constant_value(field_value)}")
@@ -1540,10 +1379,15 @@ class CodeGenVisitor(zincVisitor):
             return tuple_info.to_rust_type()
         if base_type == BaseType.CALLABLE and callable_info:
             return callable_info.rust_type_name()
+        if base_type == BaseType.CHANNEL:
+            self._require_runtime_symbol("__ZincChannel")
+        if base_type == BaseType.CONTEXT:
+            self._require_runtime_symbol("__ZincContext")
         if base_type == BaseType.STRUCT:
             if is_meta_struct_qname(struct_qualified_name):
-                self._needs_metadata_runtime = True
-                return meta_struct_rust_name(struct_qualified_name)
+                rust_name = meta_struct_rust_name(struct_qualified_name)
+                self._require_runtime_symbol(rust_name)
+                return rust_name
             if anonymous_struct_info:
                 return anonymous_struct_info.rust_type_name()
             return self._named_struct_rust_name(struct_qualified_name)
@@ -1671,6 +1515,7 @@ class CodeGenVisitor(zincVisitor):
     def _callable_variant_payload_type(self, target: CallableTarget) -> str | None:
         """Return the Rust payload type for a callable enum variant."""
         if target.kind == "context_cancel":
+            self._require_runtime_symbol("__ZincContext")
             return "__ZincContext"
         if target.kind == "closure":
             info = self._closure_info(target.qualified_name)
@@ -1937,8 +1782,9 @@ class CodeGenVisitor(zincVisitor):
         if extern_name is not None:
             return extern_name
         if is_meta_struct_qname(qualified_name):
-            self._needs_metadata_runtime = True
-            return meta_struct_rust_name(qualified_name)
+            rust_name = meta_struct_rust_name(qualified_name)
+            self._require_runtime_symbol(rust_name)
+            return rust_name
         struct = self.atlas.structs.get(qualified_name)
         if struct is not None:
             return self._struct_rust_name(struct)
@@ -1949,8 +1795,9 @@ class CodeGenVisitor(zincVisitor):
         if qualified_name is None:
             return "Enum"
         if qualified_name == COMPONENT_ORDER_QNAME:
-            self._needs_metadata_runtime = True
-            return meta_struct_rust_name(qualified_name)
+            rust_name = meta_struct_rust_name(qualified_name)
+            self._require_runtime_symbol(rust_name)
+            return rust_name
         enum = self.atlas.enums.get(qualified_name)
         if enum is not None:
             return self._enum_rust_name(enum)
@@ -2327,6 +2174,8 @@ class CodeGenVisitor(zincVisitor):
         }
         lowered = zinc_type.lower()
         if lowered in mapping:
+            if mapping[lowered] == "__ZincContext":
+                self._require_runtime_symbol("__ZincContext")
             return mapping[lowered]
         if zinc_type == "Self":
             return "Self"
@@ -2346,6 +2195,7 @@ class CodeGenVisitor(zincVisitor):
     def _function_param_rust_type(self, func: FunctionInstance, index: int) -> str:
         """Render one function parameter type using resolved metadata."""
         if index in func.arg_channel_infos and func.arg_channel_infos[index]:
+            self._require_runtime_symbol("__ZincChannel")
             return func.arg_channel_infos[index][0].to_rust_type()
         if index in func.arg_array_infos:
             return func.arg_array_infos[index].to_rust_type()
@@ -3745,8 +3595,10 @@ class CodeGenVisitor(zincVisitor):
 
         path = extract_identifier_path(callee_ctx) if self._current_module is not None else None
         if path == ["Context", "background"]:
+            self._require_runtime_symbol("__ZincContext")
             return finish("__ZincContext::background()")
         if path == ["Context", "with_cancel"]:
+            self._require_runtime_symbol("__ZincContext")
             parent = args[0] if args else "__zinc_missing_context"
             cancel_info = CallableTypeInfo(param_types=[], return_type=BaseType.VOID)
             expr_symbol = self._get_expr_symbol(ctx)
@@ -3834,6 +3686,7 @@ class CodeGenVisitor(zincVisitor):
             receiver_ctx = callee_ctx.expression()
             method_name = callee_ctx.IDENTIFIER().getText()
             if self._get_expr_type(receiver_ctx) == BaseType.CONTEXT:
+                self._require_runtime_symbol("__ZincContext")
                 if method_name == "done":
                     return finish(f"{self.visit(receiver_ctx)}.done()")
                 if method_name == "cancel":
@@ -4809,6 +4662,7 @@ class CodeGenVisitor(zincVisitor):
             if isinstance(callee, ZincParser.PrimaryExprContext):
                 primary = callee.primaryExpression()
                 if primary and primary.IDENTIFIER() and primary.IDENTIFIER().getText() == "chan":
+                    self._require_runtime_symbol("__ZincChannel")
                     var_name = target
                     capacity = None
                     chan_args = self._call_args_for_ctx(expr)
@@ -5286,6 +5140,7 @@ class CodeGenVisitor(zincVisitor):
         for branch_index, case_ctx in enumerate(case_ctxs):
             lines.append(f"            {branch_index} => {{")
             if isinstance(case_ctx, ZincParser.SelectReceiveCaseContext):
+                self._require_runtime_symbol("__ZincTryRecv")
                 value_name = f"__zinc_select_value_{select_id}_{branch_index}"
                 receiver = self.visit(case_ctx.expression())
                 mode, _ = self._select_receive_binding(case_ctx)
@@ -5306,6 +5161,7 @@ class CodeGenVisitor(zincVisitor):
                     lines.append("                    },")
                 lines.append("                }")
             else:
+                self._require_runtime_symbol("__ZincTrySend")
                 channel_name = case_ctx.IDENTIFIER().getText()
                 sender = self._channel_sender_expr(channel_name)
                 value = self._render_channel_value(channel_name, case_ctx.expression())

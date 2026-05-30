@@ -27,7 +27,7 @@
 - [x] lambda expressions
 - [x] decorators
 - [] iterator stuff such as for i in (1..upper_bound).step_by(2) / linq / rayon
-- [] rust / c interop
+- [] rust interop
 
 
 ## Currently (possibly forever) unsupported

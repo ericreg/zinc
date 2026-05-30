@@ -1,0 +1,17 @@
+[package]
+name = "zinc-internal"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "zinc_internal"
+path = "src/lib.rs"
+
+[features]
+default = []
+channel = ["dep:tokio"]
+context = ["channel"]
+metadata = []
+
+[dependencies]
+tokio = { version = "1", features = ["macros", "rt", "sync"], optional = true }

@@ -8,7 +8,7 @@ from pathlib import Path
 import click
 import pytest
 from zinc.atlas import AtlasBuilder
-from zinc.codegen import CodeGenVisitor
+from zinc.codegen import CodeGenVisitor, RustProgram
 from zinc.exceptions import ZincModuleError, ZincTypeError
 from zinc.modules import build_module_graph
 from zinc.struct_logging import configure_logging, get_logger
@@ -21,6 +21,7 @@ RUST_SOURCE_DIR = TEST_DIR / "rust_source"
 RUST_SRC_DIR = RUST_SOURCE_DIR / "src"  # Cargo src directory
 OUTPUT_DIR = TEST_DIR / "output"
 CARGO_TOML = RUST_SOURCE_DIR / "Cargo.toml"
+RUNTIME_CRATE_PATH = "../../rust_runtime/zinc-internal"
 NON_DETERMINISTIC_FOLDER = "non_deterministic"
 COMPILE_ERROR_GROUPS = (
     "error_handling",
@@ -39,6 +40,12 @@ COMPILE_ERROR_GROUPS = (
     "operators",
     "decorators",
     "rust_interop",
+)
+INLINE_RUNTIME_DEFINITIONS = (
+    "enum __ZincTryRecv",
+    "enum __ZincTrySend",
+    "struct __ZincChannel",
+    "struct __ZincContext",
 )
 
 
@@ -84,12 +91,13 @@ def read_expected_error(source_path: Path) -> str:
     raise AssertionError(f"Missing {prefix} comment in {source_path}")
 
 
-def generate_cargo_toml(test_paths: list[str]) -> str:
+def generate_cargo_toml(test_paths: list[str], runtime_features: set[str] | None = None) -> str:
     """Generate Cargo.toml content with binary entries for each test.
 
     Args:
         test_paths: Relative paths without extension, e.g., "arithmetic" or "structs/01_basic_fields"
     """
+    runtime_features = runtime_features or set()
     lines = [
         "[package]",
         'name = "zinc_tests"',
@@ -98,8 +106,11 @@ def generate_cargo_toml(test_paths: list[str]) -> str:
         "",
         "[dependencies]",
         'tokio = { version = "1", features = ["full"] }',
-        "",
     ]
+    if runtime_features:
+        feature_list = ", ".join(f'"{feature}"' for feature in sorted(runtime_features))
+        lines.append(f'zinc-internal = {{ path = "{RUNTIME_CRATE_PATH}", default-features = false, features = [{feature_list}] }}')
+    lines.append("")
 
     for test_path in sorted(test_paths):
         # Binary name uses underscores for path separators (e.g., "structs_01_basic_fields")
@@ -127,8 +138,8 @@ def generate_cargo_toml(test_paths: list[str]) -> str:
     return "\n".join(lines)
 
 
-def compile_zinc(source_path: Path) -> str:
-    """Compile a Zinc entry file to Rust."""
+def compile_zinc_program(source_path: Path) -> RustProgram:
+    """Compile a Zinc entry file to a structured Rust program."""
     module_graph = build_module_graph(source_path)
     atlas = AtlasBuilder(module_graph).build()
     symbol_visitor = SymbolTableVisitor(atlas)
@@ -143,8 +154,12 @@ def compile_zinc(source_path: Path) -> str:
         symbol_visitor.bound_struct_fields,
         symbol_visitor.callable_call_specialization_map,
     )
-    program = codegen.generate()
-    return program.render()
+    return codegen.generate()
+
+
+def compile_zinc(source_path: Path) -> str:
+    """Compile a Zinc entry file to Rust."""
+    return compile_zinc_program(source_path).render()
 
 
 # === Non-deterministic test support ===
@@ -271,6 +286,40 @@ def test_missing_pkg_toml(tmp_path: Path) -> None:
         compile_zinc(entry)
 
 
+def assert_no_inline_runtime_helpers(rust_code: str) -> None:
+    """Assert generated Rust references the runtime crate instead of inlining helpers."""
+    for definition in INLINE_RUNTIME_DEFINITIONS:
+        assert definition not in rust_code
+
+
+def test_runtime_imports_are_feature_scoped() -> None:
+    """Generated Rust imports only the runtime families used by the fixture."""
+    arithmetic = compile_zinc_program(ZINC_SOURCE_DIR / "arithmetic.zn")
+    arithmetic_code = arithmetic.render()
+    assert arithmetic.runtime_features == set()
+    assert "zinc_internal" not in arithmetic_code
+    assert_no_inline_runtime_helpers(arithmetic_code)
+
+    channel = compile_zinc_program(ZINC_SOURCE_DIR / "concurrency/channels/01_local_round_trip.zn")
+    channel_code = channel.render()
+    assert channel.runtime_features == {"channel"}
+    assert "use zinc_internal::{__ZincChannel};" in channel_code
+    assert_no_inline_runtime_helpers(channel_code)
+
+    context = compile_zinc_program(ZINC_SOURCE_DIR / "concurrency/select/08_context_done.zn")
+    context_code = context.render()
+    assert context.runtime_features == {"context"}
+    assert "use zinc_internal::{__ZincContext};" in context_code
+    assert_no_inline_runtime_helpers(context_code)
+
+    metadata = compile_zinc_program(ZINC_SOURCE_DIR / "metadata/03_constraints_and_orders.zn")
+    metadata_code = metadata.render()
+    assert metadata.runtime_features == {"metadata"}
+    assert "__ZincTypeMeta" in metadata_code
+    assert "use zinc_internal::{" in metadata_code
+    assert_no_inline_runtime_helpers(metadata_code)
+
+
 @pytest.mark.parametrize("test_path", get_test_cases())
 def test_compile(test_path: str) -> None:
     """Test that compiling a source file produces the expected output.
@@ -323,6 +372,7 @@ def main(update_output: bool) -> None:
 
     # Collect all test paths (including subdirectories)
     test_paths: list[str] = []
+    runtime_features: set[str] = set()
     for source_file in ZINC_SOURCE_DIR.glob("**/*.zn"):
         # Get path relative to ZINC_SOURCE_DIR, without extension
         relative = source_file.relative_to(ZINC_SOURCE_DIR).with_suffix("")
@@ -335,7 +385,9 @@ def main(update_output: bool) -> None:
 
         # read the zinc source file
         # compile it to rust
-        rust_code = compile_zinc(source_file)
+        program = compile_zinc_program(source_file)
+        rust_code = program.render()
+        runtime_features.update(program.runtime_features)
 
         if update_output:
             # Write rust code to cargo src directory (create subdirs as needed)
@@ -347,7 +399,7 @@ def main(update_output: bool) -> None:
 
     if update_output:
         # Generate Cargo.toml with all test binaries
-        cargo_content = generate_cargo_toml(test_paths)
+        cargo_content = generate_cargo_toml(test_paths, runtime_features)
         CARGO_TOML.write_text(cargo_content)
         logger.info(event="wrote_cargo_toml", ctx={"path": str(CARGO_TOML)})
 

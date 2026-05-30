@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
+zinc-internal = { path = "../../rust_runtime/zinc-internal", default-features = false, features = ["channel", "context", "metadata"] }
 
 [[bin]]
 name = "annotations_01_typed_locals_and_params"
