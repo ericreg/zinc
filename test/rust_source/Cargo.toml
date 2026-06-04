@@ -784,6 +784,10 @@ name = "rust_interop_04_async_extern"
 path = "src/rust_interop/04_async_extern.rs"
 
 [[bin]]
+name = "std_filesystem"
+path = "src/std_filesystem.rs"
+
+[[bin]]
 name = "strings_01_raw_multiline"
 path = "src/strings/01_raw_multiline.rs"
 

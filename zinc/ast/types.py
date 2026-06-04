@@ -260,6 +260,8 @@ def _named_struct_rust_name(qualified_name: str | None) -> str:
     """Return a best-effort Rust type name for a named struct."""
     if not qualified_name:
         return "unknown"
+    if "::extern::" in qualified_name:
+        return qualified_name.rsplit("::", 1)[-1]
     module_id, sep, name = qualified_name.rpartition("::")
     if not sep:
         return qualified_name

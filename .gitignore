@@ -139,3 +139,6 @@ _version.py
 .antlr
 .devcontainer/zsh_history
 .devcontainer/cache
+
+test/rust_source/zinc_fs_tmp/
+

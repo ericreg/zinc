@@ -240,7 +240,7 @@ class CodeGenVisitor(zincVisitor):
                 key=lambda item: item[1].rust_type_name(),
             )
         ]
-        functions = []
+        functions = self._generate_std_module_helpers()
         main_body = []
 
         for func_name in self.atlas.topological_order():
@@ -276,6 +276,62 @@ class CodeGenVisitor(zincVisitor):
             uses_async=self._uses_async,
             runtime_features=set(self._runtime_features),
         )
+
+    def _generate_std_module_helpers(self) -> list[str]:
+        """Generate Rust helpers required by Zinc std modules."""
+        helpers: list[str] = []
+        if "std/filesystem" in self.module_graph.modules:
+            helpers.extend(self._generate_std_filesystem_helpers())
+        return helpers
+
+    def _generate_std_filesystem_helpers(self) -> list[str]:
+        """Generate helpers backing std/filesystem.zn."""
+        return [
+            "\n".join(
+                [
+                    "fn __zinc_fs_exists(path: String) -> bool {",
+                    "    std::fs::metadata(path).is_ok()",
+                    "}",
+                ]
+            ),
+            "\n".join(
+                [
+                    "fn __zinc_fs_mkdir(path: String) -> Result<(), String> {",
+                    "    std::fs::create_dir_all(path).map_err(|error| error.to_string())",
+                    "}",
+                ]
+            ),
+            "\n".join(
+                [
+                    "fn __zinc_fs_read_text(path: String) -> Result<String, String> {",
+                    "    std::fs::read_to_string(path).map_err(|error| error.to_string())",
+                    "}",
+                ]
+            ),
+            "\n".join(
+                [
+                    "fn __zinc_fs_write_text(path: String, contents: String) -> Result<(), String> {",
+                    "    std::fs::write(path, contents).map_err(|error| error.to_string())",
+                    "}",
+                ]
+            ),
+            "\n".join(
+                [
+                    "fn __zinc_fs_read_lines(path: String) -> Result<Vec<String>, String> {",
+                    "    std::fs::read_to_string(path).map(|contents| {",
+                    "        contents.lines().map(|line| line.to_string()).collect()",
+                    "    }).map_err(|error| error.to_string())",
+                    "}",
+                ]
+            ),
+            "\n".join(
+                [
+                    "fn __zinc_fs_write_lines(path: String, lines: &Vec<String>) -> Result<(), String> {",
+                    "    std::fs::write(path, lines.join(\"\\n\")).map_err(|error| error.to_string())",
+                    "}",
+                ]
+            ),
+        ]
 
     def _callable_info_is_concrete(self, info: CallableTypeInfo | None) -> bool:
         """Return True when a callable signature contains no unknown slots."""
@@ -3775,7 +3831,10 @@ class CodeGenVisitor(zincVisitor):
                 resolved_function = self.module_graph.resolve_function_path(self._current_module, path)
                 if resolved_function:
                     key = (self._current_function, ctx.getSourceInterval())
-                    mangled = self._specialization_map.get(key) or self.module_graph.rust_base_name(resolved_function.qualified_name)
+                    callable_mangled = (self._callable_call_specialization_map.get(key) or [None])[0]
+                    mangled = self._specialization_map.get(key) or callable_mangled or self.module_graph.rust_base_name(
+                        resolved_function.qualified_name
+                    )
                     func = self.atlas.functions.get(mangled)
                     if func is not None:
                         args = self._render_function_args_for_instance(func, call_args)

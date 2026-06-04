@@ -6759,25 +6759,32 @@ class SymbolTableVisitor(zincVisitor):
         walk(block_ctx)
         return BaseType.UNKNOWN if saw_value_return else BaseType.VOID
 
-    def _declared_return_value_info(self, ctx) -> ResolvedValueInfo | None:
+    def _declared_return_value_info(self, ctx, source_module_id: str | None = None) -> ResolvedValueInfo | None:
         """Return rich metadata for an annotated function return type, if one exists."""
         if not hasattr(ctx, "type_") or ctx.type_() is None:
             return None
-        (
-            base_type,
-            array_info,
-            dict_info,
-            set_info,
-            tuple_info,
-            callable_info,
-            struct_qualified_name,
-            anonymous_struct_info,
-            result_info,
-            option_info,
-        ) = self._type_metadata_from_type_ctx(ctx.type_())
+        previous_module = self._current_module
+        if source_module_id is not None:
+            self._current_module = source_module_id
+        try:
+            (
+                base_type,
+                array_info,
+                dict_info,
+                set_info,
+                tuple_info,
+                callable_info,
+                struct_qualified_name,
+                anonymous_struct_info,
+                result_info,
+                option_info,
+            ) = self._type_metadata_from_type_ctx(ctx.type_())
+            exact_type = self._exact_type_name_from_type_ctx(ctx.type_())
+        finally:
+            self._current_module = previous_module
         return ResolvedValueInfo(
             base_type=base_type,
-            exact_type=self._exact_type_name_from_type_ctx(ctx.type_()),
+            exact_type=exact_type,
             array_info=self._copy_array_info(array_info),
             dict_info=self._copy_dict_info(dict_info),
             set_info=self._copy_set_info(set_info),
@@ -9813,6 +9820,19 @@ class SymbolTableVisitor(zincVisitor):
                             candidate_option_info = self._copy_option_info(func_instance.return_option_info)
                             candidate_struct_qualified_name = func_instance.return_struct_qualified_name
                             candidate_anonymous_struct_info = self._copy_anonymous_struct_info(func_instance.return_anonymous_struct_info)
+                    if candidate_type == BaseType.UNKNOWN:
+                        declared_info = self._declared_return_value_info(func_def, target.qualified_name.rpartition("::")[0])
+                        if declared_info is not None:
+                            candidate_type = declared_info.base_type
+                            candidate_exact_type = declared_info.exact_type
+                            candidate_dict_info = declared_info.dict_info
+                            candidate_set_info = declared_info.set_info
+                            candidate_tuple_info = declared_info.tuple_info
+                            candidate_callable_info = declared_info.callable_info
+                            candidate_result_info = self._copy_result_info(declared_info.result_info)
+                            candidate_option_info = self._copy_option_info(declared_info.option_info)
+                            candidate_struct_qualified_name = declared_info.struct_qualified_name
+                            candidate_anonymous_struct_info = self._copy_anonymous_struct_info(declared_info.anonymous_struct_info)
                 else:
                     owner_qualified_name = target.receiver_struct_qualified_name or target.qualified_name.partition("::")[0]
                     method_name = target.qualified_name.rpartition("::")[2]
@@ -10079,7 +10099,7 @@ class SymbolTableVisitor(zincVisitor):
                             option_info=self._copy_option_info(func_instance.return_option_info),
                         )
                     if return_info is None:
-                        return_info = self._declared_return_value_info(func_def)
+                        return_info = self._declared_return_value_info(func_def, resolved_function.module_id)
                     if return_info is not None:
                         self._record_value_info(ctx.getSourceInterval(), return_info)
                         return return_info.base_type

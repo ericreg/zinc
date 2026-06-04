@@ -51,6 +51,8 @@ INLINE_RUNTIME_DEFINITIONS = (
 
 def is_entry_fixture(relative: Path) -> bool:
     """Return True when a Zinc fixture should be treated as a test entrypoint."""
+    if relative.parts and relative.parts[0] == "std":
+        return False
     return all(not part.startswith("_") and "." not in part for part in relative.parts)
 
 

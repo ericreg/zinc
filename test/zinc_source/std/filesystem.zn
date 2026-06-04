@@ -1,0 +1,32 @@
+extern rust {
+    fn __zinc_fs_exists(path: string) -> bool;
+    fn __zinc_fs_mkdir(path: string) -> Result<(), string>;
+    fn __zinc_fs_read_text(path: string) -> Result<string, string>;
+    fn __zinc_fs_write_text(path: string, contents: string) -> Result<(), string>;
+    fn __zinc_fs_read_lines(path: string) -> Result<[string], string>;
+    fn __zinc_fs_write_lines(path: string, lines: [string]) -> Result<(), string>;
+}
+
+fn exists(path: string) -> bool {
+    return __zinc_fs_exists(path)
+}
+
+fn mkdir(path: string) -> Result<(), string> {
+    return __zinc_fs_mkdir(path)
+}
+
+fn read_text(path: string) -> Result<string, string> {
+    return __zinc_fs_read_text(path)
+}
+
+fn write_text(path: string, contents: string) -> Result<(), string> {
+    return __zinc_fs_write_text(path, contents)
+}
+
+fn read_lines(path: string) -> Result<[string], string> {
+    return __zinc_fs_read_lines(path)
+}
+
+fn write_lines(path: string, lines: [string]) -> Result<(), string> {
+    return __zinc_fs_write_lines(path, lines)
+}

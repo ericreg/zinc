@@ -1,0 +1,29 @@
+import std/filesystem as fs
+
+fn main() {
+    fs.mkdir("zinc_fs_tmp")
+    print(fs.exists("zinc_fs_tmp"))
+
+    fs.write_text("zinc_fs_tmp/notes.txt", "hello zinc")
+    text_result = fs.read_text("zinc_fs_tmp/notes.txt")
+    match text_result {
+        Ok(contents) => {
+            print(contents)
+        },
+        Err(error) => {
+            print("read_text error")
+        },
+    }
+
+    fs.write_text("zinc_fs_tmp/lines.txt", "alpha\nbeta")
+    lines_result = fs.read_lines("zinc_fs_tmp/lines.txt")
+    match lines_result {
+        Ok(lines) => {
+            print(lines[0])
+            print(lines[1])
+        },
+        Err(error) => {
+            print("read_lines error")
+        },
+    }
+}
