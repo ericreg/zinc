@@ -39,7 +39,9 @@ see [ROADMAP.md](./ROADMAP.md)
 
 ## Language Guide
 
-see [USER_GUIDE.md](./USER_GUIDE.md)
+See [Why Zinc?](./docs/why_zinc.md) for a high level overview of the language design and philosophy.
+
+See [USER_GUIDE.md](./USER_GUIDE.md) for a basic tutorial and language reference.
 
 ## Development
 
