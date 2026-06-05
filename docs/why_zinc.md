@@ -74,6 +74,9 @@ When taking a graduate compilers class, and actually writing a compiler a few th
 
 - Type systems are great for **compilers**. Being able to safely reason about the types of variables and functions allows the compiler, and its author, to drastically simplify the already insanely hard problem of writing a compiler. Python itself is technically **strongly typed** but not **strictly typed**.
 
+> 🤓 **Strongly typed** means that the language enforces type rules at ***runtime***, preventing operations on incompatible types.
+> **Strictly typed** means that the language enforces type rules at ***compile time***, preventing operations on incompatible types before the program runs.
+
 - The compiler already knows a great deal about the types of variables and functions. Of course it does. How else is it going to tell you the you passed in the wrong the type of argument to a function? 
 
 Despite these issues, types do, in many cases, provide some value and safety. Particularly when authoring libraries for other developers to use.
@@ -393,7 +396,184 @@ struct C {
 
 ### Compile-Time Constraints
 
+Zinc has the ability to define type constraints. This is similar to [bounds](https://doc.rust-lang.org/rust-by-example/generics/bounds.html) on generics in rust. Zinc's constraints are evaluated entirely at compile time. So there is no performance cost at runtime. Types are
+optional in zinc, so one does not need to use constraints at all if they don't want to.
+But, since defined types **are** strict, there will inevitably be situations where one wishes to enforce invariants.
 
-## Concurrency
+Zinc's type constraints are at their core, a list of boolean expressions that must all evaluate to `true` for a struct to be instantiated.
+
+Consider the following example,
+
+```rust
+struct Shape {
+    fn area() {
+        return 0.0
+    }
+}
+```
+
+Lets say we want to create a series of shape classes such as `Circle`, `Square`, `Rectangle`, etc. 
+We want each of them to have an `area` method that returns the area of the shape. The traditional OOP approach would be to have an "abstract base class" `Shape` that defines the `area` method as an abstract method, and then have each of the shape classes inherit from `Shape` and implement the `area` method. 
+
+One can still emulate this approach in Zinc with forward composition. For example,
+
+
+```rust
+struct Shape {
+    fn area() {
+        return 0.0
+    }
+}
+
+struct Circle [ Shape ] {
+    radius: f32
+
+    fn area() {
+        return 3.14 * self.radius ** 2
+    }
+}
+
+fn squared_area(shape) {
+    return shape.area() ** 2
+}
+
+fn main() {
+    let c = Circle { radius: 5.0 }
+    print(squared_area(c)) // ✅ This works, because Shape is a component of Circle
+}
+```
+
+(Note that due to the dynamic typing of zinc, we don't really even need the
+`Shape` struct at all.)
+
+Lets say we what to require that the `squared_area()` only be able to accept
+structs with `area()` method. The OOP polymorphic answer would be to use the base type `Shape` as the parameter type of `squared_area()`.
+```rust
+// zinc
+
+struct Shape {
+    fn area() {
+        return 0.0
+    }
+}
+
+struct Circle [ Shape ] {
+    radius: f32
+
+    fn area() {
+        return 3.14 * self.radius ** 2
+    }
+}
+
+// ❌ This wont work!
+fn squared_area(shape: Shape) {
+    return shape.area() ** 2
+}
+```
+
+This will not work in zinc because type annotations in zinc are strict. We intentionally
+design to prevent inheritance and inheritance-style thinking. Instead, we can use compile-time constraints to achieve the same result.
+
+```rust
+// zinc
+#[ implements(shape, Shape) ]
+fn squared_area(shape) {
+    return shape.area() ** 2
+}
+```
+`implements` is a compile-time constraint that checks that the `shape` parameter has all the public fields and methods of the `Shape` struct. If it does not, then this is a compilation error. 
+For this to work the struct passed into `shape` does not need to explicitly "inherit" from `Shape` or declare some sort of interface contract. It just needs to have the same fields and methods. So the following works, and would be the preferred way to write this in zinc.
+
+```rust
+// zinc
+
+struct Shape {
+    fn area() {
+        return 0.0
+    }
+}
+
+struct Circle {
+    radius: f32
+
+    fn area() {
+        return 3.14 * self.radius ** 2
+    }
+}
+
+#[ implements(shape, Shape) ]
+fn squared_area(shape) {
+    return shape.area() ** 2
+}
+
+fn main() {
+    let c = Circle { radius: 5.0 }
+    print(squared_area(c)) // ✅ This works, because Circle has an area() method, so it satisfies the implements constraint
+}
+```
+
+Because type constraints are just a series of boolean expressions, we could can be very flexible
+with constraints. Zinc aims to treat types constraints just like regular code rather than a small
+list of special keywords/functions with very specific behavior.
+
+Here are some examples of what is ***possible*** (not necessarily recommended) with zinc's compile-time constraints,
+
+
+
+```rust
+// zinc
+
+struct BigCorpUInt32 {
+    value: bool[32]
+}
+
+struct BigCorpFloat32 {
+    sign: bool
+    exponent: bool[8]
+    mantissa: bool[23]
+}
+
+struct BigCorpDecimal32 {
+    sign: bool
+    combination: bool[11]
+    significand: bool[20]
+}
+
+// check that the type of x and y both start with "BigCorp"
+#[ 
+    type(x).name.starts_with("BigCorp"),
+    type(y).name.starts_with("BigCorp"),
+ ]
+fn big_corp_sum(x, y) {
+    return x + y
+}
+
+fn has_sign_field(t) {
+    return "sign" in [ f.name for f in type(t).fields() ]
+}
+
+// check that the type of x and y both have a field named "sign"
+#[ 
+    has_sign_field(x), // we can define and call our own functions in constraints!
+]
+fn sign_func(x) {
+    return x
+}
+
+// even your constraint functions can have constraints
+#[
+    type(x).name.starts_with("BigCorp"),
+]
+fn has_exponent_field(x) {
+    return "exponent" in [ t.name for t in type(x).fields() ]
+}
+
+#[ 
+    has_exponent_field(type(x)), 
+]
+fn exponent_func(x) {
+    return x
+}
+```
 
 ## Syntax
