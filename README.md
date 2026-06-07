@@ -67,7 +67,7 @@ If you use the vscode devcontainer, you may just run the `regen` command directl
 ### Running Tests
 
 ```sh
-uv run pytest -n autp
+uv run pytest -n auto
 ```
 
 To regenerate rust source

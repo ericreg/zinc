@@ -10,6 +10,7 @@ from typing import Literal
 
 from antlr4 import CommonTokenStream, InputStream, ParserRuleContext
 from zinc.exceptions import ZincModuleError
+from zinc.operators import function_is_operator, function_name_from_ctx
 from zinc.parser.zincLexer import zincLexer as ZincLexer
 from zinc.parser.zincParser import zincParser as ZincParser
 
@@ -861,7 +862,9 @@ def _collect_top_level_symbols(tree: ZincParser.ProgramContext, module_id: str) 
         symbol: TopLevelSymbol | None = None
         if stmt.functionDeclaration():
             ctx = stmt.functionDeclaration()
-            name = ctx.IDENTIFIER().getText()
+            if function_is_operator(ctx):
+                raise ZincModuleError("operator declarations must be inside structs")
+            name = function_name_from_ctx(ctx)
             symbol = TopLevelSymbol(
                 qualified_name=ModuleGraph.qualified_name(module_id, name),
                 module_id=module_id,

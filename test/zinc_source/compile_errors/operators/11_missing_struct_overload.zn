@@ -1,0 +1,11 @@
+// expected-error: operator '\+' is not defined for operands
+
+struct Point {
+    x: i64
+}
+
+fn main() {
+    a = Point { x: 1 }
+    b = Point { x: 2 }
+    bad = a + b
+}

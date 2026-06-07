@@ -73,6 +73,19 @@ from zinc.modules import (
     struct_path_from_ctx,
 )
 from zinc.numeric_literals import numeric_literal_value, parse_numeric_literal
+from zinc.operators import (
+    ASSIGNMENT_TO_BINARY_OPERATOR,
+    COMPARISON_OPERATOR_SYMBOLS,
+    INDEX_OPERATOR_SYMBOL,
+    LOGICAL_OPERATOR_SYMBOLS,
+    ResolvedOperatorCall,
+    function_display_name_from_ctx,
+    function_is_operator,
+    function_name_from_ctx,
+    operator_kind,
+    operator_kind_for_declaration,
+    operator_symbol_from_function_ctx,
+)
 from zinc.parser.zincLexer import zincLexer as ZincLexer
 from zinc.parser.zincParser import zincParser as ZincParser
 from zinc.parser.zincVisitor import zincVisitor
@@ -503,6 +516,7 @@ class SymbolTableVisitor(zincVisitor):
         self.lexical_functions: dict[str, LexicalFunctionInfo] = {}
         self._loop_depth = 0
         self._try_context_stack: list[dict[str, object | None]] = []
+        self.operator_calls: dict[tuple[str | None, tuple[int, int]], ResolvedOperatorCall] = {}
 
     def _resolve_const_symbol(self, path: list[str]) -> ConstInstance | None:
         """Resolve a const path in the current module."""
@@ -799,11 +813,13 @@ class SymbolTableVisitor(zincVisitor):
                 for member_ctx in symbol.ctx.structBody().structMember():
                     method_ctx = member_ctx.functionDeclaration()
                     if method_ctx is not None and decorators_from_ctx(method_ctx):
-                        raise ZincTypeError(f"method decorator support is not implemented yet: '{method_ctx.IDENTIFIER().getText()}'")
+                        display_name = function_display_name_from_ctx(method_ctx)
+                        raise ZincTypeError(f"method decorator support is not implemented yet: '{display_name}'")
             if isinstance(symbol.ctx, ZincParser.EnumDeclarationContext):
                 for method_ctx in symbol.ctx.enumBody().functionDeclaration():
                     if decorators_from_ctx(method_ctx):
-                        raise ZincTypeError(f"method decorator support is not implemented yet: '{method_ctx.IDENTIFIER().getText()}'")
+                        display_name = function_display_name_from_ctx(method_ctx)
+                        raise ZincTypeError(f"method decorator support is not implemented yet: '{display_name}'")
 
     def _register_builtins(self) -> None:
         """Register built-in functions."""
@@ -1006,6 +1022,8 @@ class SymbolTableVisitor(zincVisitor):
                         )
                     )
                 for method_ctx in body.functionDeclaration():
+                    if function_is_operator(method_ctx):
+                        raise ZincTypeError("operator declarations must be inside structs")
                     method = self._analyze_struct_method(
                         method_ctx,
                         {},
@@ -1258,9 +1276,14 @@ class SymbolTableVisitor(zincVisitor):
         constructor_owner_qualified_name: str,
     ) -> StructMethodInfo:
         """Analyze a struct method for static/instance and self mutability."""
-        name = ctx.IDENTIFIER().getText()
+        name = function_name_from_ctx(ctx)
+        display_name = function_display_name_from_ctx(ctx)
+        operator_symbol = operator_symbol_from_function_ctx(ctx)
+        operator_category = operator_kind(operator_symbol) if operator_symbol is not None else None
         if decorators_from_ctx(ctx):
-            raise ZincTypeError(f"method decorator support is not implemented yet: '{name}'")
+            raise ZincTypeError(f"method decorator support is not implemented yet: '{display_name}'")
+        if operator_symbol in LOGICAL_OPERATOR_SYMBOLS or operator_symbol in ASSIGNMENT_TO_BINARY_OPERATOR:
+            raise ZincTypeError(f"operator '{operator_symbol}' cannot be overloaded")
         self._validate_parameter_defaults_for_ctx(ctx, f"method '{name}'", source_module_id)
 
         # Parse parameters
@@ -1289,8 +1312,21 @@ class SymbolTableVisitor(zincVisitor):
         else:
             self_mutability = "&self"
 
-        # Infer parameter types from usage
-        resolved_params = self._infer_method_params(ctx.block(), parameters, field_types)
+        if operator_symbol is not None:
+            operator_category = operator_kind_for_declaration(
+                operator_symbol,
+                is_static=is_static,
+                parameter_count=len(parameters),
+            )
+            resolved_params = self._default_operator_params(
+                operator_symbol,
+                operator_category,
+                parameters,
+                is_static=is_static,
+            )
+        else:
+            # Infer parameter types from usage
+            resolved_params = self._infer_method_params(ctx.block(), parameters, field_types)
 
         # Infer return type
         return_type = (
@@ -1303,9 +1339,22 @@ class SymbolTableVisitor(zincVisitor):
                 constructor_owner_qualified_name,
             )
         )
+        if operator_symbol is not None:
+            self._validate_operator_method_shape(
+                display_name,
+                operator_symbol,
+                operator_category,
+                resolved_params,
+                is_static=is_static,
+                self_mutability=self_mutability,
+                return_type=return_type,
+                source_module_id=source_module_id,
+                owner_qualified_name=constructor_owner_qualified_name,
+            )
 
         return StructMethodInfo(
             name=name,
+            display_name=display_name,
             parameters=resolved_params,
             parameter_defaults=parameter_defaults,
             parameter_default_texts=parameter_default_texts,
@@ -1316,9 +1365,101 @@ class SymbolTableVisitor(zincVisitor):
             source_struct_qualified_name=constructor_owner_qualified_name,
             source_module_id=source_module_id,
             constructor_owner_qualified_name=constructor_owner_qualified_name,
+            operator_symbol=operator_symbol,
+            operator_kind=operator_category,
             line_num=ctx.start.line if ctx.start is not None else 0,
             has_decorators=bool(decorators_from_ctx(ctx)),
         )
+
+    def _default_operator_params(
+        self,
+        symbol: str,
+        category: str | None,
+        params: list[tuple[str, str | None, str | None]],
+        *,
+        is_static: bool,
+    ) -> list[tuple[str, str | None, str | None]]:
+        """Default obvious owner-typed operator parameters to Self."""
+        result = [(name, type_ann, resolved) for name, type_ann, resolved in params]
+
+        def has_type(param: tuple[str, str | None, str | None]) -> bool:
+            return param[1] is not None or param[2] is not None
+
+        def with_self(index: int) -> None:
+            name, type_ann, resolved = result[index]
+            if type_ann is None and resolved is None:
+                result[index] = (name, "Self", resolved)
+
+        if category == "custom":
+            category = "binary"
+        if category == "binary":
+            if is_static and len(result) == 2:
+                typed = [has_type(param) for param in result]
+                if not any(typed):
+                    with_self(0)
+                    with_self(1)
+                elif typed[0] and not typed[1]:
+                    with_self(1)
+                elif typed[1] and not typed[0]:
+                    with_self(0)
+            elif not is_static and len(result) == 1 and symbol != "in":
+                with_self(0)
+        elif category == "unary" and is_static and len(result) == 1:
+            with_self(0)
+        return result
+
+    def _validate_operator_method_shape(
+        self,
+        display_name: str,
+        symbol: str,
+        category: str | None,
+        params: list[tuple[str, str | None, str | None]],
+        *,
+        is_static: bool,
+        self_mutability: str | None,
+        return_type: str | None,
+        source_module_id: str,
+        owner_qualified_name: str,
+    ) -> None:
+        """Validate one struct-owned operator method declaration."""
+        if category == "custom":
+            category = "binary"
+        if symbol == INDEX_OPERATOR_SYMBOL:
+            if is_static or len(params) != 1:
+                raise ZincTypeError(f"{display_name} must be an instance method with exactly one index parameter")
+        elif category == "unary":
+            expected = 1 if is_static else 0
+            if len(params) != expected:
+                raise ZincTypeError(f"{display_name} has invalid unary operator arity")
+        else:
+            expected = 2 if is_static else 1
+            if len(params) != expected:
+                raise ZincTypeError(f"{display_name} has invalid binary operator arity")
+        if not is_static and self_mutability == "&mut self":
+            raise ZincTypeError(f"{display_name} cannot mutate self")
+        if symbol in COMPARISON_OPERATOR_SYMBOLS:
+            return_info = self._resolved_named_type_info(
+                return_type,
+                source_module_id=source_module_id,
+                owner_qualified_name=owner_qualified_name,
+                owner_kind="struct",
+            )
+            if return_info.base_type != BaseType.BOOLEAN:
+                raise ZincTypeError(f"{display_name} must return bool")
+        if is_static:
+            owner_param_found = False
+            for _name, type_ann, resolved in params:
+                info = self._resolved_named_type_info(
+                    resolved or type_ann,
+                    source_module_id=source_module_id,
+                    owner_qualified_name=owner_qualified_name,
+                    owner_kind="struct",
+                )
+                if info.base_type == BaseType.STRUCT and info.struct_qualified_name == owner_qualified_name:
+                    owner_param_found = True
+                    break
+            if not owner_param_found:
+                raise ZincTypeError(f"{display_name} must include a {self.module_graph.get_symbol(owner_qualified_name).name} operand")
 
     def _track_self_usage(self, block_ctx) -> tuple[bool, bool]:
         """Walk a block and track self reads and writes. Returns (reads, writes)."""
@@ -2835,6 +2976,201 @@ class SymbolTableVisitor(zincVisitor):
         elif info.base_type == BaseType.OPTION and info.option_info is not None:
             temp.option_info = self._copy_option_info(info.option_info)
         return temp
+
+    def _operator_key(self, ctx) -> tuple[str | None, tuple[int, int]]:
+        """Return the codegen lookup key for one resolved operator expression."""
+        return self._current_function, ctx.getSourceInterval()
+
+    def _operator_methods(self, owner_qualified_name: str | None, symbol: str) -> list[StructMethodInfo]:
+        """Return analyzed operator methods for one owner struct and symbol."""
+        if owner_qualified_name is None:
+            return []
+        struct = self.atlas.structs.get(owner_qualified_name)
+        if struct is None:
+            struct = self._analyze_struct_by_qualified_name(owner_qualified_name)
+        return [method for method in struct.methods if method.operator_symbol == symbol]
+
+    def _operator_method_return_info(self, method: StructMethodInfo, owner_qualified_name: str) -> ResolvedValueInfo:
+        """Return rich metadata for an operator method's return value."""
+        return self._resolved_named_type_info(
+            method.return_type,
+            source_module_id=method.source_module_id,
+            owner_qualified_name=owner_qualified_name,
+            owner_kind="struct",
+        )
+
+    def _operator_param_info(self, method: StructMethodInfo, owner_qualified_name: str, index: int) -> ResolvedValueInfo:
+        """Return rich metadata for one operator parameter."""
+        _name, type_ann, resolved = method.parameters[index]
+        return self._resolved_named_type_info(
+            resolved or type_ann,
+            source_module_id=method.source_module_id,
+            owner_qualified_name=owner_qualified_name,
+            owner_kind="struct",
+        )
+
+    def _operator_param_accepts(
+        self,
+        method: StructMethodInfo,
+        owner_qualified_name: str,
+        index: int,
+        actual: ResolvedValueInfo,
+    ) -> bool:
+        """Return True when one actual operand can bind to an operator parameter."""
+        expected = self._operator_param_info(method, owner_qualified_name, index)
+        if expected.base_type == BaseType.UNKNOWN:
+            return True
+        return self._assignment_metadata_compatible(
+            expected.base_type,
+            actual.base_type,
+            expected_exact_type=expected.exact_type,
+            actual_exact_type=actual.exact_type,
+            expected_array=expected.array_info,
+            actual_array=self._copy_array_info(actual.array_info),
+            expected_dict=expected.dict_info,
+            actual_dict=self._copy_dict_info(actual.dict_info),
+            expected_set=expected.set_info,
+            actual_set=self._copy_set_info(actual.set_info),
+            expected_tuple=expected.tuple_info,
+            actual_tuple=self._copy_tuple_info(actual.tuple_info),
+            expected_callable=expected.callable_info,
+            actual_callable=self._copy_callable_info(actual.callable_info),
+            expected_struct_qualified_name=expected.struct_qualified_name,
+            actual_struct_qualified_name=actual.struct_qualified_name,
+            expected_anonymous_struct_info=expected.anonymous_struct_info,
+            actual_anonymous_struct_info=self._copy_anonymous_struct_info(actual.anonymous_struct_info),
+            expected_result=expected.result_info,
+            actual_result=self._copy_result_info(actual.result_info),
+            expected_option=expected.option_info,
+            actual_option=self._copy_option_info(actual.option_info),
+        )
+
+    def _operator_instance_accepts(
+        self,
+        method: StructMethodInfo,
+        owner_qualified_name: str,
+        args: list[ResolvedValueInfo],
+    ) -> bool:
+        """Return True when instance operator arguments match."""
+        if method.is_static or len(method.parameters) != len(args):
+            return False
+        return all(self._operator_param_accepts(method, owner_qualified_name, index, arg) for index, arg in enumerate(args))
+
+    def _operator_static_accepts(
+        self,
+        method: StructMethodInfo,
+        owner_qualified_name: str,
+        args: list[ResolvedValueInfo],
+    ) -> bool:
+        """Return True when static operator arguments match."""
+        if not method.is_static or len(method.parameters) != len(args):
+            return False
+        return all(self._operator_param_accepts(method, owner_qualified_name, index, arg) for index, arg in enumerate(args))
+
+    def _finish_operator_resolution(
+        self,
+        ctx,
+        symbol: str,
+        candidates: list[tuple[int, str, StructMethodInfo, bool, int | None]],
+    ) -> ResolvedValueInfo | None:
+        """Choose one ranked operator candidate, record it, and return its result info."""
+        if not candidates:
+            return None
+        candidates.sort(key=lambda item: item[0])
+        best_rank = candidates[0][0]
+        best = [candidate for candidate in candidates if candidate[0] == best_rank]
+        if len(best) > 1:
+            raise ZincTypeError(f"operator '{symbol}' is ambiguous for operands")
+        _rank, owner_qualified_name, method, is_static, receiver_index = best[0]
+        return_info = self._operator_method_return_info(method, owner_qualified_name)
+        if symbol in COMPARISON_OPERATOR_SYMBOLS and return_info.base_type != BaseType.BOOLEAN:
+            raise ZincTypeError(f"operator '{symbol}' must return bool")
+        self.operator_calls[self._operator_key(ctx)] = ResolvedOperatorCall(
+            operator=symbol,
+            owner_qualified_name=owner_qualified_name,
+            method_name=method.name,
+            is_static=is_static,
+            receiver_index=receiver_index,
+        )
+        self._record_value_info(ctx.getSourceInterval(), return_info)
+        return return_info
+
+    def _resolve_binary_operator(
+        self,
+        ctx,
+        symbol: str,
+        left_info: ResolvedValueInfo,
+        right_info: ResolvedValueInfo,
+        *,
+        require_overload: bool = False,
+    ) -> ResolvedValueInfo | None:
+        """Resolve an overloaded binary/custom operator, if any applies."""
+        candidates: list[tuple[int, str, StructMethodInfo, bool, int | None]] = []
+        left_owner = left_info.struct_qualified_name if left_info.base_type == BaseType.STRUCT else None
+        right_owner = right_info.struct_qualified_name if right_info.base_type == BaseType.STRUCT else None
+
+        def add_instance(rank: int, owner: str | None, receiver_index: int, args: list[ResolvedValueInfo]) -> None:
+            for method in self._operator_methods(owner, symbol):
+                if self._operator_instance_accepts(method, owner, args):  # type: ignore[arg-type]
+                    candidates.append((rank, owner, method, False, receiver_index))  # type: ignore[arg-type]
+
+        def add_static(rank: int, owner: str | None) -> None:
+            for method in self._operator_methods(owner, symbol):
+                if self._operator_static_accepts(method, owner, [left_info, right_info]):  # type: ignore[arg-type]
+                    candidates.append((rank, owner, method, True, None))  # type: ignore[arg-type]
+
+        if symbol == "in":
+            add_instance(1, right_owner, 1, [left_info])
+            add_static(2, right_owner)
+            if left_owner != right_owner:
+                add_static(3, left_owner)
+        else:
+            add_instance(1, left_owner, 0, [right_info])
+            add_static(2, left_owner)
+            if right_owner != left_owner:
+                add_static(3, right_owner)
+
+        result = self._finish_operator_resolution(ctx, symbol, candidates)
+        if result is not None:
+            return result
+        if require_overload or left_owner is not None or right_owner is not None:
+            raise ZincTypeError(f"operator '{symbol}' is not defined for operands")
+        return None
+
+    def _resolve_unary_operator(self, ctx, symbol: str, operand_info: ResolvedValueInfo) -> ResolvedValueInfo | None:
+        """Resolve an overloaded unary operator, if any applies."""
+        owner = operand_info.struct_qualified_name if operand_info.base_type == BaseType.STRUCT else None
+        candidates: list[tuple[int, str, StructMethodInfo, bool, int | None]] = []
+        for method in self._operator_methods(owner, symbol):
+            if self._operator_instance_accepts(method, owner, []):  # type: ignore[arg-type]
+                candidates.append((1, owner, method, False, 0))  # type: ignore[arg-type]
+            if self._operator_static_accepts(method, owner, [operand_info]):  # type: ignore[arg-type]
+                candidates.append((2, owner, method, True, None))  # type: ignore[arg-type]
+        result = self._finish_operator_resolution(ctx, symbol, candidates)
+        if result is not None:
+            return result
+        if owner is not None:
+            raise ZincTypeError(f"operator '{symbol}' is not defined for operand")
+        return None
+
+    def _resolve_index_operator(
+        self,
+        ctx,
+        target_info: ResolvedValueInfo,
+        index_info: ResolvedValueInfo,
+    ) -> ResolvedValueInfo | None:
+        """Resolve an overloaded read-only index operator."""
+        owner = target_info.struct_qualified_name if target_info.base_type == BaseType.STRUCT else None
+        candidates: list[tuple[int, str, StructMethodInfo, bool, int | None]] = []
+        for method in self._operator_methods(owner, INDEX_OPERATOR_SYMBOL):
+            if self._operator_instance_accepts(method, owner, [index_info]):  # type: ignore[arg-type]
+                candidates.append((1, owner, method, False, 0))  # type: ignore[arg-type]
+        result = self._finish_operator_resolution(ctx, INDEX_OPERATOR_SYMBOL, candidates)
+        if result is not None:
+            return result
+        if owner is not None:
+            raise ZincTypeError("index operator is not defined for struct")
+        return None
 
     def _module_source_file(self, module_id: str | None) -> str:
         """Return the source path for a module id."""
@@ -4633,11 +4969,14 @@ class SymbolTableVisitor(zincVisitor):
         for stmt in block_ctx.statement():
             if stmt.functionDeclaration():
                 fn_ctx = stmt.functionDeclaration()
+                if function_is_operator(fn_ctx):
+                    raise ZincTypeError("operator declarations must be inside structs")
+                name = function_name_from_ctx(fn_ctx)
                 self._register_lexical_function_stub(
-                    fn_ctx.IDENTIFIER().getText(),
+                    name,
                     fn_ctx,
                     is_async=False,
-                    display_name=fn_ctx.IDENTIFIER().getText(),
+                    display_name=name,
                 )
             elif stmt.asyncFunctionDeclaration():
                 fn_ctx = stmt.asyncFunctionDeclaration()
@@ -6486,7 +6825,9 @@ class SymbolTableVisitor(zincVisitor):
                 return
             for stmt in block_ctx.statement():
                 if stmt.functionDeclaration():
-                    local_function_names.add(stmt.functionDeclaration().IDENTIFIER().getText())
+                    if function_is_operator(stmt.functionDeclaration()):
+                        raise ZincTypeError("operator declarations must be inside structs")
+                    local_function_names.add(function_name_from_ctx(stmt.functionDeclaration()))
                 if stmt.asyncFunctionDeclaration():
                     local_function_names.add(stmt.asyncFunctionDeclaration().IDENTIFIER().getText())
 
@@ -6580,7 +6921,9 @@ class SymbolTableVisitor(zincVisitor):
                 nested_declared: list[str] = []
                 for stmt in node.statement():
                     if stmt.functionDeclaration():
-                        nested_declared.append(stmt.functionDeclaration().IDENTIFIER().getText())
+                        if function_is_operator(stmt.functionDeclaration()):
+                            raise ZincTypeError("operator declarations must be inside structs")
+                        nested_declared.append(function_name_from_ctx(stmt.functionDeclaration()))
                     if stmt.asyncFunctionDeclaration():
                         nested_declared.append(stmt.asyncFunctionDeclaration().IDENTIFIER().getText())
                 previous_function_names = set(local_function_names)
@@ -8218,6 +8561,10 @@ class SymbolTableVisitor(zincVisitor):
         """Handle addition and subtraction."""
         left_info = self._value_info_for_value_context(ctx.expression(0))
         right_info = self._value_info_for_value_context(ctx.expression(1))
+        op = ctx.getChild(1).getText()
+        overload = self._resolve_binary_operator(ctx, op, left_info, right_info)
+        if overload is not None:
+            return overload.base_type
         left_type = left_info.base_type
         right_type = right_info.base_type
         result_type = TypeInfo.promote(TypeInfo(left_type), TypeInfo(right_type)).base
@@ -8225,7 +8572,6 @@ class SymbolTableVisitor(zincVisitor):
         right_symbol = self._expr_symbol(ctx.expression(1))
         constant_value = None
         if left_symbol and right_symbol and left_symbol.constant_value is not None and right_symbol.constant_value is not None:
-            op = ctx.getChild(1).getText()
             if op == "+":
                 constant_value = left_symbol.constant_value + right_symbol.constant_value
             elif op == "-":
@@ -8247,6 +8593,9 @@ class SymbolTableVisitor(zincVisitor):
         left_info = self._value_info_for_value_context(ctx.expression(0))
         right_info = self._value_info_for_value_context(ctx.expression(1))
         op = ctx.getChild(1).getText()
+        overload = self._resolve_binary_operator(ctx, op, left_info, right_info)
+        if overload is not None:
+            return overload.base_type
         if left_info.base_type != BaseType.INTEGER or right_info.base_type != BaseType.INTEGER:
             raise ZincTypeError(f"operator '{op}' requires integer operands")
 
@@ -8289,6 +8638,9 @@ class SymbolTableVisitor(zincVisitor):
         left_info = self._value_info_for_value_context(ctx.expression(0))
         right_info = self._value_info_for_value_context(ctx.expression(1))
         op = ctx.getChild(1).getText()
+        overload = self._resolve_binary_operator(ctx, op, left_info, right_info)
+        if overload is not None:
+            return overload.base_type
         if left_info.base_type != BaseType.INTEGER or right_info.base_type != BaseType.INTEGER:
             raise ZincTypeError(f"operator '{op}' requires integer operands")
 
@@ -8315,6 +8667,10 @@ class SymbolTableVisitor(zincVisitor):
         """Handle multiplication, division, modulo."""
         left_info = self._value_info_for_value_context(ctx.expression(0))
         right_info = self._value_info_for_value_context(ctx.expression(1))
+        op = ctx.getChild(1).getText()
+        overload = self._resolve_binary_operator(ctx, op, left_info, right_info)
+        if overload is not None:
+            return overload.base_type
         left_type = left_info.base_type
         right_type = right_info.base_type
         result_type = TypeInfo.promote(TypeInfo(left_type), TypeInfo(right_type)).base
@@ -8322,7 +8678,6 @@ class SymbolTableVisitor(zincVisitor):
         right_symbol = self._expr_symbol(ctx.expression(1))
         constant_value = None
         if left_symbol and right_symbol and left_symbol.constant_value is not None and right_symbol.constant_value is not None:
-            op = ctx.getChild(1).getText()
             if op == "*":
                 constant_value = left_symbol.constant_value * right_symbol.constant_value
             elif op == "/":
@@ -8345,6 +8700,9 @@ class SymbolTableVisitor(zincVisitor):
         """Handle exponentiation."""
         left_info = self._value_info_for_value_context(ctx.expression(0))
         right_info = self._value_info_for_value_context(ctx.expression(1))
+        overload = self._resolve_binary_operator(ctx, "**", left_info, right_info)
+        if overload is not None:
+            return overload.base_type
         left_type = left_info.base_type
         right_type = right_info.base_type
         if left_type not in {BaseType.INTEGER, BaseType.FLOAT} or right_type not in {BaseType.INTEGER, BaseType.FLOAT}:
@@ -8369,8 +8727,12 @@ class SymbolTableVisitor(zincVisitor):
 
     def visitUnaryExpr(self, ctx: ZincParser.UnaryExprContext) -> BaseType:
         """Handle unary expressions."""
-        operand_type = self._value_info_for_value_context(ctx.expression()).base_type
         operator = ctx.getChild(0).getText()
+        operand_info = self._value_info_for_value_context(ctx.expression())
+        overload = self._resolve_unary_operator(ctx, operator, operand_info)
+        if overload is not None:
+            return overload.base_type
+        operand_type = operand_info.base_type
 
         if operator == "-":
             if operand_type not in {BaseType.INTEGER, BaseType.FLOAT}:
@@ -8411,13 +8773,16 @@ class SymbolTableVisitor(zincVisitor):
 
     def visitRelationalExpr(self, ctx: ZincParser.RelationalExprContext) -> BaseType:
         """Handle relational comparisons."""
-        self._value_info_for_value_context(ctx.expression(0))
-        self._value_info_for_value_context(ctx.expression(1))
+        left_info = self._value_info_for_value_context(ctx.expression(0))
+        right_info = self._value_info_for_value_context(ctx.expression(1))
+        op = ctx.getChild(1).getText()
+        overload = self._resolve_binary_operator(ctx, op, left_info, right_info)
+        if overload is not None:
+            return overload.base_type
         left_symbol = self._expr_symbol(ctx.expression(0))
         right_symbol = self._expr_symbol(ctx.expression(1))
         constant_value = None
         if left_symbol and right_symbol and left_symbol.constant_value is not None and right_symbol.constant_value is not None:
-            op = ctx.getChild(1).getText()
             if op == "<":
                 constant_value = left_symbol.constant_value < right_symbol.constant_value
             elif op == "<=":
@@ -8436,13 +8801,16 @@ class SymbolTableVisitor(zincVisitor):
 
     def visitEqualityExpr(self, ctx: ZincParser.EqualityExprContext) -> BaseType:
         """Handle equality comparisons."""
-        self._value_info_for_value_context(ctx.expression(0))
-        self._value_info_for_value_context(ctx.expression(1))
+        left_info = self._value_info_for_value_context(ctx.expression(0))
+        right_info = self._value_info_for_value_context(ctx.expression(1))
+        op = ctx.getChild(1).getText()
+        overload = self._resolve_binary_operator(ctx, op, left_info, right_info)
+        if overload is not None:
+            return overload.base_type
         left_symbol = self._expr_symbol(ctx.expression(0))
         right_symbol = self._expr_symbol(ctx.expression(1))
         constant_value = None
         if left_symbol and right_symbol and left_symbol.constant_value is not None and right_symbol.constant_value is not None:
-            op = ctx.getChild(1).getText()
             if op == "==":
                 constant_value = left_symbol.constant_value == right_symbol.constant_value
             else:
@@ -8457,8 +8825,11 @@ class SymbolTableVisitor(zincVisitor):
 
     def visitMembershipExpr(self, ctx: ZincParser.MembershipExprContext) -> BaseType:
         """Handle membership expressions like `x in [a, b]`."""
-        self._value_info_for_value_context(ctx.expression(0))
-        self._value_info_for_value_context(ctx.expression(1))
+        left_info = self._value_info_for_value_context(ctx.expression(0))
+        right_info = self._value_info_for_value_context(ctx.expression(1))
+        overload = self._resolve_binary_operator(ctx, "in", left_info, right_info)
+        if overload is not None:
+            return overload.base_type
         left_symbol = self._expr_symbol(ctx.expression(0))
         right_symbol = self._expr_symbol(ctx.expression(1))
         constant_value = None
@@ -8480,6 +8851,19 @@ class SymbolTableVisitor(zincVisitor):
             constant_value=constant_value,
         )
         return BaseType.BOOLEAN
+
+    def visitCustomOperatorExpr(self, ctx: ZincParser.CustomOperatorExprContext) -> BaseType:
+        """Handle custom infix operator expressions."""
+        left_info = self._value_info_for_value_context(ctx.expression(0))
+        right_info = self._value_info_for_value_context(ctx.expression(1))
+        overload = self._resolve_binary_operator(
+            ctx,
+            ctx.CUSTOM_OPERATOR().getText(),
+            left_info,
+            right_info,
+            require_overload=True,
+        )
+        return overload.base_type
 
     def visitLogicalAndExpr(self, ctx: ZincParser.LogicalAndExprContext) -> BaseType:
         """Handle logical AND."""
@@ -8676,8 +9060,12 @@ class SymbolTableVisitor(zincVisitor):
 
     def visitIndexAccessExpr(self, ctx: ZincParser.IndexAccessExprContext) -> BaseType:
         """Visit index access and return element type if array."""
-        arr_type = self.visit(ctx.expression(0))
-        self.visit(ctx.expression(1))
+        target_info = self._value_info_for_value_context(ctx.expression(0))
+        index_info = self._value_info_for_value_context(ctx.expression(1))
+        overload = self._resolve_index_operator(ctx, target_info, index_info)
+        if overload is not None:
+            return overload.base_type
+        arr_type = target_info.base_type
         collection_symbol = self._expr_symbol(ctx.expression(0))
         index_symbol = self._expr_symbol(ctx.expression(1))
 
@@ -8708,7 +9096,7 @@ class SymbolTableVisitor(zincVisitor):
                     option_info = self._copy_option_info(arr_symbol.option_info)
         elif arr_type == BaseType.DICT:
             dict_ctx = ctx.expression(0)
-            key_type = self.visit(ctx.expression(1))
+            key_type = index_info.base_type
             self._merge_key_type(BaseType.UNKNOWN, key_type, "dict key")
             if isinstance(dict_ctx, ZincParser.PrimaryExprContext):
                 primary = dict_ctx.primaryExpression()
@@ -8785,8 +9173,12 @@ class SymbolTableVisitor(zincVisitor):
 
     def visitRangeExpr(self, ctx: ZincParser.RangeExprContext) -> BaseType:
         """Visit range expression."""
-        self.visit(ctx.expression(0))
-        self.visit(ctx.expression(1))
+        left_info = self._value_info_for_value_context(ctx.expression(0))
+        right_info = self._value_info_for_value_context(ctx.expression(1))
+        op = ctx.getChild(1).getText()
+        overload = self._resolve_binary_operator(ctx, op, left_info, right_info)
+        if overload is not None:
+            return overload.base_type
         self.symbols.define_temp(
             resolved_type=BaseType.INTEGER,
             interval=ctx.getSourceInterval(),
@@ -11344,6 +11736,11 @@ class SymbolTableVisitor(zincVisitor):
             key_ctx = index_access.expression(1)
             collection_type = self.visit(collection_ctx)
             key_type = self.visit(key_ctx)
+            if collection_type == BaseType.STRUCT:
+                collection_symbol = self._expr_symbol(collection_ctx)
+                struct_qualified_name = self._struct_qualified_name_for_symbol(collection_symbol)
+                if self._operator_methods(struct_qualified_name, INDEX_OPERATOR_SYMBOL):
+                    raise ZincTypeError("overloaded index assignment is not supported")
             if collection_type != BaseType.DICT:
                 self.symbols.define_temp(
                     resolved_type=expr_type,
@@ -11377,6 +11774,51 @@ class SymbolTableVisitor(zincVisitor):
         target = ctx.assignmentTarget()
         if target.tupleAssignmentTarget():
             raise ZincTypeError(f"operator '{assignment_op}' cannot be used with tuple destructuring")
+        base_operator = ASSIGNMENT_TO_BINARY_OPERATOR.get(assignment_op)
+        if base_operator is not None and target.IDENTIFIER():
+            var_name = target.IDENTIFIER().getText()
+            existing = self.symbols.lookup_by_id(var_name)
+            if existing is not None and existing.resolved_type == BaseType.STRUCT:
+                self._require_writable_capture(existing, var_name)
+                left_info = self._value_info_from_symbol(existing.resolved_type, existing)
+                expr_symbol = self._expr_symbol(ctx.expression())
+                right_info = self._value_info_from_symbol(expr_type, expr_symbol)
+                result_info = self._resolve_binary_operator(
+                    ctx,
+                    base_operator,
+                    left_info,
+                    right_info,
+                    require_overload=True,
+                )
+                if not self._assignment_metadata_compatible(
+                    existing.resolved_type,
+                    result_info.base_type,
+                    expected_exact_type=existing.declared_exact_type or existing.exact_type,
+                    actual_exact_type=result_info.exact_type,
+                    expected_array=self._array_info_from_symbol(existing),
+                    actual_array=self._copy_array_info(result_info.array_info),
+                    expected_dict=existing.dict_info,
+                    actual_dict=self._copy_dict_info(result_info.dict_info),
+                    expected_set=existing.set_info,
+                    actual_set=self._copy_set_info(result_info.set_info),
+                    expected_tuple=existing.tuple_info,
+                    actual_tuple=self._copy_tuple_info(result_info.tuple_info),
+                    expected_callable=existing.callable_info,
+                    actual_callable=self._copy_callable_info(result_info.callable_info),
+                    expected_struct_qualified_name=self._struct_qualified_name_for_symbol(existing),
+                    actual_struct_qualified_name=result_info.struct_qualified_name,
+                    expected_anonymous_struct_info=existing.anonymous_struct_info,
+                    actual_anonymous_struct_info=self._copy_anonymous_struct_info(result_info.anonymous_struct_info),
+                    expected_result=existing.result_info,
+                    actual_result=self._copy_result_info(result_info.result_info),
+                    expected_option=existing.option_info,
+                    actual_option=self._copy_option_info(result_info.option_info),
+                ):
+                    raise ZincTypeError(f"operator '{assignment_op}' result is not assignable to '{var_name}'")
+                existing.is_mutated = True
+                existing.constant_value = None
+                self._define_assignment_temp_for_binding(existing, target.getSourceInterval())
+                return
         is_bitwise = assignment_op in BITWISE_ASSIGNMENT_OPERATORS
         is_shift = assignment_op in SHIFT_ASSIGNMENT_OPERATORS
         if is_bitwise:
@@ -12007,15 +12449,18 @@ class SymbolTableVisitor(zincVisitor):
 
     def visitFunctionDeclaration(self, ctx: ZincParser.FunctionDeclarationContext) -> None:
         """Finalize a nested sync function declaration without visiting its body here."""
+        if function_is_operator(ctx):
+            raise ZincTypeError("operator declarations must be inside structs")
+        name = function_name_from_ctx(ctx)
         if decorators_from_ctx(ctx):
-            raise ZincTypeError(f"nested function decorator support is not implemented yet: '{ctx.IDENTIFIER().getText()}'")
-        info = self._current_lexical_function(ctx.IDENTIFIER().getText())
+            raise ZincTypeError(f"nested function decorator support is not implemented yet: '{name}'")
+        info = self._current_lexical_function(name)
         if info is None:
             info = self._register_lexical_function_stub(
-                ctx.IDENTIFIER().getText(),
+                name,
                 ctx,
                 is_async=False,
-                display_name=ctx.IDENTIFIER().getText(),
+                display_name=name,
             )
         self._analyze_lexical_captures(info)
 

@@ -1035,6 +1035,67 @@ fn main() {
 }
 ```
 
+### Operator Overloading
+
+Named structs can define operator methods with `fn operator...` declarations.
+Operators lower to hidden methods in generated Rust; Zinc does not generate Rust
+trait implementations.
+
+Static binary operators take both operands:
+
+```zinc
+struct Point {
+    x: i64
+    y: i64
+
+    fn operator==(left, right) -> bool {
+        return left.x == right.x && left.y == right.y
+    }
+}
+```
+
+Instance operators dispatch from `self`:
+
+```zinc
+struct Point {
+    x: i64
+    y: i64
+
+    fn operator+(rhs) -> Self {
+        return Point { x: self.x + rhs.x y: self.y + rhs.y }
+    }
+}
+```
+
+The obvious owner operands default to `Self`, so the examples above are
+equivalent to writing `left: Self`, `right: Self`, or `rhs: Self`.
+
+Supported overloadable operators include arithmetic, bitwise, comparisons,
+`in`, ranges, unary `-`, `!`, `not`, read-only `operator[]`, and custom binary
+operators made from `~`, `$`, or `?`:
+
+```zinc
+struct Point {
+    x: i64
+    y: i64
+
+    fn operator$$(left, right) -> Self {
+        return Point { x: left.x + right.y y: left.y + right.x }
+    }
+}
+
+fn main() {
+    a = Point { x: 1 y: 2 }
+    b = Point { x: 3 y: 4 }
+    c = a $$ b
+}
+```
+
+Compound assignment uses the base operator and assigns the result back:
+`a += b` behaves like `a = a + b` for overloaded `+`. Direct `operator+=`
+declarations are not supported. `and`, `or`, `&&`, and `||` are not
+overloadable because they keep Zinc's built-in short-circuit behavior.
+
 ## Enums
 
 Enums support unit variants, payload variants, and methods:

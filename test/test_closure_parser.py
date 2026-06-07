@@ -52,7 +52,7 @@ def test_closure_reads_out_assignment_and_nested_functions_parse() -> None:
     main_block = tree.statement(0).functionDeclaration().block()
     nested_decl = main_block.statement(1).functionDeclaration()
     lambda_block = main_block.statement(2).variableAssignment().expression().lambdaExpression().block()
-    assert nested_decl.IDENTIFIER().getText() == "add"
+    assert nested_decl.functionName().getText() == "add"
     assert lambda_block.statement(0).outAssignment().IDENTIFIER(1).getText() == "x"
 
 

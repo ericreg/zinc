@@ -41,6 +41,7 @@ from zinc.meta_runtime import (
 )
 from zinc.modules import extract_identifier_path, struct_path_from_ctx
 from zinc.numeric_literals import is_numeric_literal, numeric_literal_value
+from zinc.operators import ResolvedOperatorCall
 from zinc.parser.zincParser import zincParser as ZincParser
 from zinc.parser.zincVisitor import zincVisitor
 from zinc.string_literals import is_interpolated_string_literal, is_string_literal, to_rust_string_literal
@@ -138,6 +139,7 @@ class CodeGenVisitor(zincVisitor):
         bound_call_args: dict[tuple[str | None, tuple[int, int]], list[BoundArgument]] | None = None,
         bound_struct_fields: dict[tuple[str | None, tuple[int, int]], list[BoundStructField]] | None = None,
         callable_call_specialization_map: dict[tuple[str | None, tuple[int, int]], list[str]] | None = None,
+        operator_calls: dict[tuple[str | None, tuple[int, int]], ResolvedOperatorCall] | None = None,
     ):
         """Create a Rust codegen visitor for one analyzed Zinc program."""
         self.atlas = atlas
@@ -149,6 +151,7 @@ class CodeGenVisitor(zincVisitor):
         self._bound_call_args = bound_call_args or {}
         self._bound_struct_fields = bound_struct_fields or {}
         self._callable_call_specialization_map = callable_call_specialization_map or {}
+        self._operator_calls = operator_calls or {}
         self._uses_async = False
         self._current_function: str | None = None
         self._current_module: str | None = None
@@ -3025,6 +3028,9 @@ class CodeGenVisitor(zincVisitor):
         left = self.visit(ctx.expression(0))
         op = ctx.getChild(1).getText()
         right = self.visit(ctx.expression(1))
+        call = self._operator_call_for_ctx(ctx)
+        if call is not None:
+            return self._render_resolved_operator_call(call, [left, right])
         left, right = self._promote_numeric_operands(
             left,
             ctx.expression(0),
@@ -3039,6 +3045,9 @@ class CodeGenVisitor(zincVisitor):
         left = self.visit(ctx.expression(0))
         op = ctx.getChild(1).getText()
         right = self.visit(ctx.expression(1))
+        call = self._operator_call_for_ctx(ctx)
+        if call is not None:
+            return self._render_resolved_operator_call(call, [left, right])
         result_exact_type = self._get_expr_exact_type(ctx)
         left = self._coerce_bitwise_operand(left, ctx.expression(0), result_exact_type)
         right = self._coerce_bitwise_operand(right, ctx.expression(1), result_exact_type)
@@ -3061,6 +3070,9 @@ class CodeGenVisitor(zincVisitor):
         left = self.visit(ctx.expression(0))
         op = ctx.getChild(1).getText()
         right = self.visit(ctx.expression(1))
+        call = self._operator_call_for_ctx(ctx)
+        if call is not None:
+            return self._render_resolved_operator_call(call, [left, right])
         return f"({left} {op} {right})"
 
     def visitMultiplicativeExpr(self, ctx: ZincParser.MultiplicativeExprContext) -> str:
@@ -3068,6 +3080,9 @@ class CodeGenVisitor(zincVisitor):
         left = self.visit(ctx.expression(0))
         op = ctx.getChild(1).getText()
         right = self.visit(ctx.expression(1))
+        call = self._operator_call_for_ctx(ctx)
+        if call is not None:
+            return self._render_resolved_operator_call(call, [left, right])
         left, right = self._promote_numeric_operands(
             left,
             ctx.expression(0),
@@ -3081,6 +3096,9 @@ class CodeGenVisitor(zincVisitor):
         """Visit exponentiation expression."""
         left = self.visit(ctx.expression(0))
         right = self.visit(ctx.expression(1))
+        call = self._operator_call_for_ctx(ctx)
+        if call is not None:
+            return self._render_resolved_operator_call(call, [left, right])
         return self._render_power_expr(left, ctx.expression(0), right, ctx.expression(1), ctx)
 
     def _get_expr_type(self, ctx) -> BaseType:
@@ -3155,6 +3173,21 @@ class CodeGenVisitor(zincVisitor):
             return f"({left}).powf({right})"
         int_exact = exact_type_to_rust(self._get_expr_exact_type(result_ctx), BaseType.INTEGER)
         return f"({left} as {int_exact}).pow(({right}) as u32)"
+
+    def _operator_call_for_ctx(self, ctx) -> ResolvedOperatorCall | None:
+        """Return a resolved overloaded operator call for a parse context."""
+        return self._operator_calls.get((self._current_function, ctx.getSourceInterval()))
+
+    def _render_resolved_operator_call(self, call: ResolvedOperatorCall, operands: list[str]) -> str:
+        """Render a previously resolved overloaded operator as a direct method call."""
+        if call.is_static:
+            owner = self._named_struct_rust_name(call.owner_qualified_name)
+            return f"{owner}::{call.method_name}({', '.join(operands)})"
+        if call.receiver_index is None:
+            raise RuntimeError("operator instance call missing receiver index")
+        receiver = operands[call.receiver_index]
+        args = [operand for index, operand in enumerate(operands) if index != call.receiver_index]
+        return f"({receiver}).{call.method_name}({', '.join(args)})"
 
     def _get_expr_symbol(self, ctx):
         """Get the resolved symbol for an expression-like context."""
@@ -3368,6 +3401,9 @@ class CodeGenVisitor(zincVisitor):
         if op == "not":
             op = "!"
         operand = self.visit(ctx.expression())
+        call = self._operator_call_for_ctx(ctx)
+        if call is not None:
+            return self._render_resolved_operator_call(call, [operand])
         return f"({op}{operand})"
 
     def visitRelationalExpr(self, ctx: ZincParser.RelationalExprContext) -> str:
@@ -3375,6 +3411,9 @@ class CodeGenVisitor(zincVisitor):
         left = self.visit(ctx.expression(0))
         op = ctx.getChild(1).getText()
         right = self.visit(ctx.expression(1))
+        call = self._operator_call_for_ctx(ctx)
+        if call is not None:
+            return self._render_resolved_operator_call(call, [left, right])
         left, right = self._promote_numeric_operands(
             left,
             ctx.expression(0),
@@ -3389,6 +3428,9 @@ class CodeGenVisitor(zincVisitor):
         left = self.visit(ctx.expression(0))
         op = ctx.getChild(1).getText()
         right = self.visit(ctx.expression(1))
+        call = self._operator_call_for_ctx(ctx)
+        if call is not None:
+            return self._render_resolved_operator_call(call, [left, right])
         left, right = self._promote_numeric_operands(
             left,
             ctx.expression(0),
@@ -3402,12 +3444,24 @@ class CodeGenVisitor(zincVisitor):
         """Visit membership comparison."""
         left = self.visit(ctx.expression(0))
         right = self.visit(ctx.expression(1))
+        call = self._operator_call_for_ctx(ctx)
+        if call is not None:
+            return self._render_resolved_operator_call(call, [left, right])
         right_type = self._get_expr_type(ctx.expression(1))
         if right_type == BaseType.SET:
             return f"({right}.contains(&{left}))"
         if right_type == BaseType.DICT:
             return f"({right}.contains_key(&{left}))"
         return f"({right}.contains(&{left}))"
+
+    def visitCustomOperatorExpr(self, ctx: ZincParser.CustomOperatorExprContext) -> str:
+        """Visit a custom infix operator expression."""
+        left = self.visit(ctx.expression(0))
+        right = self.visit(ctx.expression(1))
+        call = self._operator_call_for_ctx(ctx)
+        if call is None:
+            raise ZincTypeError(f"custom operator '{ctx.CUSTOM_OPERATOR().getText()}' was not resolved")
+        return self._render_resolved_operator_call(call, [left, right])
 
     def visitLogicalAndExpr(self, ctx: ZincParser.LogicalAndExprContext) -> str:
         """Visit logical AND."""
@@ -3480,6 +3534,9 @@ class CodeGenVisitor(zincVisitor):
                 captured_collection_name = self._rust_binding_name(storage_name)
         collection = self.visit(ctx.expression(0))
         index = self.visit(ctx.expression(1))
+        call = self._operator_call_for_ctx(ctx)
+        if call is not None:
+            return self._render_resolved_operator_call(call, [collection, index])
         if collection_type == BaseType.DICT:
             info = self._get_dict_info(ctx.expression(0)) or DictTypeInfo()
             key = self._borrow_lookup_key(index, info.key_type, ctx.expression(1))
@@ -3523,6 +3580,9 @@ class CodeGenVisitor(zincVisitor):
         """Visit range expression."""
         start = self.visit(ctx.expression(0))
         end = self.visit(ctx.expression(1))
+        call = self._operator_call_for_ctx(ctx)
+        if call is not None:
+            return self._render_resolved_operator_call(call, [start, end])
         if ctx.getChild(1).getText() == "..=":
             return f"{start}..={end}"
         return f"{start}..{end}"
@@ -4902,6 +4962,15 @@ class CodeGenVisitor(zincVisitor):
             expected_type=target_type if target_type != BaseType.UNKNOWN else None,
             coerce_scalar=False,
         )
+        call = self._operator_call_for_ctx(ctx)
+        if call is not None:
+            result = self._render_resolved_operator_call(call, [target, value])
+            if target_ctx.IDENTIFIER() and target_symbol is not None and self._symbol_is_captured_cell(target_symbol):
+                storage_name = self._symbol_storage_unique_name(target_symbol)
+                if storage_name is None:
+                    return 'panic!("missing captured binding");'
+                return f"*{self._rust_binding_name(storage_name)}.lock().unwrap() = {result};"
+            return f"{target} = {result};"
         if assignment_op in BITWISE_VALUE_ASSIGNMENT_OPERATORS:
             value = self._coerce_bitwise_operand(value, expr, target_exact_type)
         elif assignment_op not in {"**=", "<<=", ">>="}:

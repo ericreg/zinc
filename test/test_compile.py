@@ -155,6 +155,7 @@ def compile_zinc_program(source_path: Path) -> RustProgram:
         symbol_visitor.bound_call_args,
         symbol_visitor.bound_struct_fields,
         symbol_visitor.callable_call_specialization_map,
+        symbol_visitor.operator_calls,
     )
     return codegen.generate()
 

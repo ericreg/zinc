@@ -1,0 +1,13 @@
+// expected-error: operator declarations must be inside structs
+
+enum Mode {
+    On
+
+    fn operator==(left, right) -> bool {
+        return true
+    }
+}
+
+fn main() {
+    mode = Mode.On
+}

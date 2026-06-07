@@ -151,11 +151,47 @@ enumVariantFieldType
 
 // --- Function Declaration ---
 functionDeclaration
-    : attributeBlock* decorator* 'fn' IDENTIFIER '(' parameterList? ')' ('->' type)? block
+    : attributeBlock* decorator* 'fn' functionName '(' parameterList? ')' ('->' type)? block
     ;
 
 asyncFunctionDeclaration
     : attributeBlock* decorator* 'async' IDENTIFIER '(' parameterList? ')' ('->' type)? block
+    ;
+
+functionName
+    : IDENTIFIER
+    | operatorFunctionName
+    ;
+
+operatorFunctionName
+    : 'operator' operatorSymbol
+    ;
+
+operatorSymbol
+    : '+'
+    | '-'
+    | '*'
+    | '/'
+    | '%'
+    | '**'
+    | '<<'
+    | '>>'
+    | '&'
+    | '^'
+    | '|'
+    | '!'
+    | 'not'
+    | '=='
+    | '!='
+    | '<'
+    | '<='
+    | '>'
+    | '>='
+    | 'in'
+    | '..'
+    | '..='
+    | '[' ']'
+    | CUSTOM_OPERATOR
     ;
 
 parameterList
@@ -358,6 +394,7 @@ expression
     | expression '&' expression                                 # bitwiseAndExpr
     | expression '^' expression                                 # bitwiseXorExpr
     | expression '|' expression                                 # bitwiseOrExpr
+    | expression CUSTOM_OPERATOR expression                     # customOperatorExpr
     | expression ('..' | '..=') expression                      # rangeExpr
     | expression ('<' | '<=' | '>' | '>=') expression           # relationalExpr
     | expression 'in' expression                                # membershipExpr
@@ -557,6 +594,7 @@ OK          : 'Ok';
 ERR         : 'Err';
 SOME        : 'Some';
 NONE        : 'None';
+OPERATOR    : 'operator';
 
 FLOAT
     : DecLiteral '.' DecLiteral FloatExponent? FloatSuffix?
@@ -630,6 +668,10 @@ fragment FloatExponent
 // --- Identifiers ---
 IDENTIFIER
     : [a-zA-Z_] [a-zA-Z0-9_]*
+    ;
+
+CUSTOM_OPERATOR
+    : [~$?]+
     ;
 
 // --- Operators and Punctuation ---

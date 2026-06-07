@@ -194,6 +194,15 @@
         },
         {
           "name": "meta.function.zinc",
+          "match": "\\b(fn)\\s+(operator)(\\[\\]|\\*\\*|\\.\\.=|<<|>>|==|!=|<=|>=|[+\\-*/%&^|!<>]|\\b(?:not|in)\\b|[~$?]+)\\s*(?=\\()",
+          "captures": {
+            "1": { "name": "keyword.declaration.function.zinc" },
+            "2": { "name": "keyword.declaration.operator.zinc" },
+            "3": { "name": "keyword.operator.overloaded.zinc" }
+          }
+        },
+        {
+          "name": "meta.function.zinc",
           "match": "\\b(fn)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
           "captures": {
             "1": { "name": "keyword.declaration.function.zinc" },
@@ -576,7 +585,7 @@
         },
         {
           "name": "keyword.declaration.zinc",
-          "match": "\\b(?:fn|async|struct|enum|const|import|as|extern|rust|use|impl)\\b"
+          "match": "\\b(?:fn|operator|async|struct|enum|const|import|as|extern|rust|use|impl)\\b"
         },
         {
           "name": "storage.type.special.zinc",
@@ -652,6 +661,10 @@
         {
           "name": "keyword.operator.arithmetic.zinc",
           "match": "[+\\-*/%]"
+        },
+        {
+          "name": "keyword.operator.custom.zinc",
+          "match": "[~$?]+"
         },
         {
           "name": "punctuation.accessor.zinc",

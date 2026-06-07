@@ -1,0 +1,8 @@
+// expected-error: operator declarations must be inside structs
+
+fn operator+(left, right) -> bool {
+    return true
+}
+
+fn main() {
+}

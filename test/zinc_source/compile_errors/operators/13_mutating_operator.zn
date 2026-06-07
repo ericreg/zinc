@@ -1,0 +1,14 @@
+// expected-error: operator\+ cannot mutate self
+
+struct Point {
+    x: i64
+
+    fn operator+(rhs) -> Self {
+        self.x = self.x + rhs.x
+        return Point { x: self.x }
+    }
+}
+
+fn main() {
+    point = Point { x: 1 }
+}

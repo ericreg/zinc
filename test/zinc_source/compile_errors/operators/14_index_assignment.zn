@@ -1,0 +1,14 @@
+// expected-error: overloaded index assignment is not supported
+
+struct Point {
+    x: i64
+
+    fn operator[](idx: i64) -> i64 {
+        return self.x + idx
+    }
+}
+
+fn main() {
+    point = Point { x: 1 }
+    point[0] = 2
+}

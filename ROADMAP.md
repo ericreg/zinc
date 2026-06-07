@@ -34,7 +34,8 @@
 - [x] Decorators
 - [x] Basic Rust interop
 - [] Advanced Rust interop (ownership/lifetimes/generics)
-
+- [] ranges
+- [] operator overloading
 
 ## Highest-priority language gaps
 - [ ] Complete zinc stdlib
@@ -100,3 +101,4 @@ Use rust benchmarks to optimize rust codegen
 - traits (Not needed)
 - generics (Not needed)
 - https://benchmarksgame-team.pages.debian.net/benchmarksgame/
+

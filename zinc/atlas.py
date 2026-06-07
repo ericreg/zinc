@@ -204,6 +204,7 @@ class StructMethodInfo:
     """Analyzed struct method information."""
 
     name: str
+    display_name: str | None = None
     parameters: list[tuple[str, str | None, str | None]] = field(default_factory=list)
     parameter_defaults: dict[int, ParserRuleContext] = field(default_factory=dict)
     parameter_default_texts: dict[int, str] = field(default_factory=dict)
@@ -214,6 +215,8 @@ class StructMethodInfo:
     source_struct_qualified_name: str | None = None
     source_module_id: str | None = None
     constructor_owner_qualified_name: str | None = None
+    operator_symbol: str | None = None
+    operator_kind: str | None = None
     line_num: int = 0
     has_decorators: bool = False
 
