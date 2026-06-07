@@ -2,9 +2,10 @@
 
 ## Current Tasks
 
-- [] std/filesystem
-- [] ray tracing example and compare to python, rust, c++
-- [] write "Why Zinc?" docs to defend the design choices and explain the vision for the language
+- [ ] write "Why Zinc?" docs to defend the design choices and explain the vision for the language
+- [ ] iterators 
+- [ ] generators
+- [ ] ranges
 
 ## Implemented core pillars
 
@@ -33,25 +34,26 @@
 - [x] Lambda expressions
 - [x] Decorators
 - [x] Basic Rust interop
-- [] Advanced Rust interop (ownership/lifetimes/generics)
-- [] ranges
-- [] operator overloading
+- [x] operator overloading
+- [ ] Advanced Rust interop (ownership/lifetimes/generics)
 
 ## Highest-priority language gaps
+- [ ] std/filesystem
 - [ ] Complete zinc stdlib
-- more efficient/readable rust code generation
-- write the compilers in Zinc
-- - [] hvm backend
+- [ ] more efficient/readable rust code generation
+- [ ] write the compilers in Zinc
+- [ ] hvm backend
 
 ## Other Ideas
-- [] Possibly have a decimal type based on [`fixed-num`](https://docs.rs/fixed-num/latest/fixed_num/)
-- [] Consider auto-promoting container types to concurrent lock-free data structures based on usage
-- [] hvm backend for automatic parallelization
+- [ ] Possibly have a built in decimal type based on [`fixed-num`](https://docs.rs/fixed-num/latest/fixed_num/)
+- [ ] Consider auto-promoting container types to concurrent lock-free data structures based on usage
+- [ ] hvm backend for automatic parallelization
+- [ ] ray tracing example and compare to python, rust, c++
 
 ## Docs 
-- [] Why Zinc?
-- [] Tutorial
-- [] Expand the guide into a small book / better language reference
+- [ ] Why Zinc?
+- [ ] Tutorial
+- [ ] Expand the guide into a small book / better language reference
 
 ## Tooling and quality
 - [ ] Add a formatter
@@ -84,14 +86,11 @@ Benchmarks should measure
 Use rust benchmarks to optimize rust codegen
 
 ## Example Applications
-- [] raytracing in one weekend
-- [] cli/ps1 todo app
-- [] kalman filter
-- [] webserver
-- [] math benchmarks
-
-
-
+- [ ] raytracing in one weekend
+- [ ] cli/ps1 todo app
+- [ ] kalman filter
+- [ ] webserver
+- [ ] math benchmarks
 
 ## Currently (possibly forever) unsupported in Zinc
 

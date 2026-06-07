@@ -194,11 +194,12 @@
         },
         {
           "name": "meta.function.zinc",
-          "match": "\\b(fn)\\s+(operator)(\\[\\]|\\*\\*|\\.\\.=|<<|>>|==|!=|<=|>=|[+\\-*/%&^|!<>]|\\b(?:not|in)\\b|[~$?]+)\\s*(?=\\()",
+          "match": "\\b(fn)\\s+(operator)(?:\\s+((?:not|in)\\b)|\\s*(\\[\\]|\\*\\*|\\.\\.=|\\.\\.|<<|>>|==|!=|<=|>=|[+\\-*/%&^|!<>]|[~$?]+))\\s*(?=\\()",
           "captures": {
             "1": { "name": "keyword.declaration.function.zinc" },
             "2": { "name": "keyword.declaration.operator.zinc" },
-            "3": { "name": "keyword.operator.overloaded.zinc" }
+            "3": { "name": "keyword.operator.overloaded.zinc" },
+            "4": { "name": "keyword.operator.overloaded.zinc" }
           }
         },
         {
@@ -521,7 +522,7 @@
       "patterns": [
         {
           "name": "support.type.builtin.zinc",
-          "match": "\\b(?:Context|Result|Option|numeric)\\b"
+          "match": "\\b(?:Context|Result|Option|Self|numeric)\\b"
         }
       ]
     },
@@ -660,7 +661,7 @@
         },
         {
           "name": "keyword.operator.arithmetic.zinc",
-          "match": "[+\\-*/%]"
+          "match": "\\*\\*|[+\\-*/%]"
         },
         {
           "name": "keyword.operator.custom.zinc",
