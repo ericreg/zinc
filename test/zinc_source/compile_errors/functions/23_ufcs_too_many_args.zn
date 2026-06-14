@@ -1,0 +1,10 @@
+// expected-error: got too many arguments
+
+fn identity(x: i64) {
+    return x
+}
+
+fn main() {
+    value = 1
+    print(value.identity(2))
+}

@@ -1,0 +1,10 @@
+// expected-error: requires an explicit type annotation on receiver parameter 'x'
+
+fn double(x) {
+    return x * 2
+}
+
+fn main() {
+    value = 2
+    print(value.double())
+}

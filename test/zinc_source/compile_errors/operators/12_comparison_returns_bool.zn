@@ -1,9 +1,9 @@
-// expected-error: operator== must return bool
+// expected-error: operator< must return bool
 
 struct Point {
     x: i64
 
-    fn operator==(left, right) -> i64 {
+    fn operator<(left, right) -> i64 {
         return left.x
     }
 }

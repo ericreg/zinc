@@ -1,0 +1,10 @@
+// expected-error: duplicate receiver argument 'x'
+
+fn combine(x: i64, y) {
+    return x + y
+}
+
+fn main() {
+    value = 1
+    print(value.combine(x=2, y=3))
+}

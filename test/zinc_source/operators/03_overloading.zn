@@ -2,8 +2,8 @@ struct Point {
     x: i64
     y: i64
 
-    fn operator==(left, right) -> bool {
-        return left.x == right.x && left.y == right.y
+    fn operator<(left, right) -> bool {
+        return left.x < right.x && left.y < right.y
     }
 
     fn operator+(rhs) -> Self {
@@ -17,7 +17,7 @@ struct Point {
         return self.y
     }
 
-    fn operator$$(left, right) -> Self {
+    fn operator|(left, right) -> Self {
         return Point { x: left.x + right.y y: left.y + right.x }
     }
 }
@@ -29,11 +29,11 @@ struct Offset {
         return Offset { value: left.value + amount }
     }
 
-    fn operator-() -> Self {
+    fn operator~() -> Self {
         return Offset { value: 0 - self.value }
     }
 
-    fn operator..(left, right) -> Self {
+    fn operator%(left, right) -> Self {
         return Offset { value: right.value - left.value }
     }
 }
@@ -41,8 +41,12 @@ struct Offset {
 struct Bag {
     value: i64
 
-    fn operator in(candidate: i64) -> bool {
+    fn operator&&(candidate: i64) -> bool {
         return candidate == self.value
+    }
+
+    fn operator||(candidate: i64) -> bool {
+        return candidate == self.value + 1
     }
 }
 
@@ -62,25 +66,26 @@ fn main() {
 
     g = Point { x: 1 y: 2 }
     h = Point { x: 1 y: 9 }
-    i = g $$ h
+    i = g | h
     print(i.x)
 
     j = Point { x: 1 y: 2 }
-    k = Point { x: 1 y: 2 }
-    print(j == k)
+    k = Point { x: 2 y: 3 }
+    print(j < k)
 
     o = Offset { value: 10 }
     p = o + 5
     print(p.value)
 
-    q = -p
+    q = ~p
     print(q.value)
 
     r = Offset { value: 2 }
     s = Offset { value: 9 }
-    span = r .. s
+    span = r % s
     print(span.value)
 
     bag = Bag { value: 42 }
-    print(42 in bag)
+    print(bag && 42)
+    print(bag || 43)
 }

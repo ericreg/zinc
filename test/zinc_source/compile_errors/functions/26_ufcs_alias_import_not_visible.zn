@@ -1,0 +1,7 @@
+// expected-error: no member 'add' and no visible function 'add' for UFCS
+
+import modules/_lib/math as math
+
+fn main() {
+    print(10.add(5))
+}

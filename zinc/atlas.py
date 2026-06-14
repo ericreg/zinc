@@ -249,6 +249,7 @@ class EnumVariantInfo:
 
     @property
     def is_unit(self) -> bool:
+        """Return True when this enum variant has no payload fields."""
         return not self.fields
 
 
@@ -523,6 +524,7 @@ class AtlasBuilder:
     }
 
     def __init__(self, module_graph: ModuleGraph):
+        """Initialize an atlas builder for the resolved module graph."""
         self.module_graph = module_graph
         self._function_defs: SortedDict[str, ParserRuleContext] = SortedDict(self.module_graph.top_level_functions())
         self._struct_defs: SortedDict[str, StructInstance] = SortedDict()
@@ -674,11 +676,21 @@ class AtlasBuilder:
                     if static_target:
                         type_symbol, method_name = static_target
                         self._add_type_usage(type_symbol.qualified_name, method_name)
+            if isinstance(ctx.expression(), ZincParser.MemberAccessExprContext):
+                member_name = ctx.expression().IDENTIFIER().getText()
+                func_symbol = self.module_graph.resolve_function_path(self._current_module, [member_name])
+                if func_symbol and func_symbol.name not in self.BUILTIN_FUNCTIONS:
+                    self._calls[self._current_function].add(func_symbol.qualified_name)
 
         if isinstance(ctx, ZincParser.SpawnStatementContext):
             path = extract_identifier_path(ctx.expression())
             if path:
                 func_symbol = self.module_graph.resolve_function_path(self._current_module, path)
+                if func_symbol and func_symbol.name not in self.BUILTIN_FUNCTIONS:
+                    self._calls[self._current_function].add(func_symbol.qualified_name)
+            if isinstance(ctx.expression(), ZincParser.MemberAccessExprContext):
+                member_name = ctx.expression().IDENTIFIER().getText()
+                func_symbol = self.module_graph.resolve_function_path(self._current_module, [member_name])
                 if func_symbol and func_symbol.name not in self.BUILTIN_FUNCTIONS:
                     self._calls[self._current_function].add(func_symbol.qualified_name)
 

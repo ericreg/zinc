@@ -1,0 +1,10 @@
+// expected-error: unknown named argument 'z'
+
+fn combine(x: i64, y) {
+    return x + y
+}
+
+fn main() {
+    value = 1
+    print(value.combine(z=2))
+}

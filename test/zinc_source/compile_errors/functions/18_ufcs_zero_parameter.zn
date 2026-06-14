@@ -1,0 +1,10 @@
+// expected-error: requires at least one parameter for the UFCS receiver
+
+fn ping() {
+    return 1
+}
+
+fn main() {
+    value = 1
+    print(value.ping())
+}

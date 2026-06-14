@@ -1,7 +1,7 @@
 const MAGIC = 10
 const _SECRET = 99
 
-fn add(a, b) {
+fn add(a: i64, b) {
     return a + b
 }
 

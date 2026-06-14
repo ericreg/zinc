@@ -179,6 +179,7 @@ operatorSymbol
     | '&'
     | '^'
     | '|'
+    | '~'
     | '!'
     | 'not'
     | '=='
@@ -187,6 +188,8 @@ operatorSymbol
     | '<='
     | '>'
     | '>='
+    | '&&'
+    | '||'
     | 'in'
     | '..'
     | '..='
@@ -386,7 +389,7 @@ expression
     | expression '(' argumentList? ')'                          # functionCallExpr
     | 'await' expression                                        # awaitExpr
     | '<-' expression                                           # channelReceiveExpr
-    | ('!' | '-' | 'not') expression                            # unaryExpr
+    | ('!' | '-' | '~' | 'not') expression                      # unaryExpr
     | <assoc=right> expression '**' expression                  # powerExpr
     | expression ('*' | '/' | '%') expression                   # multiplicativeExpr
     | expression ('+' | '-') expression                         # additiveExpr
@@ -671,7 +674,7 @@ IDENTIFIER
     ;
 
 CUSTOM_OPERATOR
-    : [~$?]+
+    : [$?]+
     ;
 
 // --- Operators and Punctuation ---
@@ -701,6 +704,7 @@ PIPEPIPE    : '||';
 AMP         : '&';
 BANG        : '!';
 CARET       : '^';
+TILDE       : '~';
 DOTDOT      : '..';
 DOTDOTEQ    : '..=';
 ARROW       : '=>';

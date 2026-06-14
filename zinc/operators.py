@@ -23,54 +23,45 @@ BINARY_OPERATOR_SYMBOLS = frozenset(
     {
         "+",
         "-",
-        "*",
         "/",
         "%",
-        "**",
         "<<",
         ">>",
         "&",
         "^",
         "|",
-        "==",
-        "!=",
         "<",
         "<=",
         ">",
         ">=",
-        "in",
-        "..",
-        "..=",
+        "&&",
+        "||",
     }
 )
-UNARY_OPERATOR_SYMBOLS = frozenset({"-", "!", "not"})
-COMPARISON_OPERATOR_SYMBOLS = frozenset({"==", "!=", "<", "<=", ">", ">=", "in"})
+UNARY_OPERATOR_SYMBOLS = frozenset({"~"})
+COMPARISON_OPERATOR_SYMBOLS = frozenset({"<", "<=", ">", ">="})
 LOGICAL_OPERATOR_SYMBOLS = frozenset({"and", "or", "&&", "||"})
 INDEX_OPERATOR_SYMBOL = "[]"
+OVERLOADABLE_OPERATOR_SYMBOLS = BINARY_OPERATOR_SYMBOLS | UNARY_OPERATOR_SYMBOLS | frozenset({INDEX_OPERATOR_SYMBOL})
+BOOL_RESULT_OPERATOR_SYMBOLS = COMPARISON_OPERATOR_SYMBOLS | frozenset({"&&", "||"})
 
 _OPERATOR_SUFFIXES = {
     "+": "add",
     "-": "sub",
-    "*": "mul",
     "/": "div",
     "%": "rem",
-    "**": "pow",
     "<<": "shl",
     ">>": "shr",
     "&": "bitand",
     "^": "bitxor",
     "|": "bitor",
-    "!": "not",
-    "not": "logical_not",
-    "==": "eq",
-    "!=": "ne",
+    "~": "bitnot",
     "<": "lt",
     "<=": "le",
     ">": "gt",
     ">=": "ge",
-    "in": "in",
-    "..": "range",
-    "..=": "range_inclusive",
+    "&&": "logical_and",
+    "||": "logical_or",
     INDEX_OPERATOR_SYMBOL: "index",
 }
 

@@ -1,0 +1,10 @@
+// expected-error: positional arguments must come before named arguments
+
+fn combine(x: i64, y, z) {
+    return x + y + z
+}
+
+fn main() {
+    value = 1
+    print(value.combine(y=2, 3))
+}

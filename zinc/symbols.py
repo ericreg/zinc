@@ -75,9 +75,9 @@ from zinc.modules import (
 from zinc.numeric_literals import numeric_literal_value, parse_numeric_literal
 from zinc.operators import (
     ASSIGNMENT_TO_BINARY_OPERATOR,
-    COMPARISON_OPERATOR_SYMBOLS,
+    BOOL_RESULT_OPERATOR_SYMBOLS,
     INDEX_OPERATOR_SYMBOL,
-    LOGICAL_OPERATOR_SYMBOLS,
+    OVERLOADABLE_OPERATOR_SYMBOLS,
     ResolvedOperatorCall,
     function_display_name_from_ctx,
     function_is_operator,
@@ -498,6 +498,7 @@ class SymbolTableVisitor(zincVisitor):
         # Scoped by caller function to handle different specializations of the same generic
         self.specialization_map: dict[tuple[str | None, tuple[int, int]], str] = {}
         self.callable_call_specialization_map: dict[tuple[str | None, tuple[int, int]], list[str]] = {}
+        self.ufcs_extern_call_map: dict[tuple[str | None, tuple[int, int]], RustExternFunction] = {}
         self.bound_call_args: dict[tuple[str | None, tuple[int, int]], list[BoundArgument]] = {}
         self.bound_struct_fields: dict[tuple[str | None, tuple[int, int]], list[BoundStructField]] = {}
         # Track channel variables and their type info (var_name -> ChannelTypeInfo)
@@ -1282,7 +1283,9 @@ class SymbolTableVisitor(zincVisitor):
         operator_category = operator_kind(operator_symbol) if operator_symbol is not None else None
         if decorators_from_ctx(ctx):
             raise ZincTypeError(f"method decorator support is not implemented yet: '{display_name}'")
-        if operator_symbol in LOGICAL_OPERATOR_SYMBOLS or operator_symbol in ASSIGNMENT_TO_BINARY_OPERATOR:
+        if operator_symbol is not None and operator_symbol not in OVERLOADABLE_OPERATOR_SYMBOLS:
+            raise ZincTypeError(f"operator '{operator_symbol}' cannot be overloaded")
+        if operator_symbol in ASSIGNMENT_TO_BINARY_OPERATOR:
             raise ZincTypeError(f"operator '{operator_symbol}' cannot be overloaded")
         self._validate_parameter_defaults_for_ctx(ctx, f"method '{name}'", source_module_id)
 
@@ -1437,7 +1440,7 @@ class SymbolTableVisitor(zincVisitor):
                 raise ZincTypeError(f"{display_name} has invalid binary operator arity")
         if not is_static and self_mutability == "&mut self":
             raise ZincTypeError(f"{display_name} cannot mutate self")
-        if symbol in COMPARISON_OPERATOR_SYMBOLS:
+        if symbol in BOOL_RESULT_OPERATOR_SYMBOLS:
             return_info = self._resolved_named_type_info(
                 return_type,
                 source_module_id=source_module_id,
@@ -3083,7 +3086,7 @@ class SymbolTableVisitor(zincVisitor):
             raise ZincTypeError(f"operator '{symbol}' is ambiguous for operands")
         _rank, owner_qualified_name, method, is_static, receiver_index = best[0]
         return_info = self._operator_method_return_info(method, owner_qualified_name)
-        if symbol in COMPARISON_OPERATOR_SYMBOLS and return_info.base_type != BaseType.BOOLEAN:
+        if symbol in BOOL_RESULT_OPERATOR_SYMBOLS and return_info.base_type != BaseType.BOOLEAN:
             raise ZincTypeError(f"operator '{symbol}' must return bool")
         self.operator_calls[self._operator_key(ctx)] = ResolvedOperatorCall(
             operator=symbol,
@@ -6086,6 +6089,493 @@ class SymbolTableVisitor(zincVisitor):
         self.bound_call_args[self._call_key(ctx)] = result
         return result
 
+    def _bind_ufcs_call_arguments(
+        self,
+        ctx,
+        specs: list[ParameterSpec],
+        receiver_expr: ParserRuleContext,
+        label: str,
+    ) -> list[BoundArgument]:
+        """Bind `receiver.name(args...)` as `name(receiver, args...)`."""
+        if not specs:
+            raise ZincTypeError(f"{label} requires at least one parameter for the UFCS receiver")
+
+        raw_args = self._raw_call_arguments(ctx.argumentList())
+        name_to_index = {spec.name: index for index, spec in enumerate(specs)}
+        bound: list[BoundArgument | None] = [None] * len(specs)
+        bound[0] = BoundArgument(
+            expression=receiver_expr,
+            parameter_name=specs[0].name,
+            parameter_index=0,
+            parameter_ctx=specs[0].ctx,
+            owner_module_id=specs[0].owner_module_id,
+        )
+        positional_index = 1
+        saw_named = False
+
+        for raw in raw_args:
+            if raw.is_spread:
+                saw_named = True
+                for field_name, value_info in self._spread_field_infos(raw.expression, label).items():
+                    if field_name not in name_to_index:
+                        continue
+                    index = name_to_index[field_name]
+                    if index == 0:
+                        raise ZincTypeError(f"{label} got duplicate receiver argument '{field_name}'")
+                    bound[index] = BoundArgument(
+                        expression=raw.expression,
+                        parameter_name=specs[index].name,
+                        parameter_index=index,
+                        parameter_ctx=specs[index].ctx,
+                        owner_module_id=specs[index].owner_module_id,
+                        value_info=value_info,
+                        spread_source_expr=raw.expression,
+                        spread_field_name=field_name,
+                    )
+                continue
+
+            if raw.name is not None:
+                saw_named = True
+                if raw.name not in name_to_index:
+                    raise ZincTypeError(f"{label} got an unknown named argument '{raw.name}'")
+                index = name_to_index[raw.name]
+                if index == 0:
+                    raise ZincTypeError(f"{label} got duplicate receiver argument '{raw.name}'")
+            else:
+                if saw_named:
+                    raise ZincTypeError(f"{label} positional arguments must come before named arguments")
+                if positional_index >= len(specs):
+                    raise ZincTypeError(f"{label} got too many arguments")
+                index = positional_index
+                positional_index += 1
+
+            bound[index] = BoundArgument(
+                expression=raw.expression,
+                parameter_name=specs[index].name,
+                parameter_index=index,
+                parameter_ctx=specs[index].ctx,
+                owner_module_id=specs[index].owner_module_id,
+            )
+
+        for index, spec in enumerate(specs):
+            if bound[index] is not None:
+                continue
+            if spec.default_expr is None:
+                raise ZincTypeError(f"{label} missing required argument '{spec.name}'")
+            bound[index] = BoundArgument(
+                expression=spec.default_expr,
+                parameter_name=spec.name,
+                parameter_index=index,
+                parameter_ctx=spec.ctx,
+                is_default=True,
+                owner_module_id=spec.owner_module_id,
+            )
+
+        result = [arg for arg in bound if arg is not None]
+        self.bound_call_args[self._call_key(ctx)] = result
+        return result
+
+    def _path_is_type_or_namespace(self, path: list[str]) -> bool:
+        """Return True when a path denotes a namespace/type rather than a value."""
+        if self._current_module is None:
+            return False
+        if len(path) == 1:
+            name = path[0]
+            if self.module_graph.resolve_alias(self._current_module, name):
+                return True
+            if self.module_graph.resolve_extern_type_path(self._current_module, path):
+                return True
+        return (
+            self.module_graph.resolve_struct_path(self._current_module, path) is not None
+            or self.module_graph.resolve_enum_path(self._current_module, path) is not None
+        )
+
+    def _ufcs_receiver_is_value_candidate(self, receiver_ctx) -> bool:
+        """Return True when a member-call receiver can be treated as a UFCS value."""
+        path = extract_identifier_path(receiver_ctx)
+        if path and self._current_module is not None:
+            if self._path_is_type_or_namespace(path):
+                return False
+            if len(path) == 1:
+                name = path[0]
+                has_local = self.symbols.lookup_by_id(name) is not None
+                has_const = self.module_graph.resolve_const_path(self._current_module, [name]) is not None
+                if not has_local and not has_const:
+                    return False
+        return True
+
+    def _receiver_has_real_member_for_ufcs(self, receiver_ctx, member_name: str) -> bool:
+        """Return True when normal member lookup should own this call name."""
+        receiver_type = self.visit(receiver_ctx)
+        receiver_symbol = self._expr_symbol(receiver_ctx)
+
+        if receiver_type == BaseType.CALLABLE:
+            return member_name == "call"
+        if receiver_type == BaseType.CONTEXT:
+            return member_name in {"done", "cancel"}
+        if member_name in {"len", "is_empty", "contains", "contains_key"}:
+            return receiver_type in {BaseType.ARRAY, BaseType.DICT, BaseType.SET, BaseType.STRING}
+        if receiver_type == BaseType.ARRAY:
+            return member_name == "push"
+        if receiver_type == BaseType.DICT:
+            return member_name in {"insert", "get", "contains_key", "remove", "clear", "keys", "values", "items"}
+        if receiver_type == BaseType.SET:
+            return member_name in {"push", "insert", "contains", "remove", "clear"}
+
+        if receiver_type == BaseType.STRUCT:
+            struct_qualified_name = self._struct_qualified_name_for_symbol(receiver_symbol)
+            if struct_qualified_name and self._current_module is not None:
+                if self.module_graph.is_extern_type_qualified_name(struct_qualified_name):
+                    return (
+                        self.module_graph.resolve_extern_instance_method(
+                            self._current_module,
+                            struct_qualified_name,
+                            member_name,
+                        )
+                        is not None
+                    )
+                struct = self.atlas.structs.get(struct_qualified_name)
+                if struct and (
+                    any(field.name == member_name for field in struct.fields)
+                    or any(method.name == member_name for method in struct.methods)
+                ):
+                    return True
+            anonymous_struct_info = self._anonymous_struct_info_for_symbol(receiver_symbol)
+            return anonymous_struct_info is not None and anonymous_struct_info.get_field(member_name) is not None
+
+        if receiver_type == BaseType.ENUM and receiver_symbol and receiver_symbol.exact_type:
+            enum = self._analyze_enum_by_qualified_name(receiver_symbol.exact_type)
+            return any(method.name == member_name for method in enum.methods)
+
+        return False
+
+    def _receiver_has_non_callable_field_for_call(self, receiver_ctx, member_name: str) -> bool:
+        """Return True when a member call targets a real data field, not UFCS."""
+        receiver_type = self.visit(receiver_ctx)
+        receiver_symbol = self._expr_symbol(receiver_ctx)
+        if receiver_type != BaseType.STRUCT:
+            return False
+
+        struct_qualified_name = self._struct_qualified_name_for_symbol(receiver_symbol)
+        if struct_qualified_name:
+            struct = self.atlas.structs.get(struct_qualified_name)
+            if struct is not None:
+                field = next((candidate for candidate in struct.fields if candidate.name == member_name), None)
+                if field is not None:
+                    anonymous_struct_info = self._anonymous_struct_info_for_symbol(receiver_symbol)
+                    concrete_field = anonymous_struct_info.get_field(member_name) if anonymous_struct_info is not None else None
+                    resolved_type = concrete_field.resolved_type if concrete_field is not None and field.is_infer else field.resolved_type
+                    return resolved_type != BaseType.CALLABLE
+
+        anonymous_struct_info = self._anonymous_struct_info_for_symbol(receiver_symbol)
+        if anonymous_struct_info is not None:
+            field = anonymous_struct_info.get_field(member_name)
+            return field is not None and field.resolved_type != BaseType.CALLABLE
+
+        return False
+
+    def _record_ufcs_return_info(
+        self,
+        ctx,
+        return_info: ResolvedValueInfo,
+    ) -> BaseType:
+        """Record and return the type for one resolved UFCS call."""
+        self._record_value_info(ctx.getSourceInterval(), return_info)
+        return return_info.base_type
+
+    def _resolve_ufcs_function_call(
+        self,
+        ctx,
+        receiver_ctx,
+        *,
+        qualified_name: str,
+        module_id: str,
+        display_name: str,
+        func_def,
+        is_spawn: bool = False,
+    ) -> BaseType | None:
+        """Resolve a UFCS call against one Zinc function declaration."""
+        if function_is_operator(func_def):
+            return None
+        label = f"{'spawn call' if is_spawn else 'call'} to '{display_name}'"
+        params = function_parameters(func_def)
+        if not params:
+            raise ZincTypeError(f"{label} requires at least one parameter for the UFCS receiver")
+        receiver_param = params[0]
+        receiver_type_ctx = (
+            receiver_param.ctx.typeAlternative()
+            if receiver_param.ctx is not None and hasattr(receiver_param.ctx, "typeAlternative")
+            else None
+        )
+        if receiver_type_ctx is None:
+            raise ZincTypeError(
+                f"{label} requires an explicit type annotation on receiver parameter '{receiver_param.name}'"
+            )
+        bound_args = self._bind_ufcs_call_arguments(
+            ctx,
+            self._parameter_specs_from_ctx(func_def, module_id),
+            receiver_ctx,
+            label,
+        )
+        (
+            arg_types,
+            arg_exact_types,
+            arg_exprs,
+            arg_channel_infos,
+            arg_array_infos,
+            arg_dict_infos,
+            arg_set_infos,
+            arg_tuple_infos,
+            arg_callable_infos,
+            arg_result_infos,
+            arg_option_infos,
+            arg_struct_qualified_names,
+            arg_anonymous_struct_infos,
+        ) = self._collect_bound_argument_info(bound_args)
+
+        if BaseType.UNKNOWN in arg_types:
+            self.symbols.define_temp(
+                resolved_type=BaseType.UNKNOWN,
+                interval=ctx.getSourceInterval(),
+            )
+            return BaseType.UNKNOWN
+
+        if not is_spawn:
+            self._validate_constraints(
+                func_def,
+                self._constraint_slots_from_call(
+                    func_def,
+                    arg_types,
+                    arg_exact_types,
+                    arg_array_infos,
+                    arg_dict_infos,
+                    arg_set_infos,
+                    arg_tuple_infos,
+                    arg_callable_infos,
+                    arg_result_infos,
+                    arg_option_infos,
+                    arg_struct_qualified_names,
+                    arg_anonymous_struct_infos,
+                ),
+                label=label,
+            )
+        self._validate_annotated_parameters(
+            func_def,
+            arg_types,
+            arg_exact_types,
+            arg_exprs,
+            arg_array_infos,
+            arg_dict_infos,
+            arg_set_infos,
+            arg_tuple_infos,
+            arg_callable_infos,
+            arg_result_infos,
+            arg_option_infos,
+            arg_struct_qualified_names,
+            arg_anonymous_struct_infos,
+        )
+        mangled = self.atlas.add_specialization(
+            qualified_name,
+            arg_types,
+            arg_exact_types,
+            func_def,
+            self._current_function,
+            arg_channel_infos,
+            arg_array_infos,
+            arg_dict_infos,
+            arg_set_infos,
+            arg_tuple_infos,
+            arg_callable_infos,
+            arg_result_infos,
+            arg_option_infos,
+            arg_struct_qualified_names,
+            arg_anonymous_struct_infos,
+        )
+        key = (self._current_function, ctx.getSourceInterval())
+        self.specialization_map[key] = mangled
+        func_instance = self.atlas.functions.get(mangled)
+        if func_instance:
+            if is_spawn:
+                func_instance.is_async = True
+            for idx, chan_info in arg_channel_infos.items():
+                func_instance.arg_channel_infos.setdefault(idx, [])
+                if all(existing is not chan_info for existing in func_instance.arg_channel_infos[idx]):
+                    func_instance.arg_channel_infos[idx].append(chan_info)
+            self._mark_mutated_call_arguments(func_instance, arg_exprs)
+
+        if is_spawn:
+            return BaseType.VOID
+
+        return_info = None
+        if func_instance is not None and func_instance.return_type != BaseType.UNKNOWN:
+            return_info = ResolvedValueInfo(
+                base_type=func_instance.return_type,
+                exact_type=func_instance.return_exact_type,
+                dict_info=self._copy_dict_info(func_instance.return_dict_info),
+                set_info=self._copy_set_info(func_instance.return_set_info),
+                tuple_info=self._copy_tuple_info(func_instance.return_tuple_info),
+                callable_info=func_instance.return_callable_info,
+                struct_qualified_name=func_instance.return_struct_qualified_name,
+                anonymous_struct_info=self._copy_anonymous_struct_info(func_instance.return_anonymous_struct_info),
+                result_info=self._copy_result_info(func_instance.return_result_info),
+                option_info=self._copy_option_info(func_instance.return_option_info),
+            )
+        if return_info is None:
+            return_info = self._declared_return_value_info(func_def, module_id)
+        if return_info is not None:
+            return self._record_ufcs_return_info(ctx, return_info)
+        self.symbols.define_temp(
+            resolved_type=BaseType.UNKNOWN,
+            interval=ctx.getSourceInterval(),
+        )
+        return BaseType.UNKNOWN
+
+    def _validate_ufcs_extern_call(
+        self,
+        ctx,
+        function: RustExternFunction,
+        receiver_ctx,
+        *,
+        is_spawn: bool = False,
+    ) -> ResolvedValueInfo:
+        """Validate `receiver.extern_name(args...)` against an extern free function."""
+        callable_info = self._callable_info_from_extern_function(function)
+        label = f"{'spawn call' if is_spawn else 'call'} to extern '{function.display_name or function.name}'"
+        bound_args = self._bind_ufcs_call_arguments(
+            ctx,
+            self._parameter_specs_from_callable_info(callable_info),
+            receiver_ctx,
+            label,
+        )
+        (
+            arg_types,
+            arg_exact_types,
+            arg_exprs,
+            _arg_channel_infos,
+            arg_array_infos,
+            arg_dict_infos,
+            arg_set_infos,
+            arg_tuple_infos,
+            arg_callable_infos,
+            arg_result_infos,
+            arg_option_infos,
+            arg_struct_qualified_names,
+            arg_anonymous_struct_infos,
+        ) = self._collect_bound_argument_info(bound_args)
+
+        for index, expected_type in enumerate(callable_info.param_types):
+            actual_symbol = self._expr_symbol(arg_exprs[index]) if index < len(arg_exprs) and arg_exprs[index] is not None else None
+            actual_constant = (
+                self._literal_constant_value_for_expr(arg_exprs[index], actual_symbol)
+                if index < len(arg_exprs) and arg_exprs[index] is not None
+                else None
+            )
+            if not self._assignment_metadata_compatible(
+                expected_type,
+                arg_types[index],
+                expected_exact_type=callable_info.param_exact_types[index] if index < len(callable_info.param_exact_types) else None,
+                actual_exact_type=arg_exact_types[index] if index < len(arg_exact_types) else None,
+                actual_constant_value=actual_constant,
+                expected_array=callable_info.param_array_infos.get(index),
+                actual_array=arg_array_infos.get(index),
+                expected_dict=callable_info.param_dict_infos.get(index),
+                actual_dict=arg_dict_infos.get(index),
+                expected_set=callable_info.param_set_infos.get(index),
+                actual_set=arg_set_infos.get(index),
+                expected_tuple=callable_info.param_tuple_infos.get(index),
+                actual_tuple=arg_tuple_infos.get(index),
+                expected_callable=callable_info.param_callable_infos.get(index),
+                actual_callable=arg_callable_infos.get(index),
+                expected_struct_qualified_name=callable_info.param_struct_qualified_names.get(index),
+                actual_struct_qualified_name=arg_struct_qualified_names.get(index),
+                expected_anonymous_struct_info=callable_info.param_anonymous_struct_infos.get(index),
+                actual_anonymous_struct_info=arg_anonymous_struct_infos.get(index),
+                expected_result=callable_info.param_result_infos.get(index),
+                actual_result=arg_result_infos.get(index),
+                expected_option=callable_info.param_option_infos.get(index),
+                actual_option=arg_option_infos.get(index),
+            ):
+                expected_label = (
+                    callable_info.param_exact_types[index]
+                    if index < len(callable_info.param_exact_types) and callable_info.param_exact_types[index] is not None
+                    else function.params[index].type_text
+                )
+                raise ZincTypeError(f"{label} parameter '{function.params[index].name}' expects a compatible '{expected_label}' value")
+
+        return self._return_info_from_callable_info(callable_info)
+
+    def _try_resolve_ufcs_call(self, ctx, callee_ctx, *, is_spawn: bool = False) -> BaseType | None:
+        """Resolve `receiver.name(args...)` as `name(receiver, args...)` when valid."""
+        if not isinstance(callee_ctx, ZincParser.MemberAccessExprContext):
+            return None
+        if self._current_module is None:
+            return None
+
+        receiver_ctx = callee_ctx.expression()
+        member_name = callee_ctx.IDENTIFIER().getText()
+        if member_name in {
+            "print",
+            "chan",
+            "close",
+            "dict",
+            "sort_dict",
+            "set",
+            "sort_set",
+            "meta",
+            "type",
+            "line",
+            "has_component",
+            "implements",
+        }:
+            return None
+        if not self._ufcs_receiver_is_value_candidate(receiver_ctx):
+            return None
+        if self._receiver_has_real_member_for_ufcs(receiver_ctx, member_name):
+            return None
+
+        lexical_function = self._current_lexical_function(member_name)
+        if lexical_function is not None:
+            result = self._resolve_ufcs_function_call(
+                ctx,
+                receiver_ctx,
+                qualified_name=lexical_function.qualified_name,
+                module_id=lexical_function.module_id,
+                display_name=lexical_function.display_name,
+                func_def=lexical_function.ctx,
+                is_spawn=is_spawn,
+            )
+            if result is not None:
+                return result
+
+        resolved_function = self.module_graph.resolve_function_path(self._current_module, [member_name])
+        if resolved_function is not None:
+            func_def = self.atlas.function_defs.get(resolved_function.qualified_name)
+            if func_def is not None:
+                result = self._resolve_ufcs_function_call(
+                    ctx,
+                    receiver_ctx,
+                    qualified_name=resolved_function.qualified_name,
+                    module_id=resolved_function.module_id,
+                    display_name=resolved_function.name,
+                    func_def=func_def,
+                    is_spawn=is_spawn,
+                )
+                if result is not None:
+                    return result
+
+        extern_function = self.module_graph.resolve_extern_function_path(self._current_module, [member_name])
+        if extern_function is not None:
+            return_info = self._validate_ufcs_extern_call(ctx, extern_function, receiver_ctx, is_spawn=is_spawn)
+            self.ufcs_extern_call_map[(self._current_function, ctx.getSourceInterval())] = extern_function
+            if is_spawn:
+                return BaseType.VOID
+            return self._record_ufcs_return_info(ctx, return_info)
+
+        receiver_type = self.visit(receiver_ctx)
+        if receiver_type != BaseType.UNKNOWN:
+            raise ZincTypeError(f"no member '{member_name}' and no visible function '{member_name}' for UFCS")
+        return None
+
     def _default_integer_exact_override(self, bound_arg: BoundArgument) -> str | None:
         """Use i32 for omitted unsuffixed integer parameter defaults."""
         if not bound_arg.is_default:
@@ -8738,6 +9228,10 @@ class SymbolTableVisitor(zincVisitor):
             if operand_type not in {BaseType.INTEGER, BaseType.FLOAT}:
                 raise ZincTypeError("operator '-' requires a numeric operand")
             result_type = operand_type
+        elif operator == "~":
+            if operand_type != BaseType.INTEGER:
+                raise ZincTypeError("operator '~' requires an integer operand")
+            result_type = BaseType.INTEGER
         elif operator == "not":
             if operand_type != BaseType.BOOLEAN:
                 raise ZincTypeError("operator 'not' requires a boolean operand")
@@ -8754,6 +9248,8 @@ class SymbolTableVisitor(zincVisitor):
         if operand_symbol and operand_symbol.constant_value is not None:
             if operator == "-":
                 constant_value = -operand_symbol.constant_value
+            elif operator == "~":
+                constant_value = ~operand_symbol.constant_value
             elif operator == "not" or operand_type == BaseType.BOOLEAN:
                 constant_value = not operand_symbol.constant_value
             elif operator == "!":
@@ -8867,8 +9363,11 @@ class SymbolTableVisitor(zincVisitor):
 
     def visitLogicalAndExpr(self, ctx: ZincParser.LogicalAndExprContext) -> BaseType:
         """Handle logical AND."""
-        self._value_info_for_value_context(ctx.expression(0))
-        self._value_info_for_value_context(ctx.expression(1))
+        left_info = self._value_info_for_value_context(ctx.expression(0))
+        right_info = self._value_info_for_value_context(ctx.expression(1))
+        overload = self._resolve_binary_operator(ctx, ctx.getChild(1).getText(), left_info, right_info)
+        if overload is not None:
+            return overload.base_type
         left_symbol = self._expr_symbol(ctx.expression(0))
         right_symbol = self._expr_symbol(ctx.expression(1))
         constant_value = None
@@ -8884,8 +9383,11 @@ class SymbolTableVisitor(zincVisitor):
 
     def visitLogicalOrExpr(self, ctx: ZincParser.LogicalOrExprContext) -> BaseType:
         """Handle logical OR."""
-        self._value_info_for_value_context(ctx.expression(0))
-        self._value_info_for_value_context(ctx.expression(1))
+        left_info = self._value_info_for_value_context(ctx.expression(0))
+        right_info = self._value_info_for_value_context(ctx.expression(1))
+        overload = self._resolve_binary_operator(ctx, ctx.getChild(1).getText(), left_info, right_info)
+        if overload is not None:
+            return overload.base_type
         left_symbol = self._expr_symbol(ctx.expression(0))
         right_symbol = self._expr_symbol(ctx.expression(1))
         constant_value = None
@@ -9190,6 +9692,7 @@ class SymbolTableVisitor(zincVisitor):
         receiver_type = self.visit(ctx.expression())
         receiver_symbol = self._expr_symbol(ctx.expression())
         member_name = ctx.IDENTIFIER().getText()
+        is_direct_call = isinstance(ctx.parentCtx, ZincParser.FunctionCallExprContext) and ctx.parentCtx.expression() is ctx
 
         if (
             receiver_symbol
@@ -9310,6 +9813,12 @@ class SymbolTableVisitor(zincVisitor):
                 # Preserve identity so later indirect-call refinement updates the original callable source too.
                 temp.callable_info = receiver_symbol.callable_info
                 return BaseType.CALLABLE
+            if is_direct_call:
+                self.symbols.define_temp(
+                    resolved_type=BaseType.UNKNOWN,
+                    interval=ctx.getSourceInterval(),
+                )
+                return BaseType.UNKNOWN
             raise ZincTypeError(f"callable values have no member '{member_name}'")
 
         if receiver_type == BaseType.STRUCT:
@@ -9329,6 +9838,12 @@ class SymbolTableVisitor(zincVisitor):
                         )
                         temp.callable_info = self._callable_info_from_extern_function(extern_method)
                         return BaseType.CALLABLE
+                    if is_direct_call:
+                        self.symbols.define_temp(
+                            resolved_type=BaseType.UNKNOWN,
+                            interval=ctx.getSourceInterval(),
+                        )
+                        return BaseType.UNKNOWN
                     raise ZincTypeError(f"opaque extern type has no member '{member_name}'")
                 struct = self.atlas.structs.get(struct_qualified_name)
                 if struct:
@@ -9434,14 +9949,32 @@ class SymbolTableVisitor(zincVisitor):
                             field.array_info.element_anonymous_struct_info
                         )
                     return field.resolved_type
+                if is_direct_call:
+                    self.symbols.define_temp(
+                        resolved_type=BaseType.UNKNOWN,
+                        interval=ctx.getSourceInterval(),
+                    )
+                    return BaseType.UNKNOWN
                 raise ZincTypeError(f"anonymous struct has no field '{member_name}'")
             if struct_qualified_name and struct is not None:
+                if is_direct_call:
+                    self.symbols.define_temp(
+                        resolved_type=BaseType.UNKNOWN,
+                        interval=ctx.getSourceInterval(),
+                    )
+                    return BaseType.UNKNOWN
                 raise ZincTypeError(f"struct '{struct.name}' has no member '{member_name}'")
 
         if receiver_type == BaseType.ENUM:
             enum_name = receiver_symbol.exact_type if receiver_symbol else None
             if enum_name:
                 enum = self._analyze_enum_by_qualified_name(enum_name)
+                if is_direct_call:
+                    self.symbols.define_temp(
+                        resolved_type=BaseType.UNKNOWN,
+                        interval=ctx.getSourceInterval(),
+                    )
+                    return BaseType.UNKNOWN
                 raise ZincTypeError(f"enum '{enum.name}' has no member '{member_name}'")
 
         self.symbols.define_temp(
@@ -10347,6 +10880,13 @@ class SymbolTableVisitor(zincVisitor):
                 self._struct_symbol_bindings[temp.unique_name] = return_struct_qualified_name
             return return_type
 
+        if (
+            isinstance(callee_ctx, ZincParser.MemberAccessExprContext)
+            and callee_type != BaseType.CALLABLE
+            and self._receiver_has_non_callable_field_for_call(callee_ctx.expression(), callee_ctx.IDENTIFIER().getText())
+        ):
+            raise ZincTypeError(f"member '{callee_ctx.IDENTIFIER().getText()}' is not callable")
+
         path = extract_identifier_path(callee_ctx)
         if path and self._current_module is not None:
             static_target = self.module_graph.resolve_static_method_target(self._current_module, path)
@@ -10377,6 +10917,10 @@ class SymbolTableVisitor(zincVisitor):
                         )
                         self._record_value_info(ctx.getSourceInterval(), return_info)
                         return return_info.base_type
+
+            ufcs_type = self._try_resolve_ufcs_call(ctx, callee_ctx)
+            if ufcs_type is not None:
+                return ufcs_type
 
             resolved_function = self.module_graph.resolve_function_path(self._current_module, path)
             if resolved_function and resolved_function.name not in (
@@ -10507,6 +11051,10 @@ class SymbolTableVisitor(zincVisitor):
                     return func_symbol.resolved_type
                 if self.module_graph.rust_use_imports_name(self._current_module, path[0]):
                     raise ZincTypeError(f"missing extern declaration for Rust function '{path[0]}'")
+
+        ufcs_type = self._try_resolve_ufcs_call(ctx, callee_ctx)
+        if ufcs_type is not None:
+            return ufcs_type
 
         self.symbols.define_temp(
             resolved_type=BaseType.UNKNOWN,
@@ -12878,6 +13426,10 @@ class SymbolTableVisitor(zincVisitor):
                         if all(existing is not chan_info for existing in self.atlas.functions[mangled].arg_channel_infos[idx]):
                             self.atlas.functions[mangled].arg_channel_infos[idx].append(chan_info)
                     return
+
+        ufcs_type = self._try_resolve_ufcs_call(ctx, func_expr, is_spawn=True)
+        if ufcs_type is not None:
+            return
 
         callee_type = self.visit(func_expr)
         callee_symbol = self._expr_symbol(func_expr)

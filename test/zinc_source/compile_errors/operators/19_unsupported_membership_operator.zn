@@ -1,0 +1,13 @@
+// expected-error: operator 'in' cannot be overloaded
+
+struct Bag {
+    value: i64
+
+    fn operator in(candidate: i64) -> bool {
+        return true
+    }
+}
+
+fn main() {
+    bag = Bag { value: 1 }
+}

@@ -1,0 +1,13 @@
+// expected-error: operator '\*' cannot be overloaded
+
+struct Point {
+    x: i64
+
+    fn operator*(rhs) -> Self {
+        return self
+    }
+}
+
+fn main() {
+    point = Point { x: 1 }
+}

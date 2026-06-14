@@ -324,13 +324,58 @@ fn main() {
 }
 ```
 
+Functions can also be called with unified function call syntax when the first
+argument is clearer as the receiver:
+
+```zinc
+fn clamp(value: i64, low, high) {
+    if value < low {
+        return low
+    }
+    if value > high {
+        return high
+    }
+    return value
+}
+
+fn main() {
+    value = 12
+
+    print(value.clamp(0, 10)) // same as clamp(value, 0, 10)
+}
+```
+
+Real members win over this fallback. If a struct, enum, collection, callable, or
+extern type has a member named `reset`, then `item.reset()` uses that member
+instead of rewriting to `reset(item)`. UFCS requires a call; `item.reset` is
+still ordinary member access or a bound method value.
+
+UFCS is opt-in for Zinc functions: the receiver parameter must have an explicit
+type annotation. Untyped first parameters can still be called with normal
+`clamp(value, ...)` syntax, but not with `value.clamp(...)`.
+
+Named, default, and spread arguments still use the function's parameter names.
+The receiver always binds the first parameter, so passing that same parameter by
+name or spread is a compile-time error:
+
+```zinc
+fn combine(value: i64, a, b: i64 = 0) {
+    return value + a + b
+}
+
+fn main() {
+    value = 10
+    print(value.combine(a=1))
+}
+```
+
 ## Callables And Lambdas
 
 Functions and lambdas can be stored, passed, returned, and called through the
 same `value(args...)` syntax:
 
 ```zinc
-fn apply(f, x) {
+fn apply(f: (i64) -> i64, x: i64) {
     return f(x)
 }
 
@@ -1048,8 +1093,8 @@ struct Point {
     x: i64
     y: i64
 
-    fn operator==(left, right) -> bool {
-        return left.x == right.x && left.y == right.y
+    fn operator<(left, right) -> bool {
+        return left.x < right.x && left.y < right.y
     }
 }
 ```
@@ -1070,16 +1115,16 @@ struct Point {
 The obvious owner operands default to `Self`, so the examples above are
 equivalent to writing `left: Self`, `right: Self`, or `rhs: Self`.
 
-Supported overloadable operators include arithmetic, bitwise, comparisons,
-`in`, ranges, unary `-`, `!`, `not`, read-only `operator[]`, and custom binary
-operators made from `~`, `$`, or `?`:
+Only the standard operator set can be overloaded: `+`, `-`, `%`, `/`,
+`|`, `&`, `^`, `~`, `<<`, `>>`, `[]`, `<`, `>`, `<=`, `>=`, `&&`, and `||`.
+Read-only indexing is declared as `operator[]`.
 
 ```zinc
 struct Point {
     x: i64
     y: i64
 
-    fn operator$$(left, right) -> Self {
+    fn operator|(left, right) -> Self {
         return Point { x: left.x + right.y y: left.y + right.x }
     }
 }
@@ -1087,14 +1132,15 @@ struct Point {
 fn main() {
     a = Point { x: 1 y: 2 }
     b = Point { x: 3 y: 4 }
-    c = a $$ b
+    c = a | b
 }
 ```
 
 Compound assignment uses the base operator and assigns the result back:
 `a += b` behaves like `a = a + b` for overloaded `+`. Direct `operator+=`
-declarations are not supported. `and`, `or`, `&&`, and `||` are not
-overloadable because they keep Zinc's built-in short-circuit behavior.
+declarations are not supported. Built-in `and` and `or` are not overloadable.
+Overloaded `&&` and `||` are ordinary method calls, so they do not short-circuit
+like the built-in boolean operators.
 
 ## Enums
 

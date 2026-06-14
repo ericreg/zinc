@@ -1,0 +1,13 @@
+// expected-error: operator '\.\.' cannot be overloaded
+
+struct Span {
+    value: i64
+
+    fn operator..(left, right) -> Self {
+        return left
+    }
+}
+
+fn main() {
+    span = Span { value: 1 }
+}

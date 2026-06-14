@@ -32,17 +32,18 @@ def parse_program(source: str) -> tuple[zincParser.ProgramContext, list[str]]:
 
 
 def test_operator_method_declarations_parse() -> None:
-    """Struct methods accept built-in, index, word, and custom operator names."""
+    """Struct methods parse the supported symbolic operator declaration forms."""
     tree, errors = parse_program(
         """
         struct Point {
             x: i64
 
-            fn operator==(left, right) -> bool { return true }
             fn operator+(rhs) -> Self { return self }
             fn operator[](idx: i64) -> i64 { return idx }
-            fn operator not() -> bool { return false }
-            fn operator$$(left, right) -> Self { return left }
+            fn operator|(left, right) -> Self { return left }
+            fn operator~() -> Self { return self }
+            fn operator&&(rhs) -> bool { return true }
+            fn operator||(rhs) -> bool { return true }
         }
 
         fn main() {
@@ -53,7 +54,7 @@ def test_operator_method_declarations_parse() -> None:
     assert errors == []
     members = tree.statement(0).structDeclaration().structBody().structMember()
     names = [member.functionDeclaration().functionName().getText() for member in members if member.functionDeclaration()]
-    assert names == ["operator==", "operator+", "operator[]", "operatornot", "operator$$"]
+    assert names == ["operator+", "operator[]", "operator|", "operator~", "operator&&", "operator||"]
 
 
 def test_custom_operator_expression_parses_at_fixed_precedence() -> None:
@@ -73,6 +74,21 @@ def test_custom_operator_expression_parses_at_fixed_precedence() -> None:
     mixed = block.statement(1).variableAssignment().expression()
     assert isinstance(mixed, zincParser.RangeExprContext)
     assert isinstance(mixed.expression(0), zincParser.CustomOperatorExprContext)
+
+
+def test_pipe_operator_expression_parses_as_bitwise_or() -> None:
+    """Plain pipe operator expressions parse through the bitwise-or context."""
+    tree, errors = parse_program(
+        """
+        fn main() {
+            piped = left | right
+        }
+        """
+    )
+
+    assert errors == []
+    block = tree.statement(0).functionDeclaration().block()
+    assert isinstance(block.statement(0).variableAssignment().expression(), zincParser.BitwiseOrExprContext)
 
 
 def test_compound_operator_declaration_is_rejected() -> None:

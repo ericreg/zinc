@@ -520,6 +520,14 @@ name = "functions_03_argument_spread_edges"
 path = "src/functions/03_argument_spread_edges.rs"
 
 [[bin]]
+name = "functions_04_ufcs"
+path = "src/functions/04_ufcs.rs"
+
+[[bin]]
+name = "functions_05_ufcs_edge_cases"
+path = "src/functions/05_ufcs_edge_cases.rs"
+
+[[bin]]
 name = "if_else"
 path = "src/if_else.rs"
 

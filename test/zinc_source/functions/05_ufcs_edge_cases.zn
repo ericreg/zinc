@@ -1,0 +1,52 @@
+import modules/_lib/math [add]
+
+const BASE = 4
+
+fn make() {
+    return 6
+}
+
+fn scale(value: i64, by) {
+    return value * by
+}
+
+fn apply(f: (i64) -> i64, x) {
+    return f(x)
+}
+
+fn call(f: (i64) -> i64, x) {
+    return 9999
+}
+
+fn len(values: [i64]) {
+    return 9999
+}
+
+fn describe(point: struct {
+    x: i64
+    y: i64
+}) {
+    return point.x + point.y
+}
+
+fn main() {
+    print((BASE + 1).scale(3))
+    print(make().scale(4))
+    print(BASE.add(8))
+
+    fn local_add(value: i64, inc) {
+        return value + inc + 100
+    }
+
+    print(5.local_add(6))
+
+    inc = x -> x + 1
+    print(inc.apply(9))
+    print(inc.call(9))
+
+    values = [1, 2, 3]
+    print(values.len())
+
+    point = struct { x: 2, y: 8 }
+    print(point.describe())
+}

@@ -1,0 +1,6 @@
+// expected-error: no member 'missing' and no visible function 'missing' for UFCS
+
+fn main() {
+    value = 1
+    print(value.missing())
+}

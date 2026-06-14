@@ -98,6 +98,7 @@ def generate_cargo_toml(test_paths: list[str], runtime_features: set[str] | None
 
     Args:
         test_paths: Relative paths without extension, e.g., "arithmetic" or "structs/01_basic_fields"
+        runtime_features: Runtime crate features required by the generated programs.
     """
     runtime_features = runtime_features or set()
     lines = [
@@ -155,6 +156,7 @@ def compile_zinc_program(source_path: Path) -> RustProgram:
         symbol_visitor.bound_call_args,
         symbol_visitor.bound_struct_fields,
         symbol_visitor.callable_call_specialization_map,
+        symbol_visitor.ufcs_extern_call_map,
         symbol_visitor.operator_calls,
     )
     return codegen.generate()

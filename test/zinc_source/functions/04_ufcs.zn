@@ -1,0 +1,55 @@
+import modules/_lib/math [add]
+
+extern rust {
+    use std::cmp::max;
+    fn max(a: i64, b: i64) -> i64;
+}
+
+struct Extra {
+    b: i64
+    c: i64
+}
+
+struct Counter {
+    value: 0
+
+    fn reset() {
+        self.value = 5
+    }
+}
+
+fn combine(x: i64, a, b: i64 = 10, c: i64 = 100) {
+    return x * 1000 + a * 100 + b * 10 + c
+}
+
+fn twice(x: i64) {
+    return x + x
+}
+
+fn reset(counter: Counter) {
+    return 99
+}
+
+fn send_next(value: i64, done) {
+    done <- value + 1
+}
+
+fn main() {
+    n = 2
+    extra = Extra { b: 3, c: 4 }
+
+    print(n.combine(1))
+    print(n.combine(a=1, b=2))
+    print(n.combine(a=1, ..extra))
+    print(4.twice())
+    print(10.add(5))
+    print(7.max(11))
+
+    counter = Counter {}
+    counter.reset()
+    print(counter.value)
+
+    done = chan()
+    spawn 40.send_next(done)
+    print(<-done)
+}

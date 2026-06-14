@@ -1,0 +1,16 @@
+// expected-error: duplicate receiver argument 'x'
+
+struct Args {
+    x: i64
+    y: i64
+}
+
+fn combine(x: i64, y) {
+    return x + y
+}
+
+fn main() {
+    value = 1
+    args = Args { x: 2, y: 3 }
+    print(value.combine(..args))
+}

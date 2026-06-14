@@ -1,0 +1,14 @@
+// expected-error: member 'run' is not callable
+
+struct Tool {
+    run: 1
+}
+
+fn run(tool) {
+    return 99
+}
+
+fn main() {
+    tool = Tool {}
+    print(tool.run())
+}

@@ -1,0 +1,10 @@
+// expected-error: parameter 'text' expects a compatible 'string' value
+
+fn shout(text: string) {
+    return text
+}
+
+fn main() {
+    value = 1
+    print(value.shout())
+}

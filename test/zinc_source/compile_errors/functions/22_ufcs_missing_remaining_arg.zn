@@ -1,0 +1,10 @@
+// expected-error: missing required argument 'y'
+
+fn pair(x: i64, y) {
+    return x + y
+}
+
+fn main() {
+    value = 1
+    print(value.pair())
+}

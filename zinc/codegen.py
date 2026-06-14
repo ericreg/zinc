@@ -39,7 +39,7 @@ from zinc.meta_runtime import (
     is_meta_struct_qname,
     meta_struct_rust_name,
 )
-from zinc.modules import extract_identifier_path, struct_path_from_ctx
+from zinc.modules import RustExternFunction, extract_identifier_path, struct_path_from_ctx
 from zinc.numeric_literals import is_numeric_literal, numeric_literal_value
 from zinc.operators import ResolvedOperatorCall
 from zinc.parser.zincParser import zincParser as ZincParser
@@ -139,6 +139,7 @@ class CodeGenVisitor(zincVisitor):
         bound_call_args: dict[tuple[str | None, tuple[int, int]], list[BoundArgument]] | None = None,
         bound_struct_fields: dict[tuple[str | None, tuple[int, int]], list[BoundStructField]] | None = None,
         callable_call_specialization_map: dict[tuple[str | None, tuple[int, int]], list[str]] | None = None,
+        ufcs_extern_call_map: dict[tuple[str | None, tuple[int, int]], RustExternFunction] | None = None,
         operator_calls: dict[tuple[str | None, tuple[int, int]], ResolvedOperatorCall] | None = None,
     ):
         """Create a Rust codegen visitor for one analyzed Zinc program."""
@@ -151,6 +152,7 @@ class CodeGenVisitor(zincVisitor):
         self._bound_call_args = bound_call_args or {}
         self._bound_struct_fields = bound_struct_fields or {}
         self._callable_call_specialization_map = callable_call_specialization_map or {}
+        self._ufcs_extern_call_map = ufcs_extern_call_map or {}
         self._operator_calls = operator_calls or {}
         self._uses_async = False
         self._current_function: str | None = None
@@ -3398,7 +3400,7 @@ class CodeGenVisitor(zincVisitor):
     def visitUnaryExpr(self, ctx: ZincParser.UnaryExprContext) -> str:
         """Visit unary expression."""
         op = ctx.getChild(0).getText()
-        if op == "not":
+        if op in {"not", "~"}:
             op = "!"
         operand = self.visit(ctx.expression())
         call = self._operator_call_for_ctx(ctx)
@@ -3467,12 +3469,18 @@ class CodeGenVisitor(zincVisitor):
         """Visit logical AND."""
         left = self.visit(ctx.expression(0))
         right = self.visit(ctx.expression(1))
+        call = self._operator_call_for_ctx(ctx)
+        if call is not None:
+            return self._render_resolved_operator_call(call, [left, right])
         return f"({left} && {right})"
 
     def visitLogicalOrExpr(self, ctx: ZincParser.LogicalOrExprContext) -> str:
         """Visit logical OR."""
         left = self.visit(ctx.expression(0))
         right = self.visit(ctx.expression(1))
+        call = self._operator_call_for_ctx(ctx)
+        if call is not None:
+            return self._render_resolved_operator_call(call, [left, right])
         return f"({left} || {right})"
 
     def visitArrayLiteral(self, ctx: ZincParser.ArrayLiteralContext) -> str:
@@ -3776,6 +3784,12 @@ class CodeGenVisitor(zincVisitor):
                         receiver = self.visit(receiver_ctx)
                         call = f"{receiver}.{extern_method.name}({', '.join(args)})"
                         return finish(f"{call}.await" if extern_method.is_async else call)
+
+        ufcs_extern = self._ufcs_extern_call_map.get(self._call_key(ctx))
+        if ufcs_extern is not None:
+            args = self._render_extern_args(ufcs_extern, call_args, arg_ctxs)
+            call = f"{ufcs_extern.name}({', '.join(args)})"
+            return finish(f"{call}.await" if ufcs_extern.is_async else call)
 
         # Get callee text first to check for static method
         callee = self.visit(callee_ctx)
@@ -5401,6 +5415,12 @@ class CodeGenVisitor(zincVisitor):
                     args = [self._closure_env_constructor(closure_info), *args]
                 call_needs_await = func.is_async
             call = f"{mangled}({', '.join(args)})"
+        elif self._ufcs_extern_call_map.get(key) is not None:
+            ufcs_extern = self._ufcs_extern_call_map[key]
+            args = self._render_extern_args(ufcs_extern, call_args, arg_ctxs)
+            setup, args = self._prepare_spawn_args(call_args, args)
+            call = f"{ufcs_extern.name}({', '.join(args)})"
+            call_needs_await = ufcs_extern.is_async
         elif callee_symbol and callee_symbol.callable_info:
             args = self._render_callable_args_for_signature(callee_symbol.callable_info, call_args)
             setup, args = self._prepare_spawn_args(call_args, args)

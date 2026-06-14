@@ -3,6 +3,7 @@
 ## Current Tasks
 
 - [ ] write "Why Zinc?" docs to defend the design choices and explain the vision for the language
+- [ ] redo lambda expressions to be more ergonomic and support multiple statements
 - [ ] iterators 
 - [ ] generators
 - [ ] ranges
@@ -100,4 +101,3 @@ Use rust benchmarks to optimize rust codegen
 - traits (Not needed)
 - generics (Not needed)
 - https://benchmarksgame-team.pages.debian.net/benchmarksgame/
-
